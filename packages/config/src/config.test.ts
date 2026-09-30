@@ -15,6 +15,23 @@ describe("loadConfig", () => {
     expect(config.database.migrationUrl).toBe(valid.DATABASE_URL);
     expect(config.inngest.dev).toBe(true);
     expect(config.server.allowedOrigins).toEqual(["http://localhost:3000"]);
+    expect(config.server.allowedHosts).toEqual(["localhost:3000", "127.0.0.1:3000", "[::1]:3000"]);
+    expect(config.log.format).toBe("pretty");
+  });
+
+  it("accepts extra hosts, e.g. a Tailscale name", () => {
+    const config = loadConfig({
+      ...valid,
+      APP_URL: "https://box.tail1234.ts.net",
+      ALLOWED_HOSTS: "Other.Example:8443, ",
+    });
+    expect(config.server.allowedHosts).toEqual([
+      "box.tail1234.ts.net",
+      "localhost:3000",
+      "127.0.0.1:3000",
+      "[::1]:3000",
+      "other.example:8443",
+    ]);
   });
 
   it("includes the web dev server in allowed origins", () => {

@@ -1,0 +1,25 @@
+@import "tailwindcss";
+@import "@ofa/tailwind-config/theme.css";
+
+/* Dark mode follows the `.dark` class set by src/lib/theme.ts. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+  h1,
+  h2,
+  h3 {
+    @apply font-display tracking-tight;
+  }
+}

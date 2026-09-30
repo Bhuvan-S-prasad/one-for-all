@@ -28,6 +28,13 @@ export const loginRequestSchema = z.object({
 });
 export type LoginRequest = z.infer<typeof loginRequestSchema>;
 
+export const membershipRoleSchema = z.enum(["owner", "admin", "member"]);
+export type MembershipRole = z.infer<typeof membershipRoleSchema>;
+
+/**
+ * The signed-in user and the workspace this session acts in. `workspace` is
+ * null only for a user with no membership (possible once invites exist).
+ */
 export const sessionResponseSchema = z.object({
   user: z.object({
     id: idSchema,
@@ -38,6 +45,7 @@ export const sessionResponseSchema = z.object({
     .object({
       id: idSchema,
       name: z.string(),
+      role: membershipRoleSchema,
     })
     .nullable(),
 });

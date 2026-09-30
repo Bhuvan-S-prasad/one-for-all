@@ -7,3 +7,4 @@ node_modules/
 # Hand-formatted documentation
 docs/
 *.md
+packages/db/migrations/meta

@@ -11,13 +11,14 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run --passWithNoTests --exclude \"**/*.integration.test.ts\"",
-    "test:integration": "vitest run --passWithNoTests integration",
+    "test:integration": "tsx src/scripts/prepare-test-db.ts oneforall_test_db && vitest run --passWithNoTests integration",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/scripts/migrate.ts",
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
     "@ofa/config": "workspace:*",
+    "@ofa/core": "workspace:*",
     "drizzle-orm": "0.45.3",
     "postgres": "3.4.9"
   },
