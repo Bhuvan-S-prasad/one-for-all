@@ -1,0 +1,9 @@
+pnpm-lock.yaml
+dist/
+build/
+coverage/
+.turbo/
+node_modules/
+# Hand-formatted documentation
+docs/
+*.md

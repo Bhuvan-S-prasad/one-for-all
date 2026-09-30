@@ -1,0 +1,48 @@
+# Development infrastructure. Our own code runs natively with `pnpm dev`;
+# only the services it depends on run here.
+#
+#   pnpm infra:up     start (waits until healthy)
+#   pnpm infra:down   stop, keep data
+#   pnpm infra:reset  stop and DELETE all data
+#
+# Every port binds to 127.0.0.1 only (ADR-0017). Override defaults with
+# environment variables in your shell.
+
+name: one-for-all-dev
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      # Owner role: runs migrations. Superuser inside this container.
+      POSTGRES_USER: ${POSTGRES_USER:-oneforall}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-oneforall_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-oneforall}
+      # App role: used by the running app. Not a superuser and not the table
+      # owner, so row-level security applies to it (ADR-0001).
+      APP_DB_USER: ${APP_DB_USER:-oneforall_app}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-oneforall_app_dev}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  inngest:
+    image: inngest/inngest:v1.45.1
+    restart: unless-stopped
+    # The dev server discovers the app's Inngest endpoint on the host.
+    command: inngest dev -u http://host.docker.internal:${API_PORT:-3000}/api/inngest
+    ports:
+      - "127.0.0.1:${INNGEST_PORT:-8288}:8288"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  postgres-data:

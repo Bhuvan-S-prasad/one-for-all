@@ -1,0 +1,18 @@
+{
+  "name": "@ofa/config",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Validated environment configuration and self-host/cloud mode. Server-only.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "zod": "4.6.5"
+  }
+}

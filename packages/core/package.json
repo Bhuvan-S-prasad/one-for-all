@@ -1,0 +1,15 @@
+{
+  "name": "@ofa/core",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Domain types and ports (interfaces). Depends on nothing.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run --passWithNoTests"
+  }
+}
