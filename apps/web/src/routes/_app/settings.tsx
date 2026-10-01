@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { Card, CardTitle } from "@/components/ui/card";
 import { roleLabel } from "@/lib/format";
 import { setThemePreference, useTheme, type ThemePreference } from "@/lib/theme";
 import { useSignOut } from "@/lib/use-sign-out";
@@ -24,9 +24,13 @@ function SettingsPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <Card className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+      <h2 className="mb-1 text-[44px] leading-[0.95] font-extrabold tracking-[-0.04em] md:text-[56px]">
+        Settings
+      </h2>
+
+      <Card className="flex flex-col gap-4 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-col gap-1">
-          <h2 className="text-lg font-semibold">Appearance</h2>
+          <CardTitle>Appearance</CardTitle>
           <p className="text-sm text-muted-foreground">
             Choose how One-for-All looks on this device.
           </p>
@@ -34,7 +38,7 @@ function SettingsPage() {
         <div
           role="group"
           aria-label="Theme"
-          className="flex gap-1 self-start rounded-lg bg-muted p-1"
+          className="flex gap-1 self-start rounded-full border p-1"
         >
           {THEMES.map(({ value, label }) => (
             <button
@@ -43,9 +47,9 @@ function SettingsPage() {
               aria-pressed={preference === value}
               onClick={() => setThemePreference(value)}
               className={cn(
-                "h-8.5 rounded-md px-3.5 text-sm font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "h-10 rounded-full px-4.5 text-sm font-semibold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 preference === value
-                  ? "bg-card text-foreground shadow-xs ring-1 ring-border"
+                  ? "bg-foreground text-background"
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
@@ -56,25 +60,25 @@ function SettingsPage() {
       </Card>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <Card className="flex flex-col gap-3.5 p-5">
-          <h2 className="text-lg font-semibold">Workspace</h2>
+        <Card className="flex flex-col gap-3.5 px-6 py-5">
+          <CardTitle>Workspace</CardTitle>
           {session.workspace ? (
             <dl className="grid grid-cols-[110px_1fr] gap-y-2.5 text-sm">
-              <dt className="text-muted-foreground">Name</dt>
+              <dt className="eyebrow text-muted-foreground">Name</dt>
               <dd>{session.workspace.name}</dd>
-              <dt className="text-muted-foreground">Your role</dt>
+              <dt className="eyebrow text-muted-foreground">Your role</dt>
               <dd>{roleLabel(session.workspace.role)}</dd>
             </dl>
           ) : (
             <p className="text-sm text-muted-foreground">You are not a member of any workspace.</p>
           )}
         </Card>
-        <Card className="flex flex-col gap-3.5 p-5">
-          <h2 className="text-lg font-semibold">Account</h2>
+        <Card className="flex flex-col gap-3.5 px-6 py-5">
+          <CardTitle>Account</CardTitle>
           <dl className="grid grid-cols-[110px_1fr] gap-y-2.5 text-sm">
-            <dt className="text-muted-foreground">Name</dt>
+            <dt className="eyebrow text-muted-foreground">Name</dt>
             <dd>{session.user.name}</dd>
-            <dt className="text-muted-foreground">Email</dt>
+            <dt className="eyebrow text-muted-foreground">Email</dt>
             <dd className="truncate">{session.user.email}</dd>
           </dl>
           <Button variant="outline" className="self-start" disabled={pending} onClick={signOut}>

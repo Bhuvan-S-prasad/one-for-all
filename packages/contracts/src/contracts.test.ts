@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
   errorResponseSchema,
+  familiarLookSchema,
   firstRunSetupRequestSchema,
   pageSchema,
   paginationQuerySchema,
@@ -49,5 +50,14 @@ describe("firstRunSetupRequestSchema", () => {
     expect(firstRunSetupRequestSchema.safeParse({ ...request, password: "short" }).success).toBe(
       false,
     );
+  });
+});
+
+describe("familiarLookSchema", () => {
+  it("accepts a known look and rejects unknown traits or raw hex colours", () => {
+    const look = { form: "bloom", eyes: "googly", skin: "dots", color: "lilac", mark: "spark" };
+    expect(familiarLookSchema.safeParse(look).success).toBe(true);
+    expect(familiarLookSchema.safeParse({ ...look, form: "cube" }).success).toBe(false);
+    expect(familiarLookSchema.safeParse({ ...look, color: "#b7a6ff" }).success).toBe(false);
   });
 });

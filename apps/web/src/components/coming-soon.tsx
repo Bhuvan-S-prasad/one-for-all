@@ -1,18 +1,25 @@
-import { SquareDashed } from "lucide-react";
-import { Card } from "@/components/ui/card";
+import type { FamiliarLook, FamiliarMood } from "@ofa/contracts";
+import { Familiar } from "@/components/familiar";
 
 /** Empty state for sections that arrive in later milestones. */
-export function ComingSoon({ heading, children }: { heading: string; children: string }) {
+export function ComingSoon(props: {
+  heading: string;
+  children: string;
+  familiar: FamiliarLook;
+  mood?: FamiliarMood;
+}) {
   return (
-    <Card className="flex flex-col items-center gap-3.5 px-8 py-16 text-center">
-      <span className="flex size-13 items-center justify-center rounded-full bg-muted text-muted-foreground">
-        <SquareDashed className="size-6" aria-hidden />
-      </span>
-      <span className="rounded bg-accent px-2 py-0.5 text-xs font-semibold tracking-wide text-accent-foreground uppercase">
+    <section className="bg-dots flex flex-col items-center gap-3.5 rounded-xl border bg-card px-6 pt-12 pb-14 text-center md:px-8">
+      <Familiar look={props.familiar} mood={props.mood} size={190} ring="var(--card)" />
+      <span className="eyebrow rounded-full bg-primary px-2.5 py-1 text-[11px] text-primary-foreground">
         Coming soon
       </span>
-      <h2 className="text-2xl font-semibold">{heading}</h2>
-      <p className="max-w-md text-[15px] leading-relaxed text-muted-foreground">{children}</p>
-    </Card>
+      <h2 className="text-[40px] leading-[0.95] font-extrabold tracking-[-0.04em] md:text-5xl">
+        {props.heading}
+      </h2>
+      <p className="max-w-[480px] text-base leading-normal text-muted-foreground">
+        {props.children}
+      </p>
+    </section>
   );
 }

@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { ComingSoon } from "@/components/coming-soon";
+import { HOUSEHOLD } from "@/lib/familiars";
 
 export const Route = createFileRoute("/_app/approvals")({
   staticData: { title: "Approvals" },
@@ -8,7 +9,7 @@ export const Route = createFileRoute("/_app/approvals")({
 
 function ApprovalsPage() {
   return (
-    <ComingSoon heading="No approvals waiting">
+    <ComingSoon familiar={HOUSEHOLD.inbox} mood="waiting" heading="No approvals waiting">
       When an agent wants to do something you marked “ask first”, such as sending an email, the
       request waits here for you.
     </ComingSoon>

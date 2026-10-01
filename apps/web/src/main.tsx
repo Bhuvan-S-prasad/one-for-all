@@ -1,9 +1,6 @@
-import "@fontsource/ibm-plex-sans/400.css";
-import "@fontsource/ibm-plex-sans/500.css";
-import "@fontsource/ibm-plex-sans/600.css";
-import "@fontsource/ibm-plex-sans-condensed/500.css";
-import "@fontsource/ibm-plex-sans-condensed/600.css";
-import "@fontsource/jetbrains-mono/400.css";
+import "@fontsource-variable/bricolage-grotesque/opsz.css";
+import "@fontsource-variable/geist";
+import "@fontsource-variable/geist-mono";
 import "./styles.css";
 
 import { ApiClientProvider, createApiClient, createQueryClient } from "@ofa/client";

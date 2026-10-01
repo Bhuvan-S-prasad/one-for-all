@@ -15,13 +15,12 @@ export function FormField({ label, hint, error, ...inputProps }: FormFieldProps)
   const noteId = `${id}-note`;
   const note = error ?? hint;
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-2">
       <Label htmlFor={id}>{label}</Label>
       <Input
         id={id}
         aria-invalid={error ? true : undefined}
         aria-describedby={note ? noteId : undefined}
-        className="h-10"
         {...inputProps}
       />
       {note && (

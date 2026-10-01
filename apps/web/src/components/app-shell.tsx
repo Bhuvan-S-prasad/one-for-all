@@ -1,189 +1,281 @@
+import { useHealth } from "@ofa/client";
 import type { SessionResponse } from "@ofa/contracts";
 import { Link, useMatches } from "@tanstack/react-router";
 import {
   Activity,
-  Bot,
+  ChevronDown,
+  Ghost,
   House,
   LogOut,
-  Menu,
   Moon,
   Plug,
+  Plus,
   ShieldCheck,
   SlidersHorizontal,
   Sun,
-  X,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Wordmark } from "@/components/brand-mark";
-import { Button } from "@/components/ui/button";
-import { initials, roleLabel } from "@/lib/format";
+import { roleLabel } from "@/lib/format";
 import { setThemePreference, useTheme } from "@/lib/theme";
 import { useSignOut } from "@/lib/use-sign-out";
 import { cn } from "@/lib/utils";
 
 const NAV = [
-  { to: "/", label: "Home", icon: House, exact: true },
-  { to: "/agents", label: "Agents", icon: Bot, exact: false },
-  { to: "/activity", label: "Activity", icon: Activity, exact: false },
-  { to: "/approvals", label: "Approvals", icon: ShieldCheck, exact: false },
-  { to: "/connections", label: "Connections", icon: Plug, exact: false },
-  { to: "/settings", label: "Settings", icon: SlidersHorizontal, exact: false },
+  { to: "/", label: "Home", exact: true },
+  { to: "/agents", label: "Agents", exact: false },
+  { to: "/activity", label: "Activity", exact: false },
+  { to: "/approvals", label: "Approvals", exact: false },
+  { to: "/connections", label: "Connections", exact: false },
+  { to: "/settings", label: "Settings", exact: false },
 ] as const;
 
-/** The signed-in layout: sidebar, page header and content. */
+const BOTTOM_NAV = [
+  { to: "/", label: "Home", icon: House, exact: true },
+  { to: "/agents", label: "Agents", icon: Ghost, exact: false },
+  { to: "/activity", label: "Activity", icon: Activity, exact: false },
+  { to: "/approvals", label: "Approvals", icon: ShieldCheck, exact: false },
+] as const;
+
+/** The signed-in layout: sidebar on wide screens, top menu and bottom bar on phones. */
 export function AppShell({ session, children }: { session: SessionResponse; children: ReactNode }) {
-  const [menuOpen, setMenuOpen] = useState(false);
   const matches = useMatches();
   const title =
     [...matches].reverse().find((match) => match.staticData.title)?.staticData.title ??
     "One-for-All";
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenuOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [menuOpen]);
+  const workspaceName = session.workspace?.name ?? "No workspace";
 
   return (
-    <div className="flex min-h-dvh">
-      {menuOpen && (
-        <div
-          className="fixed inset-0 z-30 bg-foreground/40 md:hidden"
-          aria-hidden
-          onClick={() => setMenuOpen(false)}
-        />
-      )}
-      <Sidebar session={session} open={menuOpen} onClose={() => setMenuOpen(false)} />
+    <div className="min-h-dvh md:grid md:grid-cols-[236px_minmax(0,1fr)]">
+      <Sidebar session={session} />
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 flex h-15 shrink-0 items-center gap-2 border-b bg-background/95 px-3 backdrop-blur md:px-9">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-11 md:hidden"
-            aria-label="Open navigation"
-            aria-expanded={menuOpen}
-            aria-controls="app-sidebar"
-            onClick={() => setMenuOpen(true)}
-          >
-            <Menu className="size-5!" />
-          </Button>
-          <h1 className="text-xl font-semibold">{title}</h1>
-          {session.workspace && (
-            <span className="ml-auto hidden text-sm text-muted-foreground sm:block">
-              {session.workspace.name}
-            </span>
-          )}
+      <div className="flex min-w-0 flex-col">
+        <header className="sticky top-0 z-20 hidden h-16 items-center justify-between gap-4 border-b bg-background/90 px-8 backdrop-blur md:flex">
+          <span className="eyebrow truncate text-muted-foreground">
+            {workspaceName} / <span className="text-foreground">{title}</span>
+          </span>
+          <HealthPill />
         </header>
-        <main className="w-full max-w-[1000px] px-4 py-6 md:px-9 md:py-8">{children}</main>
+
+        <MobileTopBar session={session} />
+
+        <main className="w-full max-w-[1200px] px-4 pt-2 pb-32 md:px-8 md:py-6">{children}</main>
       </div>
+
+      <BottomNav />
     </div>
   );
 }
 
-function Sidebar({
-  session,
-  open,
-  onClose,
-}: {
-  session: SessionResponse;
-  open: boolean;
-  onClose: () => void;
-}) {
-  const { dark } = useTheme();
-  const { signOut, pending } = useSignOut();
-  const themeLabel = dark ? "Switch to light mode" : "Switch to dark mode";
-
+function HealthPill() {
+  const health = useHealth();
+  const state = health.isPending
+    ? { text: "Checking…", dot: "bg-muted-foreground" }
+    : health.isError
+      ? { text: "Server unreachable", dot: "bg-destructive" }
+      : health.data.status === "ok"
+        ? { text: "All systems normal", dot: "bg-success" }
+        : { text: "Degraded", dot: "bg-warning" };
   return (
-    <aside
-      id="app-sidebar"
-      aria-label="Sidebar"
+    <div className="flex shrink-0 items-center gap-2.5">
+      <span className="flex h-8 items-center gap-2 rounded-full border px-3 font-mono text-xs">
+        <span aria-hidden className={cn("size-[7px] rounded-full", state.dot)} />
+        {state.text}
+      </span>
+      {health.data && (
+        <span className="font-mono text-xs text-muted-foreground">v{health.data.version}</span>
+      )}
+    </div>
+  );
+}
+
+function ThemeToggle({ className }: { className?: string }) {
+  const { dark } = useTheme();
+  const label = dark ? "Switch to light mode" : "Switch to dark mode";
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={() => setThemePreference(dark ? "light" : "dark")}
       className={cn(
-        "fixed inset-y-0 left-0 z-40 flex w-64 shrink-0 flex-col gap-5 border-r bg-card px-3.5 py-5 transition-transform",
-        "md:sticky md:top-0 md:h-dvh md:translate-x-0",
-        open ? "translate-x-0" : "-translate-x-full max-md:invisible",
+        "flex size-9 shrink-0 items-center justify-center rounded-full border border-sidebar-border text-[#c8c8cc] transition-colors outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-primary",
+        className,
       )}
     >
-      <div className="flex items-center justify-between px-2">
-        <Wordmark />
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-10 md:hidden"
-          aria-label="Close navigation"
-          onClick={onClose}
-        >
-          <X />
-        </Button>
-      </div>
+      {dark ? <Sun className="size-4" aria-hidden /> : <Moon className="size-4" aria-hidden />}
+    </button>
+  );
+}
+
+function UserInitial({ name, className }: { name: string; className?: string }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "flex shrink-0 items-center justify-center bg-[#b7a6ff] font-display font-extrabold text-[#0e0e0f]",
+        className,
+      )}
+    >
+      {name.trim().charAt(0).toUpperCase() || "?"}
+    </span>
+  );
+}
+
+function Sidebar({ session }: { session: SessionResponse }) {
+  return (
+    <aside
+      aria-label="Sidebar"
+      className="sticky top-0 hidden h-dvh flex-col gap-5.5 border-r border-sidebar-border bg-sidebar px-3.5 pt-5.5 pb-4 text-sidebar-foreground md:flex"
+    >
+      <Wordmark className="px-2" />
 
       {session.workspace && (
-        <div className="flex flex-col gap-0.5 rounded-lg border px-3 py-2.5">
-          <span className="text-xs text-muted-foreground">Workspace</span>
+        <div className="flex flex-col gap-1 rounded-[16px] border border-sidebar-border px-3.5 py-3">
+          <span className="eyebrow text-[11px] text-sidebar-muted">Workspace</span>
           <div className="flex items-center justify-between gap-2">
             <span className="truncate text-sm font-semibold">{session.workspace.name}</span>
-            <span className="rounded bg-accent px-1.5 py-0.5 text-[11px] font-semibold tracking-wide text-accent-foreground uppercase">
+            <span className="eyebrow rounded-full bg-primary px-[7px] py-[3px] text-[10px] text-primary-foreground">
               {roleLabel(session.workspace.role)}
             </span>
           </div>
         </div>
       )}
 
-      <nav aria-label="Main" className="flex flex-col gap-0.5">
-        {NAV.map(({ to, label, icon: Icon, exact }) => (
+      <nav aria-label="Main" className="flex flex-col gap-1">
+        {NAV.map(({ to, label, exact }, index) => (
           <Link
             key={to}
             to={to}
             activeOptions={{ exact }}
-            onClick={onClose}
             className={cn(
-              "flex h-10 items-center gap-2.5 rounded-md px-2.5 text-sm font-medium text-muted-foreground transition-colors",
-              "outline-none hover:bg-accent/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
-              "data-[status=active]:bg-accent data-[status=active]:font-semibold data-[status=active]:text-accent-foreground",
+              "flex h-11 items-center gap-3 rounded-full px-3.5 text-[15px] font-medium text-[#c8c8cc] transition-colors",
+              "outline-none hover:bg-white/5 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-primary",
+              "data-[status=active]:bg-primary data-[status=active]:font-semibold data-[status=active]:text-primary-foreground",
             )}
           >
-            <Icon className="size-[18px]" aria-hidden />
+            <span className="font-mono text-[11px] opacity-60">
+              {String(index + 1).padStart(2, "0")}
+            </span>
             {label}
           </Link>
         ))}
       </nav>
 
-      <div className="mt-auto flex items-center gap-2.5 border-t pt-3.5">
-        <span
-          aria-hidden
-          className="flex size-8.5 shrink-0 items-center justify-center rounded-full bg-accent text-[13px] font-semibold text-accent-foreground"
-        >
-          {initials(session.user.name)}
-        </span>
+      <div className="mt-auto flex items-center gap-2.5 border-t border-sidebar-border pt-3.5">
+        <UserInitial name={session.user.name} className="size-9 rounded-[12px] text-[15px]" />
         <div className="flex min-w-0 flex-1 flex-col">
           <span className="truncate text-sm font-semibold">{session.user.name}</span>
-          <span className="truncate text-xs text-muted-foreground">{session.user.email}</span>
+          <span className="truncate text-xs text-sidebar-muted">{session.user.email}</span>
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-8 text-muted-foreground"
-          aria-label={themeLabel}
-          title={themeLabel}
-          onClick={() => setThemePreference(dark ? "light" : "dark")}
-        >
-          {dark ? <Sun /> : <Moon />}
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-8 text-muted-foreground"
-          aria-label="Sign out"
-          title="Sign out"
-          disabled={pending}
-          onClick={signOut}
-        >
-          <LogOut />
-        </Button>
+        <ThemeToggle />
       </div>
     </aside>
+  );
+}
+
+function MobileTopBar({ session }: { session: SessionResponse }) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const { dark } = useTheme();
+  const { signOut, pending } = useSignOut();
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const onPointer = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("pointerdown", onPointer);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("pointerdown", onPointer);
+    };
+  }, [open]);
+
+  const item =
+    "flex h-12 w-full items-center gap-3 rounded-[14px] px-3.5 text-[15px] font-medium outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring";
+
+  return (
+    <div className="flex items-center justify-between gap-3 px-4 pt-5 pb-2 md:hidden">
+      <div ref={menuRef} className="relative">
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls="workspace-menu"
+          onClick={() => setOpen((value) => !value)}
+          className="flex h-11 items-center gap-2 rounded-full border border-input pr-3.5 pl-1 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <UserInitial name={session.user.name} className="size-[34px] rounded-full text-[15px]" />
+          <span className="max-w-[180px] truncate">{session.workspace?.name ?? "One-for-All"}</span>
+          <ChevronDown className="size-3.5" aria-hidden />
+        </button>
+        {open && (
+          <div
+            id="workspace-menu"
+            className="absolute top-13 left-0 z-40 flex w-64 flex-col gap-1 rounded-lg border bg-popover p-2 text-popover-foreground shadow-2xl"
+          >
+            <div className="flex flex-col px-3.5 pt-2 pb-2.5">
+              <span className="truncate text-sm font-semibold">{session.user.name}</span>
+              <span className="truncate text-xs text-muted-foreground">{session.user.email}</span>
+            </div>
+            <Link to="/connections" className={item} onClick={() => setOpen(false)}>
+              <Plug className="size-[18px]" aria-hidden /> Connections
+            </Link>
+            <Link to="/settings" className={item} onClick={() => setOpen(false)}>
+              <SlidersHorizontal className="size-[18px]" aria-hidden /> Settings
+            </Link>
+            <button
+              type="button"
+              className={item}
+              onClick={() => setThemePreference(dark ? "light" : "dark")}
+            >
+              {dark ? (
+                <Sun className="size-[18px]" aria-hidden />
+              ) : (
+                <Moon className="size-[18px]" aria-hidden />
+              )}
+              {dark ? "Light mode" : "Dark mode"}
+            </button>
+            <button type="button" className={item} disabled={pending} onClick={signOut}>
+              <LogOut className="size-[18px]" aria-hidden /> Sign out
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function BottomNav() {
+  return (
+    <nav
+      aria-label="Main"
+      className="fixed inset-x-4 bottom-5 z-30 flex items-center gap-2.5 md:hidden"
+    >
+      <div className="flex h-16 flex-1 items-center justify-between rounded-full border border-[#2a2a2e] bg-[#1c1c1f]/92 p-1.5 backdrop-blur">
+        {BOTTOM_NAV.map(({ to, label, icon: Icon, exact }) => (
+          <Link
+            key={to}
+            to={to}
+            activeOptions={{ exact }}
+            aria-label={label}
+            className="flex size-13 items-center justify-center rounded-full text-[#c8c8cc] outline-none focus-visible:ring-2 focus-visible:ring-primary data-[status=active]:bg-[#f4f4f0] data-[status=active]:text-[#0e0e0f]"
+          >
+            <Icon className="size-[22px]" aria-hidden />
+          </Link>
+        ))}
+      </div>
+      <Link
+        to="/agents"
+        aria-label="Hatch a new agent"
+        className="flex size-16 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+      >
+        <Plus className="size-[26px]" strokeWidth={2.4} aria-hidden />
+      </Link>
+    </nav>
   );
 }

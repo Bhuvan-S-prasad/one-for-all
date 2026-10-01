@@ -5,61 +5,92 @@
  *   @import "tailwindcss";
  *   @import "@ofa/tailwind-config/theme.css";
  *
- * Semantic tokens follow the shadcn/ui naming so its components work unchanged.
- * Light values live on :root, dark values on .dark.
+ * Dark is the default look; apps put `.dark` on <html> unless the user picks
+ * light. Light values live on :root, dark values on .dark. Semantic names
+ * follow shadcn/ui so its components work unchanged. Familiar body colours
+ * live in @ofa/contracts, not here.
  */
 
 :root {
-  --background: #f2f5f7;
-  --foreground: #15212c;
-  --card: #ffffff;
-  --card-foreground: #15212c;
-  --popover: #ffffff;
-  --popover-foreground: #15212c;
-  --primary: #1d5fc2;
-  --primary-foreground: #ffffff;
-  --secondary: #e7edf1;
-  --secondary-foreground: #15212c;
-  --muted: #e7edf1;
-  --muted-foreground: #56687a;
-  --accent: #dce8f8;
-  --accent-foreground: #1d5fc2;
-  --destructive: #b42d2d;
-  --border: #cbd6df;
-  --input: #cbd6df;
-  --ring: #1d5fc2;
+  --background: #ecece6;
+  --foreground: #0e0e0f;
+  --card: #f8f8f4;
+  --card-foreground: #0e0e0f;
+  --popover: #f8f8f4;
+  --popover-foreground: #0e0e0f;
+  /* Acid lime: actions and "needs you". Text on it is always ink. */
+  --primary: #d4ff3a;
+  --primary-foreground: #0e0e0f;
+  --secondary: #e2e2da;
+  --secondary-foreground: #0e0e0f;
+  --muted: #e2e2da;
+  --muted-foreground: #5c5c61;
+  --accent: #e2e2da;
+  --accent-foreground: #0e0e0f;
+  --destructive: #c23a1c;
+  --destructive-surface: #fbe3dc;
+  --border: #d8d8d0;
+  --input: #c9c9c0;
+  --field: #ffffff;
+  --ring: #0e0e0f;
+  /* Accent-coloured text (eyebrows, links): lime is unreadable on paper */
+  --highlight: #4f6b00;
+  /* Dot-grid texture behind heroes and empty states */
+  --dot: #d6d6ce;
 
-  /* Status colors used for policy verdicts and run states */
-  --success: #1f7a4d;
-  --warning: #9a5a06;
-  --info: #1d5fc2;
+  /* Big feature panel (Home hero): ink in light, lime in dark */
+  --hero: #0e0e0f;
+  --hero-foreground: #f4f4f0;
 
-  --radius: 0.375rem;
+  /* The sidebar stays dark in both themes */
+  --sidebar: #0e0e0f;
+  --sidebar-foreground: #f4f4f0;
+  --sidebar-muted: #8a8a90;
+  --sidebar-border: #2a2a2e;
+
+  /* Status: never shown by colour alone */
+  --success: #177a3f;
+  --warning: #9a6700;
+  --info: #5b45d6;
+
+  --radius: 14px;
 }
 
 .dark {
-  --background: #0e141b;
-  --foreground: #dde5ed;
-  --card: #151d26;
-  --card-foreground: #dde5ed;
-  --popover: #151d26;
-  --popover-foreground: #dde5ed;
-  --primary: #7daef5;
-  --primary-foreground: #0e141b;
-  --secondary: #1c2631;
-  --secondary-foreground: #dde5ed;
-  --muted: #1c2631;
-  --muted-foreground: #93a4b5;
-  --accent: #1b2c45;
-  --accent-foreground: #7daef5;
-  --destructive: #f08a8a;
-  --border: #2a3643;
-  --input: #2a3643;
-  --ring: #7daef5;
+  --background: #0e0e0f;
+  --foreground: #f4f4f0;
+  --card: #161618;
+  --card-foreground: #f4f4f0;
+  --popover: #1c1c1f;
+  --popover-foreground: #f4f4f0;
+  --primary: #d4ff3a;
+  --primary-foreground: #0e0e0f;
+  --secondary: #1c1c1f;
+  --secondary-foreground: #f4f4f0;
+  --muted: #1c1c1f;
+  --muted-foreground: #a8a8ad;
+  --accent: #222225;
+  --accent-foreground: #f4f4f0;
+  --destructive: #ff8a70;
+  --destructive-surface: #331812;
+  --border: #26262a;
+  --input: #2a2a2e;
+  --field: #0e0e0f;
+  --ring: #d4ff3a;
+  --highlight: #d4ff3a;
+  --dot: #222225;
 
-  --success: #6fcb98;
-  --warning: #e3a857;
-  --info: #7daef5;
+  --hero: #d4ff3a;
+  --hero-foreground: #0e0e0f;
+
+  --sidebar: #09090a;
+  --sidebar-foreground: #f4f4f0;
+  --sidebar-muted: #8a8a90;
+  --sidebar-border: #1d1d20;
+
+  --success: #6fe39a;
+  --warning: #ffc93a;
+  --info: #b7a6ff;
 }
 
 @theme inline {
@@ -78,18 +109,31 @@
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
+  --color-destructive-surface: var(--destructive-surface);
   --color-border: var(--border);
   --color-input: var(--input);
+  --color-field: var(--field);
   --color-ring: var(--ring);
+  --color-highlight: var(--highlight);
+  --color-dot: var(--dot);
+  --color-hero: var(--hero);
+  --color-hero-foreground: var(--hero-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-muted: var(--sidebar-muted);
+  --color-sidebar-border: var(--sidebar-border);
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-info: var(--info);
 
-  --radius-sm: calc(var(--radius) - 2px);
+  /* Fields 14px, cards 22px, panels 28px, the setup card 32px; buttons are pills. */
+  --radius-sm: calc(var(--radius) - 4px);
   --radius-md: var(--radius);
-  --radius-lg: calc(var(--radius) + 2px);
+  --radius-lg: 22px;
+  --radius-xl: 28px;
+  --radius-2xl: 32px;
 
-  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
-  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", ui-sans-serif, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  --font-display: "Bricolage Grotesque Variable", "Geist Variable", ui-sans-serif, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SFMono-Regular", Consolas, monospace;
 }

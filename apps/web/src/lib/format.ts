@@ -19,3 +19,19 @@ export function roleLabel(role: string): string {
 export function firstName(name: string): string {
   return name.trim().split(/\s+/)[0] ?? name;
 }
+
+/** "Morning", "Afternoon" or "Evening" for the given time. */
+export function partOfDay(date: Date): string {
+  const hour = date.getHours();
+  if (hour < 12) return "Morning";
+  if (hour < 18) return "Afternoon";
+  return "Evening";
+}
+
+/** Short date for eyebrows: "Wed 01 Oct". */
+export function shortDate(date: Date): string {
+  const weekday = date.toLocaleDateString("en-GB", { weekday: "short" });
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = date.toLocaleDateString("en-GB", { month: "short" });
+  return `${weekday} ${day} ${month}`;
+}

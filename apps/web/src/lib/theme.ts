@@ -6,14 +6,17 @@ const STORAGE_KEY = "ofa-theme";
 const media = window.matchMedia("(prefers-color-scheme: dark)");
 const listeners = new Set<() => void>();
 
+/** Dark is the default look until the user picks light or "system". */
+export const DEFAULT_THEME: ThemePreference = "dark";
+
 export function getThemePreference(): ThemePreference {
   try {
     const value = localStorage.getItem(STORAGE_KEY);
-    if (value === "light" || value === "dark") return value;
+    if (value === "light" || value === "dark" || value === "system") return value;
   } catch {
-    // Storage blocked: fall back to the system setting.
+    // Storage blocked: use the default.
   }
-  return "system";
+  return DEFAULT_THEME;
 }
 
 function isDark(preference: ThemePreference): boolean {
@@ -27,8 +30,7 @@ function apply(preference: ThemePreference): void {
 
 export function setThemePreference(preference: ThemePreference): void {
   try {
-    if (preference === "system") localStorage.removeItem(STORAGE_KEY);
-    else localStorage.setItem(STORAGE_KEY, preference);
+    localStorage.setItem(STORAGE_KEY, preference);
   } catch {
     // Not persisted; still applied for this page.
   }

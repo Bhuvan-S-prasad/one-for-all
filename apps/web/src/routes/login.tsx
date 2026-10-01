@@ -2,9 +2,11 @@ import { useHealth, useLogin } from "@ofa/client";
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 import { Wordmark } from "@/components/brand-mark";
+import { Familiar } from "@/components/familiar";
 import { FormField } from "@/components/form-field";
 import { ErrorAlert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { HOUSEHOLD } from "@/lib/familiars";
 import { loadSession, loadSetupStatus, safeRedirect } from "@/lib/guards";
 
 export const Route = createFileRoute("/login")({
@@ -27,6 +29,8 @@ function LoginPage() {
   const health = useHealth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  // The mascot looks away politely while you type your password.
+  const [typingPassword, setTypingPassword] = useState(false);
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -34,47 +38,64 @@ function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-dvh flex-col items-center justify-center gap-6 px-4 py-12">
-      <Wordmark className="[&_span]:text-[22px] [&_svg]:size-7" />
-      <form
-        onSubmit={onSubmit}
-        className="flex w-full max-w-[380px] flex-col gap-5 rounded-xl border bg-card p-8 shadow-[0_1px_2px_rgb(21_33_44/0.06),0_8px_24px_rgb(21_33_44/0.06)]"
-      >
-        <div className="flex flex-col gap-1.5">
-          <h1 className="text-[26px] font-semibold">Sign in</h1>
-          <p className="text-sm text-muted-foreground">
-            Use the owner account you created during setup.
-          </p>
+    <main className="bg-dots flex min-h-dvh flex-col items-center justify-center gap-7 px-4 py-12">
+      <Wordmark className="[&_span]:text-[22px]" />
+
+      <div className="flex w-full max-w-[420px] flex-col items-center">
+        <div className="relative z-10 -mb-6.5">
+          <Familiar
+            look={HOUSEHOLD.scout}
+            mood={login.isError ? "error" : "idle"}
+            gaze={typingPassword ? "up" : login.isError ? "auto" : "down"}
+            size={150}
+            ring="var(--card)"
+          />
         </div>
-        {login.error && <ErrorAlert>{login.error.message}</ErrorAlert>}
-        <FormField
-          label="Email"
-          type="email"
-          autoComplete="email"
-          placeholder="you@example.com"
-          required
-          autoFocus
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-        />
-        <FormField
-          label="Password"
-          type="password"
-          autoComplete="current-password"
-          required
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-        />
-        <Button type="submit" size="lg" className="h-11 text-[15px]" disabled={login.isPending}>
-          {login.isPending ? "Signing in…" : "Sign in"}
-        </Button>
-      </form>
-      <p className="flex items-center gap-2 text-[13px] text-muted-foreground">
+        <form
+          onSubmit={onSubmit}
+          className="flex w-full flex-col gap-4.5 rounded-2xl border bg-card px-8 pt-10 pb-8"
+        >
+          <div className="flex flex-col gap-1.5 text-center">
+            <h1 className="text-[44px] leading-[0.95] font-extrabold tracking-[-0.04em]">
+              Welcome back.
+            </h1>
+            <p className="text-[15px] text-muted-foreground">
+              Use the owner account you created during setup.
+            </p>
+          </div>
+          {login.error && <ErrorAlert>{login.error.message}</ErrorAlert>}
+          <FormField
+            label="Email"
+            type="email"
+            autoComplete="email"
+            placeholder="you@example.com"
+            required
+            autoFocus
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+          />
+          <FormField
+            label="Password"
+            type="password"
+            autoComplete="current-password"
+            required
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            onFocus={() => setTypingPassword(true)}
+            onBlur={() => setTypingPassword(false)}
+          />
+          <Button type="submit" size="lg" className="mt-1" disabled={login.isPending}>
+            {login.isPending ? "Signing in…" : "Sign in"}
+          </Button>
+        </form>
+      </div>
+
+      <p className="eyebrow flex items-center gap-2.5 text-muted-foreground">
         <span>Self-hosted</span>
         {health.data && (
           <>
             <span aria-hidden>·</span>
-            <span className="font-mono text-xs">v{health.data.version}</span>
+            <span>v{health.data.version}</span>
           </>
         )}
       </p>

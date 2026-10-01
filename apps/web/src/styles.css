@@ -4,6 +4,21 @@
 /* Dark mode follows the `.dark` class set by src/lib/theme.ts. */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Small mono caps used for labels, eyebrows and metadata. */
+@utility eyebrow {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Dot-grid texture. */
+@utility bg-dots {
+  background-image: radial-gradient(var(--dot) 1.2px, transparent 1.2px);
+  background-size: 22px 22px;
+}
+
 @layer base {
   * {
     @apply border-border;
@@ -20,6 +35,11 @@
   h1,
   h2,
   h3 {
-    @apply font-display tracking-tight;
+    @apply font-display;
+    letter-spacing: -0.03em;
+  }
+  ::selection {
+    background: var(--primary);
+    color: var(--primary-foreground);
   }
 }

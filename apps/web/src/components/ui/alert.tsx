@@ -8,12 +8,12 @@ export function ErrorAlert({ className, children, ...props }: ComponentProps<"di
     <div
       role="alert"
       className={cn(
-        "flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive",
+        "flex items-center gap-2.5 rounded-md bg-destructive-surface px-3.5 py-3 text-sm text-destructive",
         className,
       )}
       {...props}
     >
-      <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+      <CircleAlert className="size-[18px] shrink-0" aria-hidden />
       <div>{children}</div>
     </div>
   );

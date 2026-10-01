@@ -1,12 +1,14 @@
-import { ApiError, useFirstRunSetup } from "@ofa/client";
+import { ApiError, useFirstRunSetup, useHealth } from "@ofa/client";
 import { firstRunSetupRequestSchema, type FirstRunSetupRequest } from "@ofa/contracts";
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
-import { LayoutPanelTop, Lock, UserRound, type LucideIcon } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { useState, type ChangeEvent, type FormEvent } from "react";
-import { BrandMark } from "@/components/brand-mark";
+import { Wordmark } from "@/components/brand-mark";
+import { Familiar } from "@/components/familiar";
 import { FormField } from "@/components/form-field";
 import { ErrorAlert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { HOUSEHOLD } from "@/lib/familiars";
 import { loadSetupStatus } from "@/lib/guards";
 
 export const Route = createFileRoute("/setup")({
@@ -20,23 +22,16 @@ export const Route = createFileRoute("/setup")({
 type Field = keyof FirstRunSetupRequest;
 const EMPTY: FirstRunSetupRequest = { workspaceName: "", name: "", email: "", password: "" };
 
-const POINTS: { icon: LucideIcon; title: string; body: string }[] = [
-  { icon: UserRound, title: "Your owner account", body: "Full control of this install." },
-  {
-    icon: LayoutPanelTop,
-    title: "Your first workspace",
-    body: "Agents, threads and connections live inside it.",
-  },
-  {
-    icon: Lock,
-    title: "Sign-up stays closed",
-    body: "Nobody else can create an account on this install.",
-  },
+const STEPS = [
+  { title: "Owner account", body: "Full control of this install." },
+  { title: "First workspace", body: "Agents, threads and connections live inside it." },
+  { title: "Sign-up closes", body: "Nobody else can create an account here." },
 ];
 
 function SetupPage() {
   const navigate = useNavigate();
   const setup = useFirstRunSetup();
+  const health = useHealth();
   const [values, setValues] = useState(EMPTY);
   const [errors, setErrors] = useState<Partial<Record<Field, string>>>({});
   const [formError, setFormError] = useState<string>();
@@ -78,74 +73,87 @@ function SetupPage() {
   }
 
   return (
-    <main className="flex min-h-dvh items-center justify-center px-4 py-12">
-      <div className="grid w-full max-w-[920px] overflow-hidden rounded-xl border bg-card shadow-[0_1px_2px_rgb(21_33_44/0.06),0_8px_24px_rgb(21_33_44/0.06)] md:grid-cols-2">
-        <section className="flex flex-col gap-8 bg-[#15212c] p-8 text-[#dde5ed] md:p-10">
-          <span className="flex items-center gap-2.5">
-            <BrandMark className="size-7 text-[#7daef5]" />
-            <span className="font-display text-xl font-semibold">One-for-All</span>
+    <main className="flex min-h-dvh flex-col px-4 pt-7 pb-10">
+      <div className="mx-auto flex w-full max-w-[1180px] flex-1 flex-col gap-10">
+        <div className="flex items-center justify-between gap-4 px-2">
+          <Wordmark />
+          <span className="eyebrow text-muted-foreground">
+            Self-hosted{health.data && ` · v${health.data.version}`}
           </span>
-          <div className="flex flex-col gap-3">
-            <h1 className="text-[34px] leading-tight font-semibold text-white">
-              Welcome. Let’s set up this install.
-            </h1>
-            <p className="text-[15px] leading-relaxed text-[#b4c2cf]">
-              You’re the first person here, so you become the owner. This only happens once.
-            </p>
-          </div>
-          <ul className="flex flex-col gap-5">
-            {POINTS.map(({ icon: Icon, title, body }) => (
-              <li key={title} className="flex gap-3">
-                <Icon className="mt-0.5 size-5 shrink-0 text-[#7daef5]" aria-hidden />
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-[15px] font-semibold text-white">{title}</span>
-                  <span className="text-sm text-[#b4c2cf]">{body}</span>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </section>
+        </div>
 
-        <form noValidate onSubmit={onSubmit} className="flex flex-col gap-5 p-8 md:p-10">
-          <div className="flex flex-col gap-1.5">
-            <h2 className="text-2xl font-semibold">Create the owner account</h2>
-            <p className="text-sm text-muted-foreground">
-              You’ll use this email and password to sign in.
+        <div className="grid flex-1 items-stretch gap-10 lg:grid-cols-2">
+          <section className="flex min-w-0 flex-col gap-7 px-2">
+            <span className="eyebrow text-highlight">First run · This happens once</span>
+            <h1 className="text-[clamp(52px,7vw,96px)] leading-[0.88] font-extrabold tracking-[-0.05em]">
+              You’re the first one here.
+            </h1>
+            <p className="max-w-[460px] text-lg leading-normal text-muted-foreground">
+              So you become the owner of this install. Set up your account and first workspace, and
+              sign-up closes behind you.
             </p>
-          </div>
-          {formError && <ErrorAlert>{formError}</ErrorAlert>}
-          <FormField
-            label="Workspace name"
-            placeholder="e.g. Home lab"
-            maxLength={80}
-            autoFocus
-            {...bind("workspaceName")}
-          />
-          <FormField label="Your name" autoComplete="name" maxLength={80} {...bind("name")} />
-          <FormField
-            label="Email"
-            type="email"
-            autoComplete="email"
-            placeholder="you@example.com"
-            {...bind("email")}
-          />
-          <FormField
-            label="Password"
-            type="password"
-            autoComplete="new-password"
-            hint="At least 12 characters."
-            maxLength={128}
-            {...bind("password")}
-          />
-          <Button
-            type="submit"
-            size="lg"
-            className="mt-1 h-11 text-[15px]"
-            disabled={setup.isPending}
+            <ol className="grid border-t sm:grid-cols-3">
+              {STEPS.map((step, index) => (
+                <li key={step.title} className="flex flex-col gap-1.5 pt-4 pr-4">
+                  <span className="font-mono text-xs text-muted-foreground">
+                    {String(index + 1).padStart(2, "0")}
+                  </span>
+                  <span className="text-[15px] font-semibold">{step.title}</span>
+                  <span className="text-sm leading-snug text-muted-foreground">{step.body}</span>
+                </li>
+              ))}
+            </ol>
+            <div className="mt-auto hidden items-end overflow-hidden border-b sm:flex">
+              <Familiar look={HOUSEHOLD.inbox} gaze="right" size={108} />
+              <Familiar look={HOUSEHOLD.ledger} gaze="right" size={124} />
+              <Familiar look={HOUSEHOLD.scout} gaze="right" size={148} />
+              <Familiar look={HOUSEHOLD.chef} gaze="right" size={112} />
+            </div>
+          </section>
+
+          <form
+            noValidate
+            onSubmit={onSubmit}
+            className="flex w-full min-w-0 flex-col gap-4.5 self-center rounded-2xl border bg-card p-7 md:p-9"
           >
-            {setup.isPending ? "Creating…" : "Create workspace"}
-          </Button>
-        </form>
+            <div className="mb-1 flex flex-col gap-1.5">
+              <h2 className="text-4xl leading-none font-extrabold">Create the owner account</h2>
+              <p className="text-[15px] text-muted-foreground">
+                You’ll use this email and password to sign in.
+              </p>
+            </div>
+            {formError && <ErrorAlert>{formError}</ErrorAlert>}
+            <FormField
+              label="Workspace name"
+              placeholder="e.g. Home lab"
+              maxLength={80}
+              autoFocus
+              {...bind("workspaceName")}
+            />
+            <div className="grid gap-3.5 sm:grid-cols-2">
+              <FormField label="Your name" autoComplete="name" maxLength={80} {...bind("name")} />
+              <FormField
+                label="Email"
+                type="email"
+                autoComplete="email"
+                placeholder="you@example.com"
+                {...bind("email")}
+              />
+            </div>
+            <FormField
+              label="Password"
+              type="password"
+              autoComplete="new-password"
+              hint="At least 12 characters."
+              maxLength={128}
+              {...bind("password")}
+            />
+            <Button type="submit" size="lg" className="mt-1.5" disabled={setup.isPending}>
+              {setup.isPending ? "Creating…" : "Create workspace"}
+              <ArrowRight aria-hidden />
+            </Button>
+          </form>
+        </div>
       </div>
     </main>
   );

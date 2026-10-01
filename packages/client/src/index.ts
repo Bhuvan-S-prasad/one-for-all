@@ -10,3 +10,10 @@ export {
   useSetupStatus,
 } from "./hooks";
 export { createQueryClient, healthQuery, queryKeys, sessionQuery, setupStatusQuery } from "./query";
+export {
+  FAMILIAR_MOOD_COLORS,
+  familiarParts,
+  type FamiliarGaze,
+  type FamiliarParts,
+  type FamiliarPattern,
+} from "./familiar";
