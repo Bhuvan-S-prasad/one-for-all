@@ -73,7 +73,10 @@ export function createSessionService(deps: { db: Database; auth: Auth }): Sessio
 
     async signOut(requestHeaders) {
       try {
-        const { headers } = await auth.api.signOut({ headers: requestHeaders, returnHeaders: true });
+        const { headers } = await auth.api.signOut({
+          headers: requestHeaders,
+          returnHeaders: true,
+        });
         return headers.getSetCookie();
       } catch (error) {
         // No valid session: nothing to sign out of.

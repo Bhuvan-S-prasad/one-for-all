@@ -8,11 +8,7 @@ import { defineConfig } from "vite";
 // /api to the API on :3000. The Host and Origin headers stay localhost:5173;
 // the API accepts them because WEB_DEV_URL is in its allowed origins.
 export default defineConfig({
-  plugins: [
-    tanstackRouter({ target: "react", autoCodeSplitting: true }),
-    react(),
-    tailwindcss(),
-  ],
+  plugins: [tanstackRouter({ target: "react", autoCodeSplitting: true }), react(), tailwindcss()],
   resolve: {
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
   },

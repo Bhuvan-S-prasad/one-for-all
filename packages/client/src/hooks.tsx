@@ -2,7 +2,7 @@ import type { FirstRunSetupRequest, LoginRequest } from "@ofa/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createContext, useContext, type ReactNode } from "react";
 import type { ApiClient } from "./api-client";
-import { queryKeys, sessionQuery, setupStatusQuery } from "./query";
+import { healthQuery, queryKeys, sessionQuery, setupStatusQuery } from "./query";
 
 const ApiClientContext = createContext<ApiClient | null>(null);
 
@@ -24,6 +24,10 @@ export function useSession() {
 
 export function useSetupStatus() {
   return useQuery(setupStatusQuery(useApiClient()));
+}
+
+export function useHealth() {
+  return useQuery(healthQuery(useApiClient()));
 }
 
 export function useLogin() {

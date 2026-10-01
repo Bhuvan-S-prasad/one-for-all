@@ -22,9 +22,9 @@ describe("toHttpError", () => {
   });
 
   it("maps Hono HTTP exceptions", () => {
-    expect(toHttpError(new HTTPException(413, { message: "Payload Too Large" })).body.error.code).toBe(
-      "bad_request",
-    );
+    expect(
+      toHttpError(new HTTPException(413, { message: "Payload Too Large" })).body.error.code,
+    ).toBe("bad_request");
   });
 });
 

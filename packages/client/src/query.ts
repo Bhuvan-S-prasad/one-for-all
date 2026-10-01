@@ -4,6 +4,7 @@ import { ApiError, type ApiClient } from "./api-client";
 export const queryKeys = {
   session: ["session"] as const,
   setupStatus: ["setup-status"] as const,
+  health: ["health"] as const,
 };
 
 /** Shared by hooks and router loaders, so both read the same cache entry. */
@@ -15,6 +16,15 @@ export const setupStatusQuery = (api: ApiClient) =>
     queryKey: queryKeys.setupStatus,
     queryFn: () => api.setupStatus(),
     staleTime: Infinity,
+  });
+
+/** Server health; refreshed every 30 seconds while shown. */
+export const healthQuery = (api: ApiClient) =>
+  queryOptions({
+    queryKey: queryKeys.health,
+    queryFn: () => api.health(),
+    refetchInterval: 30_000,
+    retry: false,
   });
 
 /** Query client with defaults suited to this API. */

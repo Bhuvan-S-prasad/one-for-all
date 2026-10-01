@@ -86,9 +86,9 @@ describe.skipIf(!hasDb)("API (integration)", () => {
   it("setup cannot run twice", async () => {
     const res = await post("/api/setup", { ...owner, email: "mallory@example.com" });
     expect(res.status).toBe(409);
-    expect(
-      setupStatusSchema.parse(await (await app.request(url("/api/setup"))).json()),
-    ).toEqual({ needsSetup: false });
+    expect(setupStatusSchema.parse(await (await app.request(url("/api/setup"))).json())).toEqual({
+      needsSetup: false,
+    });
   });
 
   it("returns the session for the cookie", async () => {

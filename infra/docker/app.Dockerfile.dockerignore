@@ -1,0 +1,15 @@
+# Used automatically for app.Dockerfile (BuildKit). Paths are relative to the
+# build context, the repo root. Keeps the context small and free of secrets.
+**/node_modules
+**/dist
+**/.turbo
+**/coverage
+.git
+.env
+.env.*
+!.env.example
+graft
+docs
+evals
+.claude
+*.log

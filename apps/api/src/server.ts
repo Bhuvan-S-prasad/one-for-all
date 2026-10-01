@@ -39,9 +39,12 @@ const server = serve(
       version: config.version,
     });
     if (config.server.host !== "127.0.0.1" && config.server.host !== "localhost") {
-      logger.warn("bound to a non-loopback address; make sure only a trusted network can reach it", {
-        host: config.server.host,
-      });
+      logger.warn(
+        "bound to a non-loopback address; make sure only a trusted network can reach it",
+        {
+          host: config.server.host,
+        },
+      );
     }
   },
 );

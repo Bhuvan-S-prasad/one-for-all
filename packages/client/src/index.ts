@@ -3,9 +3,10 @@ export {
   ApiClientProvider,
   useApiClient,
   useFirstRunSetup,
+  useHealth,
   useLogin,
   useLogout,
   useSession,
   useSetupStatus,
 } from "./hooks";
-export { createQueryClient, queryKeys, sessionQuery, setupStatusQuery } from "./query";
+export { createQueryClient, healthQuery, queryKeys, sessionQuery, setupStatusQuery } from "./query";

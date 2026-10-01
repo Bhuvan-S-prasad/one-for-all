@@ -1,0 +1,82 @@
+# One-for-All self-hosted bundle (ARCHITECTURE.md §14.1).
+#
+# First time:
+#   sh infra/scripts/init-env.sh                                  # writes infra/compose/.env with secrets
+#   docker compose -f infra/compose/docker-compose.selfhost.yml up -d --build
+#   open http://localhost:3000
+#
+# Only the app is published, and only on 127.0.0.1 (ADR-0017). Postgres and
+# Inngest are reachable only on the internal Compose network.
+#
+# Later milestones add the sandbox (M3) and optional Phoenix and Ollama profiles.
+
+name: one-for-all
+
+x-db-names: &db-names
+  POSTGRES_USER: ${POSTGRES_USER:-oneforall}
+  POSTGRES_DB: ${POSTGRES_DB:-oneforall}
+  APP_DB_USER: ${APP_DB_USER:-oneforall_app}
+
+services:
+  app:
+    image: ${OFA_IMAGE:-one-for-all:local}
+    build:
+      context: ../..
+      dockerfile: infra/docker/app.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      OFA_MODE: self-host
+      # Must match the address you open in the browser, including the port.
+      APP_URL: ${APP_URL:-http://localhost:${APP_PORT:-3000}}
+      # Extra host names to accept, comma-separated (e.g. a Tailscale name).
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}
+      DATABASE_URL: postgres://${APP_DB_USER:-oneforall_app}:${APP_DB_PASSWORD:?run infra/scripts/init-env.sh first}@postgres:5432/${POSTGRES_DB:-oneforall}
+      DATABASE_MIGRATION_URL: postgres://${POSTGRES_USER:-oneforall}:${POSTGRES_PASSWORD:?run infra/scripts/init-env.sh first}@postgres:5432/${POSTGRES_DB:-oneforall}
+      AUTH_SECRET: ${AUTH_SECRET:?run infra/scripts/init-env.sh first}
+      VAULT_KEY: ${VAULT_KEY:?run infra/scripts/init-env.sh first}
+      INNGEST_BASE_URL: http://inngest:8288
+      INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY:?run infra/scripts/init-env.sh first}
+      INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:?run infra/scripts/init-env.sh first}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
+    mem_limit: 768m
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      <<: *db-names
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run infra/scripts/init-env.sh first}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?run infra/scripts/init-env.sh first}
+      INNGEST_DB: inngest
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    mem_limit: 1g
+
+  inngest:
+    image: inngest/inngest:v1.45.1
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # The app's Inngest endpoint (`-u http://app:3000/api/inngest`) is added in M2,
+    # when the first durable functions exist.
+    command: >-
+      inngest start
+      --event-key ${INNGEST_EVENT_KEY:?run infra/scripts/init-env.sh first}
+      --signing-key ${INNGEST_SIGNING_KEY:?run infra/scripts/init-env.sh first}
+      --postgres-uri postgres://${POSTGRES_USER:-oneforall}:${POSTGRES_PASSWORD:?run infra/scripts/init-env.sh first}@postgres:5432/inngest
+    mem_limit: 512m
+
+volumes:
+  postgres-data:

@@ -24,3 +24,12 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-E
 	ALTER DEFAULT PRIVILEGES FOR ROLE ${POSTGRES_USER} IN SCHEMA public
 	  GRANT USAGE, SELECT ON SEQUENCES TO ${APP_DB_USER};
 EOSQL
+
+# Self-host only: a separate database for Inngest's state, owned by the owner
+# role. The app role gets no access to it.
+if [ -n "${INNGEST_DB:-}" ]; then
+	psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+		-c "CREATE DATABASE ${INNGEST_DB} OWNER ${POSTGRES_USER}"
+	psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+		-c "REVOKE ALL ON DATABASE ${INNGEST_DB} FROM PUBLIC"
+fi

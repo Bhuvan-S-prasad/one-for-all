@@ -1,7 +1,10 @@
+import { useSyncExternalStore } from "react";
+
 export type ThemePreference = "light" | "dark" | "system";
 
 const STORAGE_KEY = "ofa-theme";
 const media = window.matchMedia("(prefers-color-scheme: dark)");
+const listeners = new Set<() => void>();
 
 export function getThemePreference(): ThemePreference {
   try {
@@ -13,9 +16,13 @@ export function getThemePreference(): ThemePreference {
   return "system";
 }
 
+function isDark(preference: ThemePreference): boolean {
+  return preference === "dark" || (preference === "system" && media.matches);
+}
+
 function apply(preference: ThemePreference): void {
-  const dark = preference === "dark" || (preference === "system" && media.matches);
-  document.documentElement.classList.toggle("dark", dark);
+  document.documentElement.classList.toggle("dark", isDark(preference));
+  for (const listener of listeners) listener();
 }
 
 export function setThemePreference(preference: ThemePreference): void {
@@ -32,4 +39,16 @@ export function setThemePreference(preference: ThemePreference): void {
 export function initTheme(): void {
   apply(getThemePreference());
   media.addEventListener("change", () => apply(getThemePreference()));
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+/** The saved preference and whether dark mode is in effect; re-renders on change. */
+export function useTheme(): { preference: ThemePreference; dark: boolean } {
+  const preference = useSyncExternalStore(subscribe, getThemePreference);
+  const dark = useSyncExternalStore(subscribe, () => isDark(getThemePreference()));
+  return { preference, dark };
 }

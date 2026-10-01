@@ -50,7 +50,9 @@ export function createLogger(options: LoggerOptions, base: LogFields = {}): Logg
     const extras = Object.entries(all)
       .map(([key, value]) => `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`)
       .join(" ");
-    write(`${new Date().toISOString().slice(11, 23)} ${level.padEnd(5)} ${message} ${extras}`.trim());
+    write(
+      `${new Date().toISOString().slice(11, 23)} ${level.padEnd(5)} ${message} ${extras}`.trim(),
+    );
   };
 
   return {

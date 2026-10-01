@@ -20,7 +20,12 @@ const container = createContainer(config);
 try {
   const { needsSetup } = await container.setup.status();
   if (needsSetup) {
-    await container.setup.run({ workspaceName: "Dev workspace", name: "Dev Owner", email, password });
+    await container.setup.run({
+      workspaceName: "Dev workspace",
+      name: "Dev Owner",
+      email,
+      password,
+    });
     console.warn(`Created owner ${email} / ${password} (development only).`);
   } else {
     console.warn("Setup already done; seeding the first owner's workspace.");

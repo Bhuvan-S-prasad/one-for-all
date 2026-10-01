@@ -1,0 +1,109 @@
+# Continuous integration. Third-party actions are pinned to full commit SHAs
+# (the tag is in the comment); update both together.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PNPM_VERSION: 12.3.4
+  TURBO_TELEMETRY_DISABLED: 1
+
+jobs:
+  check:
+    name: Format, lint, typecheck, unit tests, build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      - name: Install pnpm
+        run: npm install --global "pnpm@${PNPM_VERSION}"
+      - name: Locate the pnpm store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+  integration:
+    name: Integration tests (Postgres)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      # Dev-only credentials from infra/compose/docker-compose.dev.yml.
+      DATABASE_URL: postgres://oneforall_app:oneforall_app_dev@127.0.0.1:5432/oneforall
+      DATABASE_MIGRATION_URL: postgres://oneforall:oneforall_dev@127.0.0.1:5432/oneforall
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      - name: Install pnpm
+        run: npm install --global "pnpm@${PNPM_VERSION}"
+      - name: Locate the pnpm store
+        id: pnpm-store
+        run: echo "path=$(pnpm store path)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+      - run: pnpm install --frozen-lockfile
+      - name: Start Postgres and Inngest
+        run: pnpm infra:up
+      - name: Generate a throwaway auth secret
+        run: echo "AUTH_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - run: pnpm test:integration
+      - name: Service logs
+        if: failure()
+        run: docker compose -f infra/compose/docker-compose.dev.yml logs --tail 200
+
+  image:
+    name: Docker image and self-host smoke test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build for amd64 and arm64
+        run: docker buildx build --file infra/docker/app.Dockerfile --platform linux/amd64,linux/arm64 .
+      - name: Start the self-host bundle
+        run: |
+          sh infra/scripts/init-env.sh
+          docker compose -f infra/compose/docker-compose.selfhost.yml up -d --build --wait
+      - name: Smoke test
+        run: |
+          curl --fail --silent http://localhost:3000/api/health
+          curl --fail --silent http://localhost:3000/api/setup | grep -q '"needsSetup":true'
+          curl --fail --silent --output /dev/null http://localhost:3000/
+          curl --fail --silent --output /dev/null http://localhost:3000/settings
+      - name: Bundle logs
+        if: failure()
+        run: docker compose -f infra/compose/docker-compose.selfhost.yml logs --tail 200
