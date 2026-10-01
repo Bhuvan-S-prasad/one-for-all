@@ -1,0 +1,4 @@
+{
+  "extends": "@ofa/tsconfig/node.json",
+  "include": ["src", "build.mjs"]
+}

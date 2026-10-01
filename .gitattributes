@@ -1,0 +1,24 @@
+# Normalize line endings to LF in the repository.
+# Shell scripts and container init files break with CRLF inside Linux containers.
+* text=auto eol=lf
+
+*.sh text eol=lf
+*.sql text eol=lf
+Dockerfile text eol=lf
+*.Dockerfile text eol=lf
+
+# Windows-only scripts keep CRLF
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary

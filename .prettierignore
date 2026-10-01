@@ -1,0 +1,11 @@
+pnpm-lock.yaml
+dist/
+build/
+coverage/
+.turbo/
+node_modules/
+# Hand-formatted documentation
+docs/
+*.md
+packages/db/migrations/meta
+apps/web/src/routeTree.gen.ts

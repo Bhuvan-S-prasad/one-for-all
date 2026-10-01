@@ -1,0 +1,9 @@
+packages:
+  - apps/*
+  - packages/*
+  - tooling/*
+
+# Dependencies allowed to run install scripts. Everything else is blocked.
+# esbuild: installs its platform binary; used by tsx, drizzle-kit and Vite.
+allowBuilds:
+  esbuild: true
