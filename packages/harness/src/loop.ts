@@ -1,9 +1,4 @@
-import {
-  runEventInputSchema,
-  type RunEventPayload,
-  type RunEventType,
-  type RunStopReason,
-} from "@ofa/contracts";
+import type { RunStopReason } from "@ofa/contracts";
 import type {
   AgentDirectory,
   AgentProfile,
@@ -29,7 +24,7 @@ import {
   type ToolCallTurn,
   type Turn,
 } from "./context";
-import { extractMemories } from "./memory-extraction";
+import { modelCallEvents, runEvent } from "./events";
 import { MiddlewareChain, type HarnessMiddleware, type RunHookContext } from "./middleware";
 
 // The agent loop (ARCHITECTURE.md §6.2). Every side effect happens inside a
@@ -45,7 +40,7 @@ export interface HarnessOptions {
   readonly historyMessages?: number;
   /** Facts preloaded from memory. Default 8. */
   readonly memoryRecallLimit?: number;
-  /** Ask a fast model for facts worth keeping after each answered run. Default true. */
+  /** Learn facts worth keeping after each answered run (see `learnFromRun`). Default true. */
   readonly extractMemories?: boolean;
   /** Same tool with the same arguments this many times ends the run. Default 3. */
   readonly loopRepeatLimit?: number;
@@ -73,6 +68,11 @@ export interface RunResult {
   readonly stopReason: RunStopReason | null;
   readonly usage: RunUsageTotals;
   readonly messageId: string | null;
+  /**
+   * Worth a learning pass. Memory extraction runs after the run, in its own
+   * function, so the agent is free for the next message as soon as it replies.
+   */
+  readonly learn: boolean;
 }
 
 const EMPTY_USAGE: RunUsageTotals = {
@@ -84,16 +84,6 @@ const EMPTY_USAGE: RunUsageTotals = {
 };
 
 const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
-
-/** Build a run-log entry, checked against the contracts schema (hard rule 7). */
-export function runEvent<T extends RunEventType>(
-  key: string,
-  type: T,
-  payload: RunEventPayload<T>,
-): RunEventWrite {
-  const parsed = runEventInputSchema.parse({ type, payload });
-  return { key, type: parsed.type, payload: parsed.payload as Record<string, unknown> };
-}
 
 function addUsage(
   usage: RunUsageTotals,
@@ -175,7 +165,13 @@ export async function runAgent(
       };
     });
     if (start.skip) {
-      return { status: "skipped", stopReason: null, usage: EMPTY_USAGE, messageId: null };
+      return {
+        status: "skipped",
+        stopReason: null,
+        usage: EMPTY_USAGE,
+        messageId: null,
+        learn: false,
+      };
     }
     const agent: AgentProfile = start.agent;
     hook = { ctx, agent };
@@ -244,6 +240,12 @@ export async function runAgent(
           const result = await compactTurns(deps.llm, ctx, summary, turns);
           if (result) {
             await log([
+              ...modelCallEvents(
+                `compact-${i}-model`,
+                "fast",
+                result.response,
+                result.promptVersion,
+              ),
               runEvent(`compact-${i}`, "run.compacted", {
                 tokensBefore: assembled.tokens.total,
                 tokensAfter: Math.round(assembled.tokens.total * 0.4),
@@ -284,32 +286,9 @@ export async function runAgent(
         const call = chain.model(hook as RunHookContext, (r) => deps.llm.generate(r, ctx));
         try {
           const response = await call(request);
-          await log([
-            ...response.attempts.map((a, n) =>
-              runEvent(`model-${i}-fail-${n}`, "model.failed", {
-                provider: a.provider,
-                model: a.model,
-                tier: agent.modelTier,
-                code: a.code,
-                message: a.message,
-              }),
-            ),
-            runEvent(`model-${i}`, "model.called", {
-              provider: response.provider,
-              model: response.model,
-              tier: agent.modelTier,
-              promptVersion: request.promptVersion,
-              inputTokens: response.usage.inputTokens,
-              outputTokens: response.usage.outputTokens,
-              costUsd: response.usage.costUsd,
-              durationMs: response.durationMs,
-              finishReason: response.finishReason,
-              toolCalls: response.toolCalls.length,
-              ...(response.attempts.length
-                ? { fellBackFrom: response.attempts.map((a) => a.model) }
-                : {}),
-            }),
-          ]);
+          await log(
+            modelCallEvents(`model-${i}`, agent.modelTier, response, request.promptVersion),
+          );
           // Back from waiting for capacity, if the previous attempt had to wait.
           await deps.runs.update(ctx, ctx.runId, { status: "running", onlyIfStatus: "waiting" });
           return {
@@ -412,29 +391,6 @@ export async function runAgent(
           return id as string;
         })
       : null;
-
-    // ── Learn ────────────────────────────────────────────────────────────────
-    if (stopReason === "final_answer" && deps.memory && (options.extractMemories ?? true)) {
-      const memory = deps.memory;
-      const learned = await steps.run("memory-extract", async () => {
-        try {
-          return await extractMemories({
-            llm: deps.llm,
-            memory,
-            ctx,
-            agent,
-            history: context.history,
-            answer: replyText,
-            verified: !tainted,
-            log,
-          });
-        } catch {
-          // Learning is a bonus; a failure here must not fail an answered run.
-          return { inputTokens: 0, outputTokens: 0, costUsd: 0, calls: 0 };
-        }
-      });
-      usage = addUsage(usage, learned, { model: learned.calls });
-    }
 
     return await finish({ status: "succeeded", stopReason, usage, messageId });
   } catch (error) {
@@ -576,6 +532,12 @@ export async function runAgent(
       stopReason: result.stopReason,
       usage: result.usage,
       messageId: result.messageId,
+      learn:
+        result.status === "succeeded" &&
+        result.stopReason === "final_answer" &&
+        result.messageId !== null &&
+        !!deps.memory &&
+        (options.extractMemories ?? true),
     };
   }
 }

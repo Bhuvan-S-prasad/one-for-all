@@ -9,9 +9,10 @@ export {
   type HistoryMessage,
   type Turn,
 } from "./context";
+export { modelCallEvents, runEvent } from "./events";
+export { learnFromRun, type LearnInput, type LearnResult } from "./learn";
 export {
   runAgent,
-  runEvent,
   type HarnessDeps,
   type HarnessOptions,
   type RunInput,

@@ -1,18 +1,21 @@
-import type {
-  AgentProfile,
-  LLMGateway,
-  MemoryScope,
-  MemoryStore,
-  RunContext,
-  RunEventWrite,
+import {
+  LEARN_EVENT_PREFIX,
+  type AgentProfile,
+  type LLMGateway,
+  type MemoryScope,
+  type MemoryStore,
+  type RunContext,
+  type RunEventWrite,
 } from "@ofa/core";
 import type { HistoryMessage } from "./context";
+import { modelCallEvents } from "./events";
 import { MEMORY_EXTRACTION, promptRef } from "./prompts";
 import { truncateToTokens } from "./tokens";
 
 // Post-run fact extraction (ARCHITECTURE.md §8): after an answered run, a fast
 // model picks out durable facts. Facts from a tainted run are stored
-// unverified and are not preloaded until a person confirms them.
+// unverified and are not preloaded until a person confirms them. Its events
+// carry the `learn-` key prefix, the only ones a closed run log accepts.
 
 const MAX_FACTS = 5;
 
@@ -77,7 +80,12 @@ export async function extractMemories(input: ExtractionInput) {
     input.ctx,
   );
 
-  const events: RunEventWrite[] = [];
+  const events: RunEventWrite[] = modelCallEvents(
+    `${LEARN_EVENT_PREFIX}model`,
+    "fast",
+    response,
+    promptRef(MEMORY_EXTRACTION),
+  );
   for (const [n, fact] of parseFacts(response.text).entries()) {
     const record = await input.memory.write(input.ctx, {
       scope,
@@ -86,7 +94,7 @@ export async function extractMemories(input: ExtractionInput) {
       verified: input.verified,
     });
     events.push({
-      key: `memory-${n}`,
+      key: `${LEARN_EVENT_PREFIX}memory-${n}`,
       type: "memory.written",
       payload: { memoryId: record.id, scope, verified: record.verified },
     });

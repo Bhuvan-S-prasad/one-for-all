@@ -24,6 +24,7 @@ export const agentVoiceSchema = z.enum(AGENT_VOICES);
 
 export const AGENT_STATUSES = ["active", "paused", "archived"] as const;
 export const agentStatusSchema = z.enum(AGENT_STATUSES);
+export type AgentStatus = z.infer<typeof agentStatusSchema>;
 
 /** `@researcher`: lowercase letters, digits and inner hyphens. */
 export const agentSlugSchema = z
@@ -126,6 +127,8 @@ export const createAgentRequestSchema = z.object({
   grants: grantListSchema.default([]),
 });
 export type CreateAgentRequest = z.infer<typeof createAgentRequestSchema>;
+/** What a client sends, before defaults are applied. */
+export type CreateAgentInput = z.input<typeof createAgentRequestSchema>;
 
 /** Every field optional; `spec` and `grants` replace the stored value whole. */
 export const updateAgentRequestSchema = z

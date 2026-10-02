@@ -1,6 +1,7 @@
 import { agentSpecSchema, type AgentSpec } from "@ofa/contracts";
 import {
   asId,
+  LEARN_EVENT_PREFIX,
   type AgentDirectory,
   type AgentId,
   type AgentProfile,
@@ -90,8 +91,24 @@ export function createRunStore(db: Database, options: RuntimeStoreOptions = {}):
       if (events.length === 0) return;
       const inserted = await withTenant(db, ctx, async (tx) => {
         // One writer at a time per run, so `seq` has no gaps or clashes.
-        await tx.execute(sql`select 1 from ${run} where ${run.id} = ${runId} for update`);
-        const keys = events.map((e) => e.key);
+        const [locked] = await tx
+          .select({ status: run.status })
+          .from(run)
+          .where(eq(run.id, runId))
+          .for("update");
+        // Once a run has ended, its log is closed: a step that was still in
+        // flight when Stop was pressed must not add events after `run.ended`.
+        // The learning pass after a successful run is the one exception.
+        const closed = locked ? (TERMINAL as readonly string[]).includes(locked.status) : false;
+        const candidates = closed
+          ? events.filter(
+              (e) =>
+                e.type === "run.ended" ||
+                (locked?.status === "succeeded" && e.key.startsWith(LEARN_EVENT_PREFIX)),
+            )
+          : events;
+        if (candidates.length === 0) return [];
+        const keys = candidates.map((e) => e.key);
         const known = new Set(
           (
             await tx
@@ -100,7 +117,7 @@ export function createRunStore(db: Database, options: RuntimeStoreOptions = {}):
               .where(and(eq(runEvent.runId, runId), inArray(runEvent.key, keys)))
           ).map((row) => row.key),
         );
-        const fresh = events.filter((e) => !known.has(e.key));
+        const fresh = candidates.filter((e) => !known.has(e.key));
         if (fresh.length === 0) return [];
         const [last] = await tx
           .select({ seq: sql<number>`coalesce(max(${runEvent.seq}), -1)` })

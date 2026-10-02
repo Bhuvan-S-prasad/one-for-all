@@ -23,8 +23,10 @@ export function requestContext(logger: Logger): MiddlewareHandler<AppEnv> {
       status: c.res.status,
       ms: Math.round(performance.now() - started),
     };
-    // Static files are noise at info level.
-    if (c.req.path.startsWith("/api/")) c.get("logger").info("request", fields);
+    // Static files, and the Inngest dev server's polling of /api/inngest,
+    // are noise at info level.
+    const quiet = c.req.path === "/api/inngest" && c.res.status < 400;
+    if (c.req.path.startsWith("/api/") && !quiet) c.get("logger").info("request", fields);
     else c.get("logger").debug("request", fields);
   };
 }

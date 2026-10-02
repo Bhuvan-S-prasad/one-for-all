@@ -12,6 +12,8 @@ export const INNGEST_EVENTS = {
   messageReceived: "agent/message.received",
   /** A person pressed Stop. Cancels the run at its next step boundary. */
   runCancelled: "agent/run.cancelled",
+  /** A run answered; the agent may learn from the exchange, off its own turn. */
+  runSucceeded: "agent/run.succeeded",
 } as const;
 
 export const messageReceivedEventSchema = z.object({
@@ -26,3 +28,13 @@ export type MessageReceivedEvent = z.infer<typeof messageReceivedEventSchema>;
 
 export const runCancelledEventSchema = z.object({ ...tenant, runId: idSchema });
 export type RunCancelledEvent = z.infer<typeof runCancelledEventSchema>;
+
+export const runSucceededEventSchema = z.object({
+  ...tenant,
+  agentId: idSchema,
+  runId: idSchema,
+  threadId: idSchema,
+  /** The reply: what the run learns from ends here. */
+  messageId: idSchema,
+});
+export type RunSucceededEvent = z.infer<typeof runSucceededEventSchema>;

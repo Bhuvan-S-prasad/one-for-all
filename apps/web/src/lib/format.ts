@@ -35,3 +35,35 @@ export function shortDate(date: Date): string {
   const month = date.toLocaleDateString("en-GB", { month: "short" });
   return `${weekday} ${day} ${month}`;
 }
+
+/** "just now", "5 min ago", "3 h ago", "2 d ago". */
+export function timeAgo(iso: string, now: number = Date.now()): string {
+  const minutes = Math.round((now - Date.parse(iso)) / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  return `${Math.round(hours / 24)} d ago`;
+}
+
+/** "14:05:09" in local time. */
+export function clockTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+/** "42 s", "3 min 05 s". */
+export function duration(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds} s`;
+  return `${Math.floor(seconds / 60)} min ${String(seconds % 60).padStart(2, "0")} s`;
+}
+
+/** "1 model call", "3 model calls". */
+export function count(n: number, noun: string): string {
+  return `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`;
+}

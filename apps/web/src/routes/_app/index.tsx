@@ -1,7 +1,8 @@
-import { useHealth } from "@ofa/client";
-import { createFileRoute } from "@tanstack/react-router";
+import { useAgents, useHealth, useLlmSettings, useRuns } from "@ofa/client";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { Familiar } from "@/components/familiar";
 import { Card, CardTitle } from "@/components/ui/card";
+import { useAgentMoods } from "@/lib/agents";
 import { firstName, partOfDay, shortDate } from "@/lib/format";
 import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
@@ -11,33 +12,13 @@ export const Route = createFileRoute("/_app/")({
   component: HomePage,
 });
 
-const STEPS = [
-  { title: "Create the owner account and workspace", body: "Done during setup.", done: true },
-  {
-    title: "Add your OpenRouter key",
-    body: "Agents run on your own key. Free models work.",
-    done: false,
-  },
-  {
-    title: "Hatch your first agent",
-    body: "Give it one job, a look, and the tools it may use.",
-    done: false,
-  },
-  {
-    title: "Connect a channel",
-    body: "Reach agents from Telegram or Slack. No public URL needed.",
-    done: false,
-  },
-];
-
-// Nothing can create agents, runs or approvals before M2, so these are true
-// zeros for every install. M2 replaces them with live counts.
-const COUNTERS = [
-  { label: "Agents", note: "None hatched yet" },
-  { label: "Runs today", note: "Nothing has run" },
-  { label: "Waiting for you", note: "No approvals pending" },
-];
-
+interface Step {
+  title: string;
+  body: string;
+  done: boolean;
+  /** Where to go to do it; omitted for steps that arrive later. */
+  to?: "/settings" | "/agents/new";
+}
 /** Plain sleeping silhouettes in the hero: slots for agents not hatched yet. */
 const EMPTY_SLOTS = [
   { form: "ghost", size: 116 },
@@ -48,8 +29,48 @@ const EMPTY_SLOTS = [
 function HomePage() {
   const { session } = Route.useRouteContext();
   const { dark } = useTheme();
+  const { data: agents } = useAgents();
+  const { data: runs } = useRuns();
+  const { data: llm } = useLlmSettings();
+  const moods = useAgentMoods(agents);
   const now = new Date();
-  const done = STEPS.filter((step) => step.done).length;
+  const today = now.toDateString();
+  const steps: Step[] = [
+    { title: "Create the owner account and workspace", body: "Done during setup.", done: true },
+    {
+      title: "Add your model key",
+      body: "Agents run on your own key. Free models work.",
+      done: !!llm?.key.configured,
+      to: "/settings",
+    },
+    {
+      title: "Hatch your first agent",
+      body: "Give it one job, a look, and the tools it may use.",
+      done: (agents?.length ?? 0) > 0,
+      to: "/agents/new",
+    },
+    {
+      title: "Connect a channel",
+      body: "Reach agents from Telegram or Slack. No public URL needed.",
+      done: false,
+    },
+  ];
+  const done = steps.filter((step) => step.done).length;
+  const counters = [
+    {
+      label: "Agents",
+      value: agents?.length ?? 0,
+      note: agents?.length ? "In the den" : "None hatched yet",
+    },
+    {
+      label: "Runs today",
+      value: (runs ?? []).filter((r) => new Date(r.createdAt).toDateString() === today).length,
+      note: "Across all agents",
+    },
+    // Approvals arrive in M4; until then nothing can wait on a person.
+    { label: "Waiting for you", value: 0, note: "No approvals pending" },
+  ];
+  const shown = (agents ?? []).slice(0, 3);
   // Empty slots in the hero: asleep, in a tone of the hero colour.
   const dormant = dark ? "#b5e01f" : "#2c2c31";
 
@@ -62,25 +83,49 @@ function HomePage() {
             {partOfDay(now)}, {firstName(session.user.name)}.
           </h2>
           <p className="max-w-[440px] text-base leading-snug opacity-80">
-            Your workspace is ready. Agents come next; here’s what they’ll need.
+            {shown.length
+              ? `${shown.length === 1 ? shown[0]?.name : `${shown.length} agents`} in the den. Say hello, or give one a job.`
+              : "Your workspace is ready. Agents come next; here’s what they’ll need."}
           </p>
         </div>
         <div aria-hidden className="hidden items-end justify-center sm:flex">
-          {EMPTY_SLOTS.map((slot) => (
-            <Familiar
-              key={slot.form}
-              look={{ form: slot.form, eyes: "googly", skin: "solid", color: "ink", mark: "none" }}
-              mood="asleep"
-              bodyColor={dormant}
-              size={slot.size}
-              ring="var(--hero)"
-            />
-          ))}
+          {shown.length
+            ? shown.map((agent, i) => (
+                <Link
+                  key={agent.id}
+                  to="/agents/$agentId"
+                  params={{ agentId: agent.id }}
+                  aria-label={`Chat with ${agent.name}`}
+                >
+                  <Familiar
+                    look={agent.spec.avatar}
+                    mood={moods.get(agent.id)?.mood ?? "idle"}
+                    size={EMPTY_SLOTS[i]?.size ?? 116}
+                    ring="var(--hero)"
+                  />
+                </Link>
+              ))
+            : EMPTY_SLOTS.map((slot) => (
+                <Familiar
+                  key={slot.form}
+                  look={{
+                    form: slot.form,
+                    eyes: "googly",
+                    skin: "solid",
+                    color: "ink",
+                    mark: "none",
+                  }}
+                  mood="asleep"
+                  bodyColor={dormant}
+                  size={slot.size}
+                  ring="var(--hero)"
+                />
+              ))}
         </div>
       </section>
 
       <div className="grid grid-cols-3 gap-2.5 sm:gap-4">
-        {COUNTERS.map((counter) => (
+        {counters.map((counter) => (
           <Card
             key={counter.label}
             className="flex flex-col-reverse gap-2 px-3.5 py-3.5 sm:flex-row sm:items-end sm:justify-between sm:gap-3 sm:px-5 sm:py-4"
@@ -94,7 +139,7 @@ function HomePage() {
               </span>
             </div>
             <span className="font-display text-[40px] leading-[0.85] font-extrabold tracking-[-0.04em] sm:text-[64px]">
-              00
+              {String(counter.value).padStart(2, "0")}
             </span>
           </Card>
         ))}
@@ -105,11 +150,11 @@ function HomePage() {
           <div className="flex items-baseline justify-between px-5 pt-4 pb-3">
             <CardTitle>Get started</CardTitle>
             <span className="font-mono text-xs text-muted-foreground">
-              {done} / {STEPS.length}
+              {done} / {steps.length}
             </span>
           </div>
           <ol>
-            {STEPS.map((step, index) => (
+            {steps.map((step, index) => (
               <li key={step.title} className="flex items-center gap-4 border-t px-5 py-3">
                 <span className="w-5.5 font-mono text-[13px] text-muted-foreground">
                   {String(index + 1).padStart(2, "0")}
@@ -129,6 +174,13 @@ function HomePage() {
                   <span className="eyebrow rounded-full bg-success px-2.5 py-1 text-[11px] text-background">
                     Done
                   </span>
+                ) : step.to ? (
+                  <Link
+                    to={step.to}
+                    className="eyebrow rounded-full bg-primary px-2.5 py-1 text-[11px] text-primary-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    Do it
+                  </Link>
                 ) : (
                   <span className="eyebrow rounded-full border px-2.5 py-[3px] text-[11px] font-normal text-muted-foreground">
                     Soon

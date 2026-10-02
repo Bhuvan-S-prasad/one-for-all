@@ -1,4 +1,4 @@
-import type { LLMGateway, RunContext } from "@ofa/core";
+import type { LLMGateway, LLMResponse, RunContext } from "@ofa/core";
 import type { Turn } from "./context";
 import { COMPACTION, promptRef } from "./prompts";
 import { truncateToTokens } from "./tokens";
@@ -33,6 +33,8 @@ export interface CompactionResult {
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly costUsd: number;
+  /** For the run log: which model answered, and any that failed first. */
+  readonly response: LLMResponse;
 }
 
 /** Summarise all but the latest turn group. Returns null when there is nothing to fold. */
@@ -69,5 +71,6 @@ export async function compactTurns(
     inputTokens: response.usage.inputTokens,
     outputTokens: response.usage.outputTokens,
     costUsd: response.usage.costUsd,
+    response,
   };
 }

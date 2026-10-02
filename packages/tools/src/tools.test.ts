@@ -219,9 +219,9 @@ describe("built-in tools", () => {
     );
     expect(result.content).toMatch(/unverified/);
     expect(records[0]).toMatchObject({ scope: "agent", verified: false, kind: "preference" });
-    await expect(
-      remember.run({ fact: "Shared with everyone", kind: "fact", scope: "workspace" }, runCtx),
-    ).rejects.toThrow(/can't use workspace/);
+    // A scope this agent may not use falls back to its own memory.
+    await remember.run({ fact: "Shared with everyone", kind: "fact", scope: "workspace" }, runCtx);
+    expect(records[1]).toMatchObject({ scope: "agent" });
     const recall = await tools.get("recall")!.run({ query: "answers", limit: 5 }, runCtx);
     expect(JSON.stringify(recall.content)).toContain("Sam prefers short answers");
   });

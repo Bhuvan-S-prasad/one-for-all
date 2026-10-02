@@ -6,16 +6,12 @@ import { defineTool } from "../define";
 // policy like any tool. A fact written during a tainted run is unverified: it
 // is kept, but not preloaded until a person confirms it.
 
+/** The requested scope if this agent may use it, otherwise its default. */
 function allowedScope(
   requested: MemoryScope | undefined,
   allowed: readonly MemoryScope[],
 ): MemoryScope {
   if (requested && allowed.includes(requested)) return requested;
-  if (requested) {
-    throw Object.assign(new Error(`This agent can't use ${requested} memory`), {
-      code: "scope_not_allowed",
-    });
-  }
   if (allowed.includes("agent")) return "agent";
   const first = allowed[0];
   if (!first) throw Object.assign(new Error("This agent has no memory"), { code: "no_memory" });
@@ -39,15 +35,18 @@ export function rememberTool(memory: MemoryStore) {
     }),
     annotations: {},
     async run({ fact, kind, scope }, ctx) {
+      const used = allowedScope(scope, ctx.memoryScopes);
       const record = await memory.write(ctx, {
-        scope: allowedScope(scope, ctx.memoryScopes),
+        scope: used,
         kind,
         content: fact,
         verified: !ctx.tainted,
       });
+      const where =
+        scope && scope !== used ? ` (in ${used} memory: you can't use ${scope} memory)` : "";
       return {
         content: record.verified
-          ? "Remembered."
+          ? `Remembered${where}.`
           : "Saved as unverified: it was learned after reading outside content, so a person must confirm it before it is used.",
         untrusted: false,
       };

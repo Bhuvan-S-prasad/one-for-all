@@ -56,6 +56,12 @@ export interface RunPatch {
   readonly endedAt?: Date;
 }
 
+/**
+ * Key prefix for the learning pass that runs after a run succeeded (memory
+ * extraction). Only these events may join a run's log after `run.ended`.
+ */
+export const LEARN_EVENT_PREFIX = "learn-";
+
 /** One entry for the append-only run log (ADR-0014). */
 export interface RunEventWrite {
   /**
@@ -72,7 +78,8 @@ export interface RunStore {
   update(ctx: TenantContext, runId: RunId, patch: RunPatch): Promise<void>;
   /**
    * Append events in order; the store assigns each a `seq`. Events whose key
-   * the run already has are skipped.
+   * the run already has are skipped. Once the run has ended, only `run.ended`
+   * is accepted, plus `learn-` events if it succeeded.
    */
   append(ctx: TenantContext, runId: RunId, events: readonly RunEventWrite[]): Promise<void>;
 }

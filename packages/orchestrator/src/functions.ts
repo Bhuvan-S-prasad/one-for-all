@@ -3,6 +3,7 @@ import {
   INNGEST_EVENTS,
   messageReceivedEventSchema,
   runCancelledEventSchema,
+  runSucceededEventSchema,
 } from "@ofa/contracts";
 import {
   asId,
@@ -12,7 +13,7 @@ import {
   type TenantContext,
   type ThreadId,
 } from "@ofa/core";
-import { runAgent, runEvent, type HarnessDeps } from "@ofa/harness";
+import { learnFromRun, runAgent, runEvent, type HarnessDeps } from "@ofa/harness";
 import { NonRetriableError, RetryAfterError, type Inngest } from "inngest";
 
 // Durable functions (ADR-0006). The orchestrator decides when and how often an
@@ -120,8 +121,52 @@ export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
         agentId: asId(data.agentId),
         runId: asId(data.runId),
       };
-      return runAgent(
+      const result = await runAgent(
         { ctx, threadId: asId<ThreadId>(data.threadId), trigger: data.trigger },
+        deps.harness,
+        inngestSteps(step),
+      );
+      if (result.learn && result.messageId) {
+        // Learning runs as its own function, so this agent's next message
+        // does not wait behind a slow extraction call.
+        await step.sendEvent("learn", {
+          name: INNGEST_EVENTS.runSucceeded,
+          id: `run-succeeded-${data.runId}`,
+          data: runSucceededEventSchema.parse({
+            workspaceId: data.workspaceId,
+            userId: data.userId,
+            agentId: data.agentId,
+            runId: data.runId,
+            threadId: data.threadId,
+            messageId: result.messageId,
+          }),
+        });
+      }
+      return result;
+    },
+  );
+
+  // Memory extraction after an answered run (ARCHITECTURE.md §8). Learning is
+  // a bonus: a failure here is logged by Inngest and never reaches the person.
+  const agentLearn = inngest.createFunction(
+    {
+      id: "agent-learn",
+      name: "Agent learns from a run",
+      triggers: [{ event: INNGEST_EVENTS.runSucceeded }],
+      // One at a time per workspace, so learning never crowds out answers.
+      concurrency: [{ key: "event.data.workspaceId", limit: 1 }],
+      retries: 2,
+    },
+    async ({ event, step }) => {
+      const data = runSucceededEventSchema.parse(event.data);
+      const ctx: RunContext = {
+        workspaceId: asId(data.workspaceId),
+        userId: asId(data.userId),
+        agentId: asId(data.agentId),
+        runId: asId(data.runId),
+      };
+      return learnFromRun(
+        { ctx, threadId: asId<ThreadId>(data.threadId), messageId: asId(data.messageId) },
         deps.harness,
         inngestSteps(step),
       );
@@ -159,5 +204,5 @@ export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
     },
   );
 
-  return [agentRun, agentRunCancelled];
+  return [agentRun, agentRunCancelled, agentLearn];
 }

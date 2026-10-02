@@ -1,5 +1,6 @@
 import {
   asId,
+  LEARN_EVENT_PREFIX,
   type AgentDirectory,
   type AgentProfile,
   type ConversationMessage,
@@ -83,7 +84,11 @@ export function createMemoryRuntime(): MemoryRuntime {
         });
       },
       async append(_ctx, runId, batch) {
+        const status = records.get(runId)?.status;
+        const closed = status === "succeeded" || status === "failed" || status === "cancelled";
         for (const event of batch) {
+          const learning = status === "succeeded" && event.key.startsWith(LEARN_EVENT_PREFIX);
+          if (closed && event.type !== "run.ended" && !learning) continue;
           if (events.some((e) => e.runId === runId && e.key === event.key)) continue;
           const seq = events.filter((e) => e.runId === runId).length;
           events.push({ ...event, seq, runId });

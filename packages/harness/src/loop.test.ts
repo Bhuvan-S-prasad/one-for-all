@@ -13,6 +13,7 @@ import {
   createMemoryRuntime,
   createMemoStepRunner,
   createScriptedLLM,
+  learnFromRun,
   okOutcome,
   parseFacts,
   runAgent,
@@ -77,21 +78,23 @@ function setup(script: ScriptedReply[], profile: AgentProfile = agent) {
     { descriptor: search, run: () => okOutcome("pgvector 0.9 was released on 2026-09-12.", true) },
   ]);
   const steps = createMemoStepRunner();
+  const deps = {
+    llm,
+    tools,
+    runs: runtime.runs,
+    agents: runtime.agents,
+    threads: runtime.threads,
+    memory: runtime.memory,
+  };
   const run = (middleware: HarnessMiddleware[] = []) =>
     runAgent(
       { ctx, threadId, trigger: "message" },
-      {
-        llm,
-        tools,
-        runs: runtime.runs,
-        agents: runtime.agents,
-        threads: runtime.threads,
-        memory: runtime.memory,
-        middleware,
-      },
+      { ...deps, middleware },
       steps,
     );
-  return { runtime, llm, tools, steps, run };
+  const learn = (messageId: string | null) =>
+    learnFromRun({ ctx, threadId, messageId: asId(messageId ?? "") }, deps, steps);
+  return { runtime, llm, tools, steps, run, learn };
 }
 
 const types = (runtime: ReturnType<typeof createMemoryRuntime>) =>
@@ -99,9 +102,9 @@ const types = (runtime: ReturnType<typeof createMemoryRuntime>) =>
 
 describe("runAgent", () => {
   it("answers directly, posts the reply and closes the run", async () => {
-    const { runtime, run } = setup([{ text: "Hello!" }, { text: '{"facts": []}' }]);
+    const { runtime, run } = setup([{ text: "Hello!" }]);
     const result = await run();
-    expect(result).toMatchObject({ status: "succeeded", stopReason: "final_answer" });
+    expect(result).toMatchObject({ status: "succeeded", stopReason: "final_answer", learn: true });
     expect(types(runtime)).toEqual(["run.started", "model.called", "message.created", "run.ended"]);
     expect(runtime.threads.messages.get(threadId)?.at(-1)).toMatchObject({
       author: "agent",
@@ -115,7 +118,6 @@ describe("runAgent", () => {
     const { runtime, llm, tools, run } = setup([
       { toolCalls: [{ name: "web.search", args: { query: "pgvector 0.9" } }] },
       { text: "It was released on 2026-09-12." },
-      { text: '{"facts": ["The person follows pgvector releases."]}' },
     ]);
     const result = await run();
     expect(result.stopReason).toBe("final_answer");
@@ -131,21 +133,41 @@ describe("runAgent", () => {
       "run.tainted",
       "model.called",
       "message.created",
-      "memory.written",
       "run.ended",
     ]);
     expect(runtime.runs.records.get(ctx.runId)?.tainted).toBe(true);
     const toolMessage = llm.requests[1]?.messages.find((m) => m.role === "tool");
     expect(toolMessage?.content).toMatch(/^<untrusted source="web.search">/);
-    // Learned during a tainted run: kept, but unverified.
+  });
+
+  it("learns after the run, off the agent's turn, and logs it", async () => {
+    const { runtime, llm, run, learn } = setup([
+      { toolCalls: [{ name: "web.search", args: { query: "pgvector 0.9" } }] },
+      { text: "It was released on 2026-09-12." },
+      { text: '{"facts": ["The person follows pgvector releases."]}' },
+    ]);
+    const result = await run();
+    expect(await learn(result.messageId)).toEqual({ learned: true, calls: 1 });
+    // The closed log takes the learning events, after run.ended.
+    expect(types(runtime).slice(-3)).toEqual(["run.ended", "model.called", "memory.written"]);
+    // Learned from a tainted run: kept, but unverified.
     expect(runtime.memory.records).toMatchObject([{ verified: false, scope: "agent" }]);
+    expect(runtime.runs.records.get(ctx.runId)?.usage.modelCalls).toBe(3);
+    // The extraction saw the exchange up to and including the reply.
+    expect(llm.requests[2]?.messages[0]?.content).toMatch(/Agent: It was released/);
+  });
+
+  it("does not learn from a run that did not succeed", async () => {
+    const { runtime, llm, learn } = setup([]);
+    expect(await learn("m1")).toEqual({ learned: false, calls: 0 });
+    expect(llm.requests).toHaveLength(0);
+    expect(runtime.memory.records).toHaveLength(0);
   });
 
   it("replays from memoized steps without repeating work or events", async () => {
     const { runtime, steps, tools, run } = setup([
       { toolCalls: [{ name: "web.search", args: { query: "x" } }] },
       { text: "Done." },
-      { text: '{"facts": []}' },
     ]);
     await run();
     const ranOnce = [...steps.ran];
@@ -181,7 +203,6 @@ describe("runAgent", () => {
     const { runtime, llm, tools, run } = setup([
       { toolCalls: [{ name: "send_money", args: {}, invalid: "Unknown tool: send_money" }] },
       { text: "Sorry." },
-      { text: '{"facts": []}' },
     ]);
     await run();
     expect(tools.calls).toHaveLength(0);
@@ -193,7 +214,6 @@ describe("runAgent", () => {
     const { runtime, tools, run } = setup([
       { toolCalls: [{ name: "web.search", args: { query: "x" } }] },
       { text: "Okay." },
-      { text: '{"facts": []}' },
     ]);
     const guard: HarnessMiddleware = {
       name: "guard",

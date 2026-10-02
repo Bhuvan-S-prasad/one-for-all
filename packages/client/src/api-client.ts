@@ -1,13 +1,33 @@
 import {
+  agentListResponseSchema,
+  agentSchema,
   errorResponseSchema,
   healthResponseSchema,
+  llmSettingsSchema,
+  messagePageSchema,
+  runEventListSchema,
+  runPageSchema,
+  runSchema,
+  sendMessageResponseSchema,
   sessionResponseSchema,
   setupStatusSchema,
+  threadSchema,
+  type Agent,
+  type AgentListResponse,
+  type CreateAgentInput,
   type FirstRunSetupRequest,
   type HealthResponse,
+  type LlmSettings,
   type LoginRequest,
+  type MessagePage,
+  type Run,
+  type RunEventList,
+  type RunPage,
+  type SendMessageResponse,
   type SessionResponse,
   type SetupStatus,
+  type Thread,
+  type UpdateAgentRequest,
 } from "@ofa/contracts";
 import type { ErrorCode } from "@ofa/core";
 import type { z } from "zod";
@@ -42,7 +62,17 @@ export interface ApiClientOptions {
   readonly workspaceId?: () => string | undefined;
 }
 
-type Method = "GET" | "POST" | "PATCH" | "DELETE";
+type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+/** `?a=1&b=2` from defined values only. */
+function query(params: Record<string, string | number | undefined>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined) search.set(key, String(value));
+  }
+  const text = search.toString();
+  return text ? `?${text}` : "";
+}
 
 /**
  * Typed client for the One-for-All API. Every response is validated with the
@@ -120,6 +150,61 @@ export function createApiClient(options: ApiClientOptions = {}) {
     },
 
     logout: (): Promise<void> => request("DELETE", "/api/session", null),
+
+    // ── Agents ─────────────────────────────────────────────────────────────
+    listAgents: (): Promise<AgentListResponse> =>
+      request("GET", "/api/agents", agentListResponseSchema),
+    getAgent: (id: string): Promise<Agent> =>
+      request("GET", `/api/agents/${encodeURIComponent(id)}`, agentSchema),
+    createAgent: (input: CreateAgentInput): Promise<Agent> =>
+      request("POST", "/api/agents", agentSchema, input),
+    updateAgent: (id: string, patch: UpdateAgentRequest): Promise<Agent> =>
+      request("PATCH", `/api/agents/${encodeURIComponent(id)}`, agentSchema, patch),
+    /** The person's direct thread with an agent, created on first use. */
+    agentThread: (id: string): Promise<Thread> =>
+      request("GET", `/api/agents/${encodeURIComponent(id)}/thread`, threadSchema),
+
+    // ── Threads ────────────────────────────────────────────────────────────
+    listMessages: (
+      threadId: string,
+      page: { limit?: number; cursor?: string } = {},
+    ): Promise<MessagePage> =>
+      request(
+        "GET",
+        `/api/threads/${encodeURIComponent(threadId)}/messages${query(page)}`,
+        messagePageSchema,
+      ),
+    sendMessage: (threadId: string, content: string): Promise<SendMessageResponse> =>
+      request(
+        "POST",
+        `/api/threads/${encodeURIComponent(threadId)}/messages`,
+        sendMessageResponseSchema,
+        {
+          content,
+        },
+      ),
+
+    // ── Runs ───────────────────────────────────────────────────────────────
+    listRuns: (
+      filter: { agentId?: string; limit?: number; cursor?: string } = {},
+    ): Promise<RunPage> => request("GET", `/api/runs${query(filter)}`, runPageSchema),
+    getRun: (id: string): Promise<Run> =>
+      request("GET", `/api/runs/${encodeURIComponent(id)}`, runSchema),
+    runEvents: (id: string, after?: number): Promise<RunEventList> =>
+      request(
+        "GET",
+        `/api/runs/${encodeURIComponent(id)}/events${query({ after })}`,
+        runEventListSchema,
+      ),
+    stopRun: (id: string): Promise<Run> =>
+      request("POST", `/api/runs/${encodeURIComponent(id)}/stop`, runSchema),
+
+    // ── Settings ───────────────────────────────────────────────────────────
+    llmSettings: (): Promise<LlmSettings> => request("GET", "/api/settings/llm", llmSettingsSchema),
+    saveLlmKey: (apiKey: string): Promise<LlmSettings> =>
+      request("PUT", "/api/settings/llm/key", llmSettingsSchema, { apiKey }),
+    deleteLlmKey: (): Promise<LlmSettings> =>
+      request("DELETE", "/api/settings/llm/key", llmSettingsSchema),
   };
 }
 
