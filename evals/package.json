@@ -1,0 +1,23 @@
+{
+  "name": "@ofa/evals",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Agent behaviour evals: golden tasks and red-team cases on fixtures, graded by checks, run against live models.",
+  "type": "module",
+  "scripts": {
+    "eval": "tsx graders/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@ofa/core": "workspace:*",
+    "@ofa/harness": "workspace:*",
+    "@ofa/llm": "workspace:*",
+    "@ofa/policy": "workspace:*",
+    "@ofa/tools": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "4.23.15"
+  }
+}

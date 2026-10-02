@@ -1,0 +1,4 @@
+{
+  "extends": "@ofa/tsconfig/node.json",
+  "include": ["suites", "redteam", "fixtures", "graders"]
+}

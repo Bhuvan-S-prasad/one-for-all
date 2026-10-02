@@ -271,6 +271,28 @@ importers:
         specifier: 8.3.1
         version: 8.3.1(@types/node@24.19.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)
 
+  evals:
+    dependencies:
+      '@ofa/core':
+        specifier: workspace:*
+        version: link:../packages/core
+      '@ofa/harness':
+        specifier: workspace:*
+        version: link:../packages/harness
+      '@ofa/llm':
+        specifier: workspace:*
+        version: link:../packages/llm
+      '@ofa/policy':
+        specifier: workspace:*
+        version: link:../packages/policy
+      '@ofa/tools':
+        specifier: workspace:*
+        version: link:../packages/tools
+    devDependencies:
+      tsx:
+        specifier: 4.23.15
+        version: 4.23.15
+
   packages/client:
     dependencies:
       '@ofa/contracts':
