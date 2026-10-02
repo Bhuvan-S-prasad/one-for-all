@@ -5,7 +5,7 @@
   "description": "Hono API: REST, auth, first-run setup. Serves the web app in self-host mode.",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch --clear-screen=false src/server.ts",
+    "dev": "node --watch --watch-preserve-output --import tsx src/server.ts",
     "build": "node build.mjs",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",

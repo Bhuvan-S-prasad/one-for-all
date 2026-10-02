@@ -20,7 +20,8 @@ export function hostCheck(allowedHosts: readonly string[]): MiddlewareHandler<Ap
     // Prefer the raw Node request's Host header. WebSocket upgrades are
     // re-dispatched as a Fetch Request, which drops `Host` (a forbidden
     // header), so the URL would always say `localhost`.
-    const incoming = (c.env as { incoming?: { headers?: { host?: string } } } | undefined)?.incoming;
+    const incoming = (c.env as { incoming?: { headers?: { host?: string } } } | undefined)
+      ?.incoming;
     const host = (incoming?.headers?.host ?? new URL(c.req.url).host).toLowerCase();
     if (!allowed.has(host)) {
       c.get("logger").warn("rejected host", { host });

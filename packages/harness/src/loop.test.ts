@@ -87,11 +87,7 @@ function setup(script: ScriptedReply[], profile: AgentProfile = agent) {
     memory: runtime.memory,
   };
   const run = (middleware: HarnessMiddleware[] = []) =>
-    runAgent(
-      { ctx, threadId, trigger: "message" },
-      { ...deps, middleware },
-      steps,
-    );
+    runAgent({ ctx, threadId, trigger: "message" }, { ...deps, middleware }, steps);
   const learn = (messageId: string | null) =>
     learnFromRun({ ctx, threadId, messageId: asId(messageId ?? "") }, deps, steps);
   return { runtime, llm, tools, steps, run, learn };
