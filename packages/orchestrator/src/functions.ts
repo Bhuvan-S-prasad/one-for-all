@@ -1,0 +1,163 @@
+import {
+  EMPTY_RUN_USAGE,
+  INNGEST_EVENTS,
+  messageReceivedEventSchema,
+  runCancelledEventSchema,
+} from "@ofa/contracts";
+import {
+  asId,
+  type RunContext,
+  type RunStore,
+  type StepRunner,
+  type TenantContext,
+  type ThreadId,
+} from "@ofa/core";
+import { runAgent, runEvent, type HarnessDeps } from "@ofa/harness";
+import { NonRetriableError, RetryAfterError, type Inngest } from "inngest";
+
+// Durable functions (ADR-0006). The orchestrator decides when and how often an
+// agent runs; what happens inside a run is the harness's job (L3 → L4).
+
+export interface OrchestratorDeps {
+  readonly harness: HarnessDeps;
+  readonly runs: RunStore;
+}
+
+/** Errors that waiting will not fix: a missing key, a malformed request. */
+const NOT_RETRYABLE = new Set(["auth", "bad_request", "context_length"]);
+
+/**
+ * Adapt Inngest's `step.run` to the harness's `StepRunner`, and turn model
+ * errors into Inngest's retry signals: wait for capacity, or stop retrying.
+ */
+export function inngestSteps(step: {
+  run: (id: string, fn: () => Promise<unknown>) => Promise<unknown>;
+}): StepRunner {
+  return {
+    async run<T>(id: string, fn: () => Promise<T>): Promise<T> {
+      const result = await step.run(id, async () => {
+        try {
+          return await fn();
+        } catch (error) {
+          const modelCode = (error as { modelCode?: string }).modelCode;
+          const retryAfterMs = (error as { retryAfterMs?: number }).retryAfterMs;
+          const message = error instanceof Error ? error.message : String(error);
+          if (retryAfterMs !== undefined) {
+            throw new RetryAfterError(message, Math.max(1_000, retryAfterMs), { cause: error });
+          }
+          if (modelCode && NOT_RETRYABLE.has(modelCode)) {
+            throw new NonRetriableError(message, { cause: error });
+          }
+          throw error;
+        }
+      });
+      return result as T;
+    },
+  };
+}
+
+function failureText(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/API key/i.test(message)) {
+    return "I can't reach my model: the API key is missing or was refused. Add it in Settings, then ask again.";
+  }
+  if (/capacity|rate/i.test(message)) {
+    return "I couldn't get a turn with the model: free capacity is used up for now. Try again in a while.";
+  }
+  return "Something went wrong and I couldn't finish. The details are in Activity.";
+}
+
+export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
+  const agentRun = inngest.createFunction(
+    {
+      id: "agent-run",
+      name: "Agent run",
+      triggers: [{ event: INNGEST_EVENTS.messageReceived }],
+      // One run at a time per agent; more messages wait their turn.
+      concurrency: [{ key: "event.data.agentId", limit: 1 }],
+      // Stop pressed: cancel at the next step boundary. Finished steps stay done.
+      cancelOn: [
+        { event: INNGEST_EVENTS.runCancelled, if: "async.data.runId == event.data.runId" },
+      ],
+      retries: 4,
+      onFailure: async ({ event, error, step }) => {
+        const data = messageReceivedEventSchema.parse(event.data.event.data);
+        const ctx: RunContext = {
+          workspaceId: asId(data.workspaceId),
+          userId: asId(data.userId),
+          agentId: asId(data.agentId),
+          runId: asId(data.runId),
+        };
+        await step.run("mark-failed", async () => {
+          const message = (error.message || "Run failed").slice(0, 2_000);
+          const run = await deps.runs.get(ctx, ctx.runId);
+          await deps.runs.update(ctx, ctx.runId, {
+            status: "failed",
+            error: { code: "run_failed", message },
+            endedAt: new Date(),
+            onlyIfActive: true,
+          });
+          await deps.runs.append(ctx, ctx.runId, [
+            runEvent("end-failed", "run.ended", {
+              status: "failed",
+              stopReason: "error",
+              usage: run?.usage ?? EMPTY_RUN_USAGE,
+              error: { code: "run_failed", message },
+            }),
+          ]);
+          await deps.harness.threads.addAgentMessage(ctx, {
+            threadId: asId<ThreadId>(data.threadId),
+            content: failureText(error),
+          });
+        });
+      },
+    },
+    async ({ event, step }) => {
+      const data = messageReceivedEventSchema.parse(event.data);
+      const ctx: RunContext = {
+        workspaceId: asId(data.workspaceId),
+        userId: asId(data.userId),
+        agentId: asId(data.agentId),
+        runId: asId(data.runId),
+      };
+      return runAgent(
+        { ctx, threadId: asId<ThreadId>(data.threadId), trigger: data.trigger },
+        deps.harness,
+        inngestSteps(step),
+      );
+    },
+  );
+
+  // Inngest's own "function cancelled" event does not carry our run ID, so the
+  // stop event itself also triggers this bookkeeping.
+  const agentRunCancelled = inngest.createFunction(
+    {
+      id: "agent-run-cancelled",
+      name: "Agent run cancelled",
+      triggers: [{ event: INNGEST_EVENTS.runCancelled }],
+    },
+    async ({ event, step }) => {
+      const data = runCancelledEventSchema.parse(event.data);
+      const ctx: TenantContext = { workspaceId: asId(data.workspaceId), userId: asId(data.userId) };
+      await step.run("mark-cancelled", async () => {
+        const run = await deps.runs.get(ctx, asId(data.runId));
+        if (!run || ["succeeded", "failed", "cancelled"].includes(run.status)) return false;
+        await deps.runs.update(ctx, run.id, {
+          status: "cancelled",
+          endedAt: new Date(),
+          onlyIfActive: true,
+        });
+        await deps.runs.append(ctx, run.id, [
+          runEvent("end-cancelled", "run.ended", {
+            status: "cancelled",
+            stopReason: "user_stopped",
+            usage: run.usage,
+          }),
+        ]);
+        return true;
+      });
+    },
+  );
+
+  return [agentRun, agentRunCancelled];
+}

@@ -37,6 +37,8 @@ export interface Config {
       readonly strong: string | undefined;
     };
   };
+  readonly search: { readonly searxngUrl: string | undefined };
+  readonly telemetry: { readonly otlpEndpoint: string | undefined };
   readonly inngest: {
     readonly dev: boolean;
     readonly baseUrl: string | undefined;
@@ -91,6 +93,8 @@ export function loadConfig(source: Record<string, string | undefined> = process.
     `localhost:${env.PORT}`,
     `127.0.0.1:${env.PORT}`,
     `[::1]:${env.PORT}`,
+    // The dev Inngest container calls the app by this name (pnpm infra:up).
+    ...(env.NODE_ENV === "development" ? [`host.docker.internal:${env.PORT}`] : []),
     ...(env.ALLOWED_HOSTS ?? "")
       .split(",")
       .map((host) => host.trim().toLowerCase())
@@ -126,6 +130,12 @@ export function loadConfig(source: Record<string, string | undefined> = process.
         strong: env.LLM_MODELS_STRONG,
       },
     },
+    search: {
+      // `pnpm infra:up` runs SearXNG on 127.0.0.1:8888 for development.
+      searxngUrl:
+        env.SEARXNG_URL ?? (env.NODE_ENV === "development" ? "http://127.0.0.1:8888" : undefined),
+    },
+    telemetry: { otlpEndpoint: env.OTEL_EXPORTER_OTLP_ENDPOINT },
     inngest: {
       dev: env.INNGEST_DEV ?? env.NODE_ENV !== "production",
       baseUrl: env.INNGEST_BASE_URL,

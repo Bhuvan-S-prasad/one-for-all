@@ -1,18 +1,54 @@
 // Composition root (hard rule 2). The only place that chooses adapters.
-// Self-host and cloud differ only here; today both use the same ones. Event
-// bus and sandbox adapters join in M2–M4.
+// Self-host and cloud differ only here. In self-host mode this one process
+// runs the API, the Inngest functions (agent runs) and the event bus.
 
 import type { Config } from "@ofa/config";
-import type { CredentialVault, LLMGateway, TenantContext } from "@ofa/core";
-import { createDatabase, type Database } from "@ofa/db";
+import type {
+  AgentDirectory,
+  CredentialVault,
+  EventBus,
+  LLMGateway,
+  MemoryStore,
+  RunStore,
+  TenantContext,
+  ThreadStore,
+} from "@ofa/core";
+import {
+  createAgentDirectory,
+  createDatabase,
+  createRunStore,
+  createThreadStore,
+  createToolCallStore,
+  type Database,
+} from "@ofa/db";
+import { createPgEventBus, workspaceEvent } from "@ofa/events";
+import { createTelemetryMiddleware, type HarnessDeps } from "@ofa/harness";
 import {
   createModelGateway,
   createOpenRouterProvider,
   parseModelList,
+  resolveTiers,
   type ModelProvider,
+  type TierMap,
   type TierOverrides,
 } from "@ofa/llm";
+import { createPgMemoryStore } from "@ofa/memory";
+import {
+  createFunctions,
+  createInngestClient,
+  createRunDispatcher,
+  type RunDispatcher,
+} from "@ofa/orchestrator";
+import { createPolicyEngine } from "@ofa/policy";
+import { createTelemetry, type TelemetryHandle } from "@ofa/telemetry";
+import {
+  builtinTools,
+  createSearxngProvider,
+  createToolExecutor,
+  createToolRegistry,
+} from "@ofa/tools";
 import { createUnconfiguredVault, createVault } from "@ofa/vault";
+import type { Inngest } from "inngest";
 import { createAuth, type Auth } from "./auth/auth";
 import { createLogger, type Logger } from "./lib/logger";
 import { createSessionService, type SessionService } from "./services/sessions";
@@ -38,19 +74,36 @@ export interface Container {
   readonly db: Database;
   readonly auth: Auth;
   readonly vault: CredentialVault;
-  /** Used by the agent runtime (Inngest functions, M2.07); the API never calls models itself. */
+  /** Used by the agent runtime; the API never calls models itself (hard rule 1). */
   readonly llm: LLMGateway;
+  readonly llmProvider: ModelProvider;
+  /** Tier chains from the provider's defaults and LLM_MODELS_*. */
+  readonly tiers: TierMap;
+  readonly bus: EventBus;
+  readonly runs: RunStore;
+  readonly agents: AgentDirectory;
+  readonly threads: ThreadStore;
+  readonly memory: MemoryStore;
+  readonly dispatcher: RunDispatcher;
+  readonly inngest: Inngest;
+  readonly functions: ReturnType<typeof createFunctions>;
   readonly setup: SetupService;
   readonly sessions: SessionService;
-  /** Release connections. Call once on shutdown. */
+  /** Release connections and flush telemetry. Call once on shutdown. */
   close(): Promise<void>;
 }
 
 export interface ContainerOverrides {
   readonly logger?: Logger;
+  /** Replace the event bus (tests use the in-memory bus). */
+  readonly bus?: EventBus & { close?(): Promise<void> };
+  readonly dispatcher?: RunDispatcher;
 }
 
-function createLlm(config: Config, vault: CredentialVault): LLMGateway {
+function createLlm(
+  config: Config,
+  vault: CredentialVault,
+): { llm: LLMGateway; provider: ModelProvider; tiers: TierMap } {
   const makeProvider = MODEL_PROVIDERS[config.llm.provider];
   if (!makeProvider) {
     const known = Object.keys(MODEL_PROVIDERS).join(", ");
@@ -64,7 +117,7 @@ function createLlm(config: Config, vault: CredentialVault): LLMGateway {
     strong: parseModelList(config.llm.models.strong, ids, provider.id),
   };
 
-  return createModelGateway({
+  const llm = createModelGateway({
     providers: [provider],
     tiers,
     // The workspace's own key from Settings wins; the environment key is a
@@ -75,25 +128,89 @@ function createLlm(config: Config, vault: CredentialVault): LLMGateway {
       return p.id === config.llm.provider ? config.llm.apiKey : undefined;
     },
   });
+  return { llm, provider, tiers: resolveTiers(provider, tiers) };
 }
 
 export function createContainer(config: Config, overrides: ContainerOverrides = {}): Container {
   const logger = overrides.logger ?? createLogger(config.log, { service: "api" });
   const database = createDatabase(config.database.url);
-  const auth = createAuth(database.db, config);
+  const { db } = database;
+  const auth = createAuth(db, config);
   const vault = config.vault.key
-    ? createVault({ db: database.db, key: config.vault.key })
+    ? createVault({ db, key: config.vault.key })
     : createUnconfiguredVault();
+  const { llm, provider, tiers } = createLlm(config, vault);
+  const telemetry: TelemetryHandle = createTelemetry({
+    serviceName: "one-for-all",
+    version: config.version,
+    endpoint: config.telemetry.otlpEndpoint,
+  });
+
+  // Event bus: Postgres LISTEN/NOTIFY in self-host (ADR-0007).
+  const bus = overrides.bus ?? createPgEventBus({ url: config.database.url });
+  const publish = (workspaceId: string, payload: Parameters<typeof workspaceEvent>[1]) =>
+    bus.publish(workspaceEvent(workspaceId, payload));
+  const runs = createRunStore(db, { publish });
+  const threads = createThreadStore(db, { publish });
+  const agents = createAgentDirectory(db);
+  const memory = createPgMemoryStore(db);
+
+  const tools = createToolExecutor({
+    registry: createToolRegistry(
+      builtinTools({
+        memory,
+        search: config.search.searxngUrl
+          ? createSearxngProvider({ baseUrl: config.search.searxngUrl })
+          : null,
+      }),
+    ),
+    policy: createPolicyEngine({ agents }),
+    calls: createToolCallStore(db),
+    agents,
+    redact: (ctx, text) => vault.redact(ctx, text),
+    telemetry,
+  });
+
+  const harness: HarnessDeps = {
+    llm,
+    tools,
+    runs,
+    agents,
+    threads,
+    memory,
+    middleware: [createTelemetryMiddleware(telemetry)],
+  };
+
+  const inngest = createInngestClient({
+    isDev: config.inngest.dev,
+    baseUrl: config.inngest.baseUrl,
+    eventKey: config.inngest.eventKey,
+  });
+  const functions = createFunctions(inngest, { harness, runs });
 
   return {
     config,
     logger,
-    db: database.db,
+    db,
     auth,
     vault,
-    llm: createLlm(config, vault),
-    setup: createSetupService({ db: database.db, auth }),
-    sessions: createSessionService({ db: database.db, auth }),
-    close: () => database.close(),
+    llm,
+    llmProvider: provider,
+    tiers,
+    bus,
+    runs,
+    agents,
+    threads,
+    memory,
+    dispatcher: overrides.dispatcher ?? createRunDispatcher(inngest),
+    inngest,
+    functions,
+    setup: createSetupService({ db, auth }),
+    sessions: createSessionService({ db, auth }),
+    async close() {
+      await (bus as { close?(): Promise<void> }).close?.();
+      await telemetry.shutdown().catch(() => {});
+      await database.close();
+    },
   };
 }

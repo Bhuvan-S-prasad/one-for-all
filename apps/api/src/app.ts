@@ -1,3 +1,5 @@
+import { createNodeWebSocket } from "@hono/node-ws";
+import { serve as serveInngest } from "inngest/hono";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { secureHeaders } from "hono/secure-headers";
@@ -7,19 +9,31 @@ import { rateLimit } from "./lib/rate-limit";
 import { clientIp } from "./lib/request";
 import { hostCheck, originCheck } from "./middleware/perimeter";
 import { requestContext } from "./middleware/request-context";
+import { requireSession, requireTenant } from "./middleware/session";
+import { agentRoutes } from "./routes/agents";
 import { healthRoutes } from "./routes/health";
+import { runRoutes } from "./routes/runs";
 import { sessionRoutes } from "./routes/session";
+import { settingsRoutes } from "./routes/settings";
 import { setupRoutes } from "./routes/setup";
+import { threadRoutes } from "./routes/threads";
 import type { AppEnv } from "./types";
 import { mountWebApp } from "./web";
+import { realtimeHandler } from "./ws/gateway";
+
+export type App = Hono<AppEnv> & {
+  /** Attach WebSocket handling to the HTTP server (`/api/ws`). */
+  injectWebSocket: ReturnType<typeof createNodeWebSocket>["injectWebSocket"];
+};
 
 /**
  * Build the HTTP app. Kept separate from `server.ts` so tests can call
  * `app.request()` without opening a port.
  */
-export function createApp(container: Container): Hono<AppEnv> {
+export function createApp(container: Container): App {
   const { config, logger } = container;
   const app = new Hono<AppEnv>();
+  const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 
   app.onError((error, c) => {
     const http = toHttpError(error);
@@ -69,10 +83,29 @@ export function createApp(container: Container): Hono<AppEnv> {
   app.route("/api/health", healthRoutes(container));
   app.route("/api/setup", setupRoutes({ ...container, limiter: authLimiter }));
   app.route("/api/session", sessionRoutes({ ...container, limiter: authLimiter }));
+  app.route("/api/agents", agentRoutes(container));
+  app.route("/api/threads", threadRoutes(container));
+  app.route("/api/runs", runRoutes(container));
+  app.route("/api/settings", settingsRoutes(container));
+  app.get(
+    "/api/ws",
+    requireSession(container.sessions),
+    requireTenant(),
+    realtimeHandler(container, upgradeWebSocket),
+  );
+
+  // Inngest calls in here to run agent steps. Requests are signed in
+  // production (INNGEST_SIGNING_KEY); the dev server is local only.
+  const inngest = serveInngest({
+    client: container.inngest,
+    functions: container.functions,
+    ...(config.inngest.signingKey ? { signingKey: config.inngest.signingKey } : {}),
+  });
+  app.on(["GET", "POST", "PUT"], "/api/inngest", (c) => inngest(c));
   app.all("/api/*", (c) => c.json({ error: { code: "not_found", message: "Not found" } }, 404));
 
   // ── Web app (self-host) ──────────────────────────────────────────────────
   if (config.server.webDistDir) mountWebApp(app, config.server.webDistDir);
 
-  return app;
+  return Object.assign(app, { injectWebSocket });
 }

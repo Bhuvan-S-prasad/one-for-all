@@ -8,7 +8,30 @@ export {
 } from "./client";
 export { findRepoRoot, loadRootEnv } from "./env";
 export { MIGRATIONS_FOLDER, runMigrations } from "./migrate";
+export {
+  createAgent,
+  getAgent,
+  listAgents,
+  updateAgent,
+  type AgentRow,
+  type AgentWithGrants,
+  type AgentWrite,
+} from "./repos/agents";
 export { recordAudit, type AuditEntry } from "./repos/audit";
+export {
+  directThread,
+  getMessage,
+  getThread,
+  listMessages,
+  startTurn,
+  type MessageRow,
+  type RunRow,
+  type ThreadMemberRow,
+  type ThreadRow,
+  type ThreadWithMembers,
+} from "./repos/conversations";
+export { getRun, getRunEvent, listRunEvents, listRuns, type RunEventRow } from "./repos/runs";
+export { insertMemory, searchMemories, type MemoryInsert, type MemorySearch } from "./repos/memory";
 export {
   deleteSecret,
   findSecretById,
@@ -33,6 +56,14 @@ export {
   type WorkspaceMembership,
   type WorkspaceRecord,
 } from "./repos/workspaces";
+export {
+  createAgentDirectory,
+  createRunStore,
+  createThreadStore,
+  createToolCallStore,
+  type Publish,
+  type RuntimeStoreOptions,
+} from "./runtime";
 export * as schema from "./schema/index";
 export { seedSampleData } from "./seed/sample-data";
 export {

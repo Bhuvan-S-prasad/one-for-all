@@ -38,7 +38,10 @@ const server = serve(
       mode: config.mode,
       version: config.version,
     });
-    if (config.server.host !== "127.0.0.1" && config.server.host !== "localhost") {
+    // Inside the self-host container the app listens on 0.0.0.0 and Compose
+    // publishes it on 127.0.0.1 only (M2.28), so the warning is noise there.
+    const inContainer = process.env.OFA_IN_CONTAINER === "1";
+    if (!inContainer && config.server.host !== "127.0.0.1" && config.server.host !== "localhost") {
       logger.warn(
         "bound to a non-loopback address; make sure only a trusted network can reach it",
         {
@@ -48,6 +51,8 @@ const server = serve(
     }
   },
 );
+
+app.injectWebSocket(server);
 
 let stopping = false;
 async function shutdown(signal: string) {

@@ -7,6 +7,7 @@ export * from "./ports/events";
 export * from "./ports/llm";
 export * from "./ports/memory";
 export * from "./ports/policy";
+export * from "./ports/runtime";
 export * from "./ports/sandbox";
 export * from "./ports/telemetry";
 export * from "./ports/tools";

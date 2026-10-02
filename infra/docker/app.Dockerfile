@@ -48,7 +48,8 @@ ENV NODE_ENV=production \
     WEB_DIST_DIR=/app/web \
     MIGRATIONS_DIR=/app/migrations \
     DB_MIGRATE_ON_START=true \
-    LOG_FORMAT=json
+    LOG_FORMAT=json \
+    OFA_IN_CONTAINER=1
 
 WORKDIR /app
 
