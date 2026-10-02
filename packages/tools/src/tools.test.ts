@@ -16,11 +16,13 @@ import {
   createSearxngProvider,
   createToolExecutor,
   createToolRegistry,
+  defineJsonSchemaTool,
   defineTool,
   htmlToText,
   isPrivateAddress,
   safeFetch,
   toDescriptor,
+  ToolSchemaError,
   type ToolDefinition,
 } from "./index";
 
@@ -189,6 +191,113 @@ describe("tool executor", () => {
       properties: { text: { type: "string", minLength: 1 } },
       required: ["text"],
     });
+  });
+});
+
+describe("tools described by JSON Schema (M2.29)", () => {
+  // The shape an MCP server sends: no zod, only JSON Schema.
+  const schema = {
+    type: "object",
+    properties: {
+      to: { type: "string", format: "email" },
+      subject: { type: "string", minLength: 1, maxLength: 200 },
+      priority: { type: "string", enum: ["low", "high"] },
+    },
+    required: ["to", "subject"],
+    additionalProperties: false,
+  };
+  let ran = 0;
+  const draft = defineJsonSchemaTool({
+    name: "mail.create_draft",
+    description: "Create a draft",
+    inputSchema: schema,
+    annotations: {},
+    source: "mcp",
+    async run(args) {
+      ran += 1;
+      return { content: args as Record<string, unknown>, untrusted: false };
+    },
+  });
+  const registry = createToolRegistry([draft as ToolDefinition<never>]);
+
+  it("checks arguments against the schema, with messages the model can act on", () => {
+    expect(registry.validate("mail.create_draft", { to: "a@b.co", subject: "Hi" })).toEqual({
+      ok: true,
+      value: { to: "a@b.co", subject: "Hi" },
+    });
+    const bad = (args: unknown) => {
+      const result = registry.validate("mail.create_draft", args);
+      return result.ok ? "ok" : result.message;
+    };
+    expect(bad({ to: "a@b.co" })).toMatch(/^subject: /);
+    expect(bad({ to: "not an address", subject: "Hi" })).toMatch(/^to: Invalid email/);
+    expect(bad({ to: "a@b.co", subject: "Hi", priority: "urgent" })).toMatch(/^priority: /);
+    expect(bad({ to: "a@b.co", subject: "Hi", cc: "x" })).toMatch(/Unrecognized key: "cc"/);
+    expect(bad(undefined)).toMatch(/to: .*; subject: /);
+    expect(registry.validate("mail.send", {})).toEqual({
+      ok: false,
+      message: "No tool named mail.send",
+    });
+  });
+
+  it("shows the model the schema it was given, unchanged", () => {
+    expect(registry.descriptors()[0]).toMatchObject({ inputSchema: schema, source: "mcp" });
+  });
+
+  it("follows shared definitions in older schemas", () => {
+    const tool = defineJsonSchemaTool({
+      name: "crm.find",
+      description: "Find",
+      inputSchema: {
+        type: "object",
+        properties: { id: { $ref: "#/definitions/id" } },
+        required: ["id"],
+        definitions: { id: { type: "string", minLength: 3 } },
+      },
+      annotations: { readOnly: true },
+      run: async () => ({ content: "", untrusted: false }),
+    });
+    expect(tool.input.safeParse({ id: "abc" }).success).toBe(true);
+    expect(tool.input.safeParse({ id: "a" }).success).toBe(false);
+  });
+
+  it("refuses a schema it cannot check when the tool is defined, not mid-run", () => {
+    expect(() =>
+      defineJsonSchemaTool({
+        name: "odd.tool",
+        description: "Odd",
+        inputSchema: { type: "weird" },
+        annotations: {},
+        run: async () => ({ content: "", untrusted: false }),
+      }),
+    ).toThrow(new ToolSchemaError("odd.tool: Unsupported input schema: Unsupported type: weird"));
+  });
+
+  it("sends a malformed call back before policy, the call record or the tool", async () => {
+    const agents = { get: async () => agentWith([{ tool: "mail.create_draft", mode: "auto" }]) };
+    let policyCalls = 0;
+    const calls = memoryCalls();
+    const e = createToolExecutor({
+      registry,
+      policy: {
+        async evaluate() {
+          policyCalls += 1;
+          return { verdict: "auto", reasons: [] };
+        },
+      },
+      calls,
+      agents,
+    });
+    ran = 0;
+    const outcome = await e.execute(request("mail.create_draft", { to: "a@b.co" }), ctx);
+    expect(outcome).toMatchObject({ status: "error", code: "invalid_args" });
+    expect([policyCalls, calls.rows.size, ran]).toEqual([0, 0, 0]);
+    const good = await e.execute(
+      request("mail.create_draft", { to: "a@b.co", subject: "Hi" }, "k2"),
+      ctx,
+    );
+    expect(good).toMatchObject({ status: "ok" });
+    expect([policyCalls, calls.rows.size, ran]).toEqual([1, 1, 1]);
   });
 });
 

@@ -54,6 +54,20 @@ const server = serve(
 
 app.injectWebSocket(server);
 
+// A taken port is the usual start-up failure in development (another API
+// still running); say so plainly instead of an unhandled-error stack trace.
+server.on("error", (error: NodeJS.ErrnoException) => {
+  if (error.code === "EADDRINUSE") {
+    logger.error(
+      `port ${config.server.port} is already in use: is another API running? Stop it, or set PORT`,
+      { host: config.server.host, port: config.server.port },
+    );
+  } else {
+    logger.error("server failed to start", { error });
+  }
+  void container.close().finally(() => process.exit(1));
+});
+
 let stopping = false;
 async function shutdown(signal: string) {
   if (stopping) return;

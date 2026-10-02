@@ -88,23 +88,17 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
         }
         const descriptor = registry.descriptors().find((d) => d.name === request.name)!;
 
-        const parsed = tool.input.safeParse(request.args);
-        if (!parsed.success) {
-          const issues = parsed.error.issues.map(
-            (i) => `${i.path.join(".") || "input"}: ${i.message}`,
-          );
-          return {
-            status: "error",
-            code: "invalid_args",
-            message: issues.join("; "),
-            durationMs: 0,
-          };
+        // Before policy and before anything is recorded: a malformed call
+        // goes back to the model to fix, and never reaches the tool (M2.29).
+        const parsed = registry.validate(request.name, request.args);
+        if (!parsed.ok) {
+          return { status: "error", code: "invalid_args", message: parsed.message, durationMs: 0 };
         }
 
         const decision = await policy.evaluate({
           ctx,
           tool: descriptor,
-          args: parsed.data,
+          args: parsed.value,
           tainted: request.tainted,
         });
         span.setAttributes({ "policy.verdict": decision.verdict });
@@ -138,7 +132,7 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
         const begun = await calls.begin(ctx, {
           idempotencyKey: request.idempotencyKey,
           tool: request.name,
-          args: JSON.parse(await redact(ctx, JSON.stringify(parsed.data ?? {}))),
+          args: JSON.parse(await redact(ctx, JSON.stringify(parsed.value ?? {}))),
           verdict: decision.verdict,
         });
 
@@ -157,7 +151,7 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
             };
           }
           if (tool.verify) {
-            result = await tool.verify(parsed.data, runCtx);
+            result = await tool.verify(parsed.value, runCtx);
           } else if (!idempotent) {
             return {
               status: "error",
@@ -171,7 +165,7 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
         }
 
         try {
-          result ??= await withTimeout(tool.run(parsed.data, runCtx), timeoutMs);
+          result ??= await withTimeout(tool.run(parsed.value, runCtx), timeoutMs);
         } catch (error) {
           const code = (error as { code?: string }).code ?? "tool_failed";
           const message = await redact(ctx, error instanceof Error ? error.message : String(error));

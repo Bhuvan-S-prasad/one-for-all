@@ -1,11 +1,15 @@
 export {
   createToolRegistry,
+  defineJsonSchemaTool,
   defineTool,
+  inputFromJsonSchema,
   toDescriptor,
+  ToolSchemaError,
   type ToolDefinition,
   type ToolRegistry,
   type ToolRunContext,
   type ToolRunResult,
+  type Validation,
 } from "./define";
 export { createToolExecutor, type ToolExecutorOptions } from "./executor";
 export { builtinTools, type BuiltinToolDeps } from "./builtins/index";
