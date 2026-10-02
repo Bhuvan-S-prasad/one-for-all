@@ -50,6 +50,20 @@ const SCOPE = "@ofa";
 /** Dev tooling (lint, tsconfig, tailwind) may be imported from config files anywhere. */
 const TOOLING = ["eslint-config", "tsconfig", "tailwind-config"];
 
+const DEEP_IMPORT = {
+  regex: `^${SCOPE}/[^/]+/.+`,
+  message: "Import from the package root only (R5). Deep imports are not allowed.",
+};
+
+/**
+ * Model SDKs stay inside packages/llm so providers remain replaceable
+ * (ADR-0022). Everything else calls `LLMGateway`.
+ */
+const MODEL_SDKS = {
+  regex: "^(?:ai|@ai-sdk/[^/]+|@openrouter/[^/]+)(?:/.*)?$",
+  message: "Model SDKs are used only in packages/llm (ADR-0022). Call LLMGateway instead.",
+};
+
 /**
  * Restrict which workspace packages may be imported.
  * @param {string[]} allowed package names without the scope, e.g. ["core", "contracts"]
@@ -65,10 +79,8 @@ function onlyWorkspaceImports(allowed, reason) {
           "error",
           {
             patterns: [
-              {
-                regex: `^${SCOPE}/[^/]+/.+`,
-                message: "Import from the package root only (R5). Deep imports are not allowed.",
-              },
+              DEEP_IMPORT,
+              MODEL_SDKS,
               {
                 regex: `^${SCOPE}/${allowedGroup}[^/]+$`,
                 message: reason,
@@ -97,8 +109,19 @@ export const boundaries = {
     "Web and mobile may import only @ofa/core, @ofa/contracts and @ofa/client (R3).",
   ),
 
-  /** Server packages and apps: any package, still no deep imports (R5). */
+  /** Server packages and apps: any package, still no deep imports (R5) and no model SDKs. */
   serverPackage: [
+    {
+      files: ["**/*.{ts,tsx,js,jsx,mts,cts}"],
+      rules: { "no-restricted-imports": ["error", { patterns: [DEEP_IMPORT, MODEL_SDKS] }] },
+    },
+  ],
+
+  /**
+   * packages/llm: the gateway may use the AI SDK, but a provider's own SDK
+   * appears only in that provider's file under src/providers/ (ADR-0022).
+   */
+  llmPackage: [
     {
       files: ["**/*.{ts,tsx,js,jsx,mts,cts}"],
       rules: {
@@ -106,14 +129,19 @@ export const boundaries = {
           "error",
           {
             patterns: [
+              DEEP_IMPORT,
               {
-                regex: `^${SCOPE}/[^/]+/.+`,
-                message: "Import from the package root only (R5). Deep imports are not allowed.",
+                regex: "^(?:@ai-sdk/(?!provider$)[^/]+|@openrouter/[^/]+)(?:/.*)?$",
+                message: "A provider's SDK belongs in src/providers/<name>.ts only (ADR-0022).",
               },
             ],
           },
         ],
       },
+    },
+    {
+      files: ["src/providers/**"],
+      rules: { "no-restricted-imports": ["error", { patterns: [DEEP_IMPORT] }] },
     },
   ],
 };

@@ -10,6 +10,16 @@ export { findRepoRoot, loadRootEnv } from "./env";
 export { MIGRATIONS_FOLDER, runMigrations } from "./migrate";
 export { recordAudit, type AuditEntry } from "./repos/audit";
 export {
+  deleteSecret,
+  findSecretById,
+  findSecretByName,
+  listSecrets,
+  markSecretUsed,
+  upsertSecret,
+  type SecretRecord,
+  type SecretWrite,
+} from "./repos/secrets";
+export {
   bootstrapOwner,
   findInstallOwner,
   isSetupComplete,

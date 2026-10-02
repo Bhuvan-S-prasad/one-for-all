@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { AgentSpec } from "@ofa/contracts";
 import { asId, type TenantContext, type UserId, type WorkspaceId } from "@ofa/core";
 import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -19,6 +20,16 @@ import {
 loadRootEnv();
 const appUrl = process.env.DATABASE_URL;
 const ownerUrl = process.env.DATABASE_MIGRATION_URL;
+
+const SPY_SPEC: AgentSpec = {
+  job: "Spy",
+  modelTier: "fast",
+  autonomy: "suggest",
+  voice: "brief",
+  avatar: { form: "ghost", eyes: "visor", skin: "solid", color: "ink", mark: "none" },
+  memoryScopes: ["agent"],
+  budgets: { steps: 1, tokens: 1_000 },
+};
 
 /** The Postgres error behind a failed query (Drizzle wraps it in `cause`). */
 async function pgError(query: Promise<unknown>): Promise<{ code?: string; message: string }> {
@@ -110,7 +121,12 @@ describe.skipIf(!appUrl || !ownerUrl)("tenant isolation (integration)", () => {
   it("cannot write rows into another workspace", async () => {
     const error = await pgError(
       withTenant(app.db, a, (tx) =>
-        tx.insert(schema.agent).values({ workspaceId: b.workspaceId, slug: "spy", name: "Spy" }),
+        tx.insert(schema.agent).values({
+          workspaceId: b.workspaceId,
+          slug: "spy",
+          name: "Spy",
+          spec: SPY_SPEC,
+        }),
       ),
     );
     expect(error.code).toBe("42501"); // new row violates row-level security policy

@@ -2,8 +2,11 @@ import type { MemoryId } from "../ids";
 import type { TenantContext } from "../tenant";
 
 /** workspace: team knowledge · agent: role context · agent_user: private per-person notes. */
-export type MemoryScope = "workspace" | "agent" | "agent_user";
-export type MemoryKind = "fact" | "preference" | "episode";
+export const MEMORY_SCOPES = ["workspace", "agent", "agent_user"] as const;
+export type MemoryScope = (typeof MEMORY_SCOPES)[number];
+
+export const MEMORY_KINDS = ["fact", "preference", "episode"] as const;
+export type MemoryKind = (typeof MEMORY_KINDS)[number];
 
 export interface MemoryWrite {
   readonly scope: MemoryScope;

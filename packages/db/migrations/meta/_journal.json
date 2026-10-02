@@ -22,6 +22,20 @@
       "when": 1790789685930,
       "tag": "0002_pgvector",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790869263603,
+      "tag": "0003_m2_agent_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790869281814,
+      "tag": "0004_m2_row_level_security",
+      "breakpoints": true
     }
   ]
 }

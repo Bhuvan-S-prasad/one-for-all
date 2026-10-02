@@ -40,6 +40,12 @@ services:
       INNGEST_BASE_URL: http://inngest:8288
       INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY:?run infra/scripts/init-env.sh first}
       INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:?run infra/scripts/init-env.sh first}
+      # Model provider (ADR-0022). Keys are saved per workspace in Settings.
+      LLM_PROVIDER: ${LLM_PROVIDER:-openrouter}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODELS_FAST: ${LLM_MODELS_FAST:-}
+      LLM_MODELS_STANDARD: ${LLM_MODELS_STANDARD:-}
+      LLM_MODELS_STRONG: ${LLM_MODELS_STRONG:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
       - "127.0.0.1:${APP_PORT:-3000}:3000"

@@ -8,4 +8,6 @@ export * from "./agents";
 export * from "./threads";
 export * from "./runs";
 export * from "./messages";
+export * from "./memory";
+export * from "./secrets";
 export * from "./audit";

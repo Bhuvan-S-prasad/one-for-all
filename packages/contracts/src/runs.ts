@@ -1,0 +1,210 @@
+import { MEMORY_SCOPES, MODEL_ERROR_CODES, VERDICTS } from "@ofa/core";
+import { z } from "zod";
+import { modelTierSchema } from "./agents";
+import { idSchema, timestampSchema } from "./common";
+
+// A run is one execution of an agent, and its events are the record of what
+// happened (ADR-0014). The Activity view, traces, evals and audit all read
+// these events, so their shapes are fixed here.
+
+export const RUN_TRIGGERS = ["message", "routine", "delegation", "event", "manual"] as const;
+export const runTriggerSchema = z.enum(RUN_TRIGGERS);
+
+export const RUN_STATUSES = [
+  "queued",
+  "running",
+  "waiting",
+  "succeeded",
+  "failed",
+  "cancelled",
+] as const;
+export const runStatusSchema = z.enum(RUN_STATUSES);
+export type RunStatus = z.infer<typeof runStatusSchema>;
+
+/** Why the loop stopped (ARCHITECTURE.md §6.2). */
+export const RUN_STOP_REASONS = [
+  "final_answer",
+  "needs_human",
+  "step_budget",
+  "token_budget",
+  "cost_budget",
+  "loop_detected",
+  "user_stopped",
+  "error",
+] as const;
+export const runStopReasonSchema = z.enum(RUN_STOP_REASONS);
+export type RunStopReason = z.infer<typeof runStopReasonSchema>;
+
+const count = z.number().int().min(0);
+const usd = z.number().min(0);
+
+export const runUsageSchema = z.object({
+  inputTokens: count,
+  outputTokens: count,
+  costUsd: usd,
+  modelCalls: count,
+  toolCalls: count,
+});
+export type RunUsage = z.infer<typeof runUsageSchema>;
+
+export const EMPTY_RUN_USAGE: RunUsage = {
+  inputTokens: 0,
+  outputTokens: 0,
+  costUsd: 0,
+  modelCalls: 0,
+  toolCalls: 0,
+};
+
+export const runErrorSchema = z.object({
+  code: z.string().max(64),
+  message: z.string().max(2_000),
+});
+export type RunError = z.infer<typeof runErrorSchema>;
+
+export const runSchema = z.object({
+  id: idSchema,
+  agentId: idSchema,
+  threadId: idSchema.nullable(),
+  parentRunId: idSchema.nullable(),
+  trigger: runTriggerSchema,
+  status: runStatusSchema,
+  /** The run has read untrusted content; outbound tools now need approval. */
+  tainted: z.boolean(),
+  usage: runUsageSchema,
+  error: runErrorSchema.nullable(),
+  createdAt: timestampSchema,
+  startedAt: timestampSchema.nullable(),
+  endedAt: timestampSchema.nullable(),
+});
+export type Run = z.infer<typeof runSchema>;
+
+// ── Run events ───────────────────────────────────────────────────────────────
+// Payloads never contain credentials (hard rule 4): tool arguments and results
+// are redacted before they are appended, and results appear only as previews.
+
+/** Shown in the Activity view; the full output lives in an artifact. */
+const preview = z.string().max(500);
+const toolName = z.string().max(100);
+const modelName = z.string().max(200);
+
+const RUN_EVENT_PAYLOADS = {
+  "run.started": z.object({ trigger: runTriggerSchema, tier: modelTierSchema }),
+  "run.waiting": z.object({
+    reason: z.enum(["approval", "model_capacity", "user_input"]),
+    /** When the run expects to continue, if known (e.g. the model quota resets). */
+    until: timestampSchema.optional(),
+  }),
+  "run.resumed": z.object({}),
+  /** First untrusted read; the run stays tainted until it ends. */
+  "run.tainted": z.object({ source: z.string().max(200) }),
+  "run.compacted": z.object({ tokensBefore: count, tokensAfter: count }),
+  "run.ended": z.object({
+    status: z.enum(["succeeded", "failed", "cancelled"]),
+    stopReason: runStopReasonSchema,
+    usage: runUsageSchema,
+    error: runErrorSchema.optional(),
+  }),
+  "model.called": z.object({
+    provider: z.string().max(50),
+    model: modelName,
+    tier: modelTierSchema,
+    promptVersion: z.string().max(50).optional(),
+    inputTokens: count,
+    outputTokens: count,
+    costUsd: usd,
+    durationMs: count,
+    finishReason: z.string().max(32),
+    toolCalls: count,
+    /** Models tried first that failed, when a fallback served the call. */
+    fellBackFrom: z.array(modelName).optional(),
+  }),
+  "model.failed": z.object({
+    provider: z.string().max(50),
+    model: modelName,
+    tier: modelTierSchema,
+    code: z.enum(MODEL_ERROR_CODES),
+    message: z.string().max(2_000),
+  }),
+  "message.created": z.object({ messageId: idSchema, preview }),
+  "tool.called": z.object({
+    toolCallId: idSchema,
+    tool: toolName,
+    args: z.unknown(),
+    idempotencyKey: z.string().max(200),
+  }),
+  "policy.decided": z.object({
+    toolCallId: idSchema,
+    tool: toolName,
+    verdict: z.enum(VERDICTS),
+    reasons: z.array(z.string().max(500)),
+  }),
+  "approval.requested": z.object({ approvalId: idSchema, toolCallId: idSchema, tool: toolName }),
+  "approval.decided": z.object({
+    approvalId: idSchema,
+    decision: z.enum(["approved", "edited", "rejected", "expired"]),
+    decidedBy: idSchema.nullable(),
+  }),
+  "tool.completed": z.object({
+    toolCallId: idSchema,
+    tool: toolName,
+    durationMs: count,
+    untrusted: z.boolean(),
+    artifactId: idSchema.optional(),
+    preview,
+  }),
+  "tool.failed": z.object({
+    toolCallId: idSchema,
+    tool: toolName,
+    durationMs: count,
+    code: z.string().max(64),
+    message: z.string().max(2_000),
+  }),
+  "memory.written": z.object({
+    memoryId: idSchema,
+    scope: z.enum(MEMORY_SCOPES),
+    verified: z.boolean(),
+  }),
+} as const;
+
+type Payloads = typeof RUN_EVENT_PAYLOADS;
+export type RunEventType = keyof Payloads;
+export const RUN_EVENT_TYPES = Object.keys(RUN_EVENT_PAYLOADS) as RunEventType[];
+
+export type RunEventPayload<T extends RunEventType> = z.infer<Payloads[T]>;
+
+function body<T extends RunEventType>(type: T) {
+  return z.object({ type: z.literal(type), payload: RUN_EVENT_PAYLOADS[type] });
+}
+
+/** What the harness appends: a type and its payload. */
+export const runEventInputSchema = z.discriminatedUnion("type", [
+  body("run.started"),
+  body("run.waiting"),
+  body("run.resumed"),
+  body("run.tainted"),
+  body("run.compacted"),
+  body("run.ended"),
+  body("model.called"),
+  body("model.failed"),
+  body("message.created"),
+  body("tool.called"),
+  body("policy.decided"),
+  body("approval.requested"),
+  body("approval.decided"),
+  body("tool.completed"),
+  body("tool.failed"),
+  body("memory.written"),
+]);
+export type RunEventInput = z.infer<typeof runEventInputSchema>;
+
+/** A stored event. `seq` orders events within a run, starting at 0. */
+export const runEventSchema = z.intersection(
+  z.object({
+    id: idSchema,
+    runId: idSchema,
+    seq: count,
+    createdAt: timestampSchema,
+  }),
+  runEventInputSchema,
+);
+export type RunEvent = z.infer<typeof runEventSchema>;
