@@ -1,0 +1,25 @@
+{
+  "name": "@ofa/llm",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Model gateway: provider adapters, tiers, shared rate-limit queue, fallback, circuit breaker, metering. Server-only.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run --passWithNoTests",
+    "spike": "tsx src/scripts/tier-spike.ts"
+  },
+  "dependencies": {
+    "@ofa/core": "workspace:*",
+    "@openrouter/ai-sdk-provider": "3.1.0",
+    "ai": "7.0.123",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "tsx": "4.23.15"
+  }
+}

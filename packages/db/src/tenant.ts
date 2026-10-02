@@ -16,11 +16,15 @@ export const TENANT_TABLES = [
   "membership",
   "device",
   "agent",
+  "agent_grant",
   "thread",
   "thread_member",
   "message",
   "run",
   "run_event",
+  "tool_call",
+  "memory",
+  "secret",
   "audit_log",
 ] as const;
 

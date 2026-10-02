@@ -17,6 +17,16 @@ describe("loadConfig", () => {
     expect(config.server.allowedOrigins).toEqual(["http://localhost:3000"]);
     expect(config.server.allowedHosts).toEqual(["localhost:3000", "127.0.0.1:3000", "[::1]:3000"]);
     expect(config.log.format).toBe("pretty");
+    expect(config.llm).toEqual({
+      provider: "openrouter",
+      apiKey: undefined,
+      baseUrl: undefined,
+      models: { fast: undefined, standard: undefined, strong: undefined },
+    });
+  });
+
+  it("rejects a malformed provider ID", () => {
+    expect(() => loadConfig({ ...valid, LLM_PROVIDER: "Open Router" })).toThrow(ConfigError);
   });
 
   it("accepts extra hosts, e.g. a Tailscale name", () => {

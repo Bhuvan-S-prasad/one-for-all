@@ -5,6 +5,13 @@ import type { ToolDescriptor } from "./tools";
 export const VERDICTS = ["auto", "approve", "human", "deny"] as const;
 export type Verdict = (typeof VERDICTS)[number];
 
+/**
+ * What the user sets per tool on an agent (ARCHITECTURE.md §9.1). `blocked`
+ * becomes a `deny` verdict; the others can still be tightened by policy.
+ */
+export const GRANT_MODES = ["auto", "approve", "blocked"] as const;
+export type GrantMode = (typeof GRANT_MODES)[number];
+
 export function strictest(a: Verdict, b: Verdict): Verdict {
   return VERDICTS.indexOf(a) >= VERDICTS.indexOf(b) ? a : b;
 }

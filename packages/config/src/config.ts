@@ -26,6 +26,17 @@ export interface Config {
   };
   readonly auth: { readonly secret: string };
   readonly vault: { readonly key: string | undefined };
+  readonly llm: {
+    readonly provider: string;
+    readonly apiKey: string | undefined;
+    readonly baseUrl: string | undefined;
+    /** Comma-separated model lists per tier, parsed by the gateway. */
+    readonly models: {
+      readonly fast: string | undefined;
+      readonly standard: string | undefined;
+      readonly strong: string | undefined;
+    };
+  };
   readonly inngest: {
     readonly dev: boolean;
     readonly baseUrl: string | undefined;
@@ -105,6 +116,16 @@ export function loadConfig(source: Record<string, string | undefined> = process.
     },
     auth: { secret: env.AUTH_SECRET },
     vault: { key: env.VAULT_KEY },
+    llm: {
+      provider: env.LLM_PROVIDER,
+      apiKey: env.LLM_API_KEY,
+      baseUrl: env.LLM_BASE_URL,
+      models: {
+        fast: env.LLM_MODELS_FAST,
+        standard: env.LLM_MODELS_STANDARD,
+        strong: env.LLM_MODELS_STRONG,
+      },
+    },
     inngest: {
       dev: env.INNGEST_DEV ?? env.NODE_ENV !== "production",
       baseUrl: env.INNGEST_BASE_URL,

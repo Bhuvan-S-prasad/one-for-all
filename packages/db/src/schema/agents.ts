@@ -1,15 +1,16 @@
-import { sql } from "drizzle-orm";
-import { jsonb, pgTable, text, unique, uniqueIndex } from "drizzle-orm/pg-core";
+import type { AgentSpec } from "@ofa/contracts";
+import { foreignKey, jsonb, pgTable, text, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { user } from "./auth";
 import { createdAt, id, updatedAt } from "./columns";
-import { agentStatus } from "./enums";
+import { agentStatus, grantMode } from "./enums";
 import { workspaceId } from "./tenancy";
 
 /**
- * Agent spec stored as JSON (ARCHITECTURE.md §6.1). Its zod schema arrives
- * with the agent API in M2; until then it is an open object.
+ * Agent spec stored as JSON (ARCHITECTURE.md §6.1): job, tier, autonomy,
+ * voice, familiar, memory scopes, budgets. `agentSpecSchema` in
+ * `@ofa/contracts` validates it on the way in and out.
  */
-export type AgentSpecJson = Record<string, unknown>;
+export type AgentSpecJson = AgentSpec;
 
 export const agent = pgTable(
   "agent",
@@ -20,10 +21,7 @@ export const agent = pgTable(
     slug: text("slug").notNull(),
     name: text("name").notNull(),
     description: text("description").notNull().default(""),
-    spec: jsonb("spec")
-      .$type<AgentSpecJson>()
-      .notNull()
-      .default(sql`'{}'::jsonb`),
+    spec: jsonb("spec").$type<AgentSpecJson>().notNull(),
     status: agentStatus("status").notNull().default("active"),
     createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
     createdAt: createdAt(),
@@ -33,5 +31,31 @@ export const agent = pgTable(
     uniqueIndex("agent_workspace_slug_uq").on(t.workspaceId, t.slug),
     // Target for composite foreign keys that keep references inside one workspace.
     unique("agent_workspace_id_uq").on(t.workspaceId, t.id),
+  ],
+);
+
+/**
+ * Which tools an agent may use and how (ARCHITECTURE.md §9.1). `tool` is a
+ * tool name or an app wildcard (`hubspot.*`). No row means not granted.
+ */
+export const agentGrant = pgTable(
+  "agent_grant",
+  {
+    id: id(),
+    workspaceId: workspaceId(),
+    agentId: uuid("agent_id").notNull(),
+    tool: text("tool").notNull(),
+    mode: grantMode("mode").notNull(),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: "agent_grant_agent_fk",
+      columns: [t.workspaceId, t.agentId],
+      foreignColumns: [agent.workspaceId, agent.id],
+    }).onDelete("cascade"),
+    uniqueIndex("agent_grant_agent_tool_uq").on(t.agentId, t.tool),
   ],
 );

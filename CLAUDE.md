@@ -6,7 +6,7 @@ Guidance for Claude Code when working in this repository.
 
 One-for-All: a self-hosted platform for teams of always-on AI agents (modelled on OpenAI Dots and xAI Grok Bot). Each agent has one job, a sandboxed computer, granted tools (MCP-first), memory, and routines. Users reach agents from a web app, an Expo mobile app, Telegram and Slack.
 
-**Status:** **M1 Foundation** is done: monorepo and tooling, Postgres schema with RLS, Hono API with auth and first-run setup, the web app (setup, login, app shell), the Docker image, the self-host bundle and CI. Next milestone: **M2 First agent**.
+**Status:** **M1 Foundation** is done: monorepo and tooling, Postgres schema with RLS, Hono API with auth and first-run setup, the web app (setup, login, app shell), the Docker image, the self-host bundle and CI. **M2 First agent** is in progress: contracts, agent tables, vault and the model gateway are done.
 
 **Source of truth:** [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md). Read the relevant section before designing or changing anything. If a change contradicts it, stop and raise it with the user rather than diverging silently.
 
@@ -74,7 +74,8 @@ The UI follows the design canvas "One-for-All M1 Screens" (https://claude.ai/art
 
 ## Constraints to design around
 
-- OpenRouter free models: 20 requests/minute and 1,000/day per user. All model calls go through the shared queue in `packages/llm`. Prefer DOM/accessibility-tree browsing over screenshots.
+- OpenRouter free models: 20 requests/minute and 1,000/day per user. All model calls go through `LLMGateway` and its shared queue in `packages/llm`. Prefer DOM/accessibility-tree browsing over screenshots.
+- Model providers are replaceable (ADR-0022): provider-specific code lives only in `packages/llm/src/providers/<name>.ts`, chosen in `container.ts` by `LLM_PROVIDER`. Never import a provider SDK anywhere else, and never name a model outside tier config.
 - Free models have small context windows; respect the context budgets in ARCHITECTURE.md §7.
 - The self-host bundle targets ~3 GB RAM and must run on arm64 (Oracle Always Free, Raspberry Pi) as well as x64.
 - No channel may require a public URL (Telegram polling, Slack Socket Mode, Tailscale for mobile).
@@ -102,6 +103,7 @@ Run from the repo root unless noted. Node 24, pnpm 12.3.4, Docker.
 | `pnpm --filter @ofa/db db:generate` | Create a migration from schema changes (then add RLS for new tenant tables by hand) |
 | `pnpm --filter @ofa/db db:migrate` | Apply migrations to the dev database |
 | `pnpm --filter @ofa/api db:seed` | Dev owner, workspace and sample agents (development only) |
+| `pnpm --filter @ofa/llm spike` | Tool-calling check of free models for the tiers (needs `LLM_API_KEY` in `.env`; uses real quota) |
 | `sh infra/scripts/init-env.sh` | Create `infra/compose/.env` with random secrets for the self-host bundle |
 | `docker compose -f infra/compose/docker-compose.selfhost.yml up -d --build` | Build and run the self-host bundle on http://localhost:3000 |
 

@@ -45,6 +45,23 @@ export const envSchema = z
     AUTH_SECRET: z.string().min(32, "must be at least 32 characters"),
     VAULT_KEY: base64Key32.optional(),
 
+    /**
+     * Which model provider serves agents (ADR-0022). Switching is this one
+     * setting; adding a provider is one file in packages/llm/src/providers.
+     */
+    LLM_PROVIDER: z
+      .string()
+      .regex(/^[a-z][a-z0-9-]*$/, "must be a provider ID such as openrouter")
+      .default("openrouter"),
+    /** Fallback key for the provider. A key saved in Settings (the vault) takes precedence. */
+    LLM_API_KEY: z.string().min(8).optional(),
+    /** Override the provider's API address (a proxy, or a local server). */
+    LLM_BASE_URL: z.url().optional(),
+    /** Model chains per tier, comma-separated, best first. Unset keeps the provider's defaults. */
+    LLM_MODELS_FAST: z.string().optional(),
+    LLM_MODELS_STANDARD: z.string().optional(),
+    LLM_MODELS_STRONG: z.string().optional(),
+
     INNGEST_DEV: flag.optional(),
     INNGEST_BASE_URL: z.url().optional(),
     INNGEST_EVENT_KEY: z.string().optional(),

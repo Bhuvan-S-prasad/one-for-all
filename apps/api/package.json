@@ -20,6 +20,8 @@
     "@ofa/contracts": "workspace:*",
     "@ofa/core": "workspace:*",
     "@ofa/db": "workspace:*",
+    "@ofa/llm": "workspace:*",
+    "@ofa/vault": "workspace:*",
     "better-auth": "1.7.6",
     "hono": "4.13.11",
     "zod": "4.6.5"

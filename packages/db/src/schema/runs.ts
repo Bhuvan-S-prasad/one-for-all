@@ -8,12 +8,13 @@ import {
   pgTable,
   text,
   unique,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 import { agent } from "./agents";
 import { user } from "./auth";
 import { createdAt, id, timestampAt } from "./columns";
-import { runStatus, runTrigger } from "./enums";
+import { policyVerdict, runStatus, runTrigger, toolCallStatus } from "./enums";
 import { workspaceId } from "./tenancy";
 import { thread } from "./threads";
 
@@ -101,5 +102,42 @@ export const runEvent = pgTable(
       foreignColumns: [run.workspaceId, run.id],
     }),
     unique("run_event_run_seq_uq").on(t.runId, t.seq),
+  ],
+);
+
+/**
+ * One tool call, keyed for exactly-once side effects (ADR-0015). The executor
+ * inserts `in_flight` before calling the tool and sets `done` (with the
+ * result) or `failed` after. A retry that finds `done` returns the stored
+ * result; one that finds `in_flight` verifies before acting again.
+ * Arguments and results are stored redacted (hard rule 4).
+ */
+export const toolCall = pgTable(
+  "tool_call",
+  {
+    id: id(),
+    workspaceId: workspaceId(),
+    runId: uuid("run_id").notNull(),
+    /** `runId:step`, stable across retries and replays. */
+    idempotencyKey: text("idempotency_key").notNull(),
+    tool: text("tool").notNull(),
+    args: jsonb("args").$type<unknown>().notNull(),
+    status: toolCallStatus("status").notNull().default("in_flight"),
+    verdict: policyVerdict("verdict"),
+    result: jsonb("result").$type<unknown>(),
+    /** The result came from outside the system; the run is tainted. */
+    untrusted: boolean("untrusted").notNull().default(false),
+    error: jsonb("error").$type<{ code: string; message: string }>(),
+    createdAt: createdAt(),
+    completedAt: timestampAt("completed_at"),
+  },
+  (t) => [
+    foreignKey({
+      name: "tool_call_run_fk",
+      columns: [t.workspaceId, t.runId],
+      foreignColumns: [run.workspaceId, run.id],
+    }).onDelete("cascade"),
+    uniqueIndex("tool_call_workspace_key_uq").on(t.workspaceId, t.idempotencyKey),
+    index("tool_call_run_idx").on(t.runId),
   ],
 );
