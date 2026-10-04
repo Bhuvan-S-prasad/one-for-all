@@ -77,6 +77,48 @@ describe("runSteps", () => {
     expect(steps.map((s) => s.state)).toEqual(["blocked", "failed"]);
     expect(steps[1]?.detail).toBe("boom");
   });
+
+  it("shows a call waiting for you, then what you answered", () => {
+    const held = (n: string) => [
+      ev("policy.decided", {
+        toolCallId: `t${n}`,
+        tool: "browser.click",
+        verdict: "approve",
+        reasons: ["outbound tool in a run that read untrusted content"],
+      }),
+      ev("approval.requested", { approvalId: `a${n}`, toolCallId: `t${n}`, tool: "browser.click" }),
+      ev("run.waiting", { reason: "approval" }),
+    ];
+    const waiting = [...held("0")];
+    expect(runSteps(waiting)).toEqual([
+      { id: "t0", label: "Waiting for your answer", detail: "Clicking", state: "active" },
+    ]);
+    expect(runPhase("waiting", waiting)).toMatchObject({
+      label: "Waiting for you",
+      waitingFor: "you",
+    });
+
+    const answered = [
+      ...waiting,
+      ev("approval.decided", { approvalId: "a0", decision: "approved", decidedBy: "u" }),
+      ev("run.resumed", {}),
+      ev("tool.called", { toolCallId: "t0", tool: "browser.click", args: {}, idempotencyKey: "k" }),
+      ev("tool.completed", {
+        toolCallId: "t0",
+        tool: "browser.click",
+        durationMs: 9,
+        untrusted: true,
+        preview: "",
+      }),
+      ...held("1"),
+      ev("approval.decided", { approvalId: "a1", decision: "rejected", decidedBy: "u" }),
+    ];
+    expect(runSteps(answered).map((s) => [s.label, s.state])).toEqual([
+      ["Clicked", "done"],
+      ["You said no", "blocked"],
+    ]);
+    expect(runSummary(answered).blocked).toBe(1);
+  });
 });
 
 describe("timeAgo", () => {

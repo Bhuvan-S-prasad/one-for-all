@@ -2,6 +2,8 @@ import {
   agentListResponseSchema,
   agentSchema,
   agentStatsListSchema,
+  approvalListSchema,
+  approvalSchema,
   artifactListSchema,
   errorResponseSchema,
   healthResponseSchema,
@@ -24,6 +26,8 @@ import {
   type Agent,
   type AgentListResponse,
   type AgentStatsList,
+  type Approval,
+  type ApprovalList,
   type ArtifactList,
   type CreateAgentInput,
   type FirstRunSetupRequest,
@@ -274,6 +278,13 @@ export function createApiClient(options: ApiClientOptions = {}) {
     /** Ask again: the run's message, in the same chat, as a new run (UX.12). */
     retryRun: (id: string): Promise<SendMessageResponse> =>
       request("POST", `/api/runs/${encodeURIComponent(id)}/retry`, sendMessageResponseSchema),
+
+    // ── Approvals ──────────────────────────────────────────────────────────
+    /** Waiting for an answer, newest first. */
+    listApprovals: (filter: { agentId?: string; runId?: string } = {}): Promise<ApprovalList> =>
+      request("GET", `/api/approvals${query({ ...filter })}`, approvalListSchema),
+    decideApproval: (id: string, decision: "approve" | "reject"): Promise<Approval> =>
+      request("POST", `/api/approvals/${encodeURIComponent(id)}`, approvalSchema, { decision }),
 
     // ── Saved logins (M3.08) ───────────────────────────────────────────────
     listLogins: (): Promise<SavedLoginList> => request("GET", "/api/logins", savedLoginListSchema),

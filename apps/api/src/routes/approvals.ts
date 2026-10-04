@@ -47,7 +47,9 @@ export function approvalRoutes(
       const run = await getRun(deps.db, tenant, found.runId);
       const role = session.membership?.role;
       if (run?.triggeredBy !== tenant.userId && role !== "owner" && role !== "admin") {
-        throw new ForbiddenError("Only the person who asked, or an owner or admin, can answer this");
+        throw new ForbiddenError(
+          "Only the person who asked, or an owner or admin, can answer this",
+        );
       }
       const status = decision === "approve" ? "approved" : "rejected";
       const decided = await deps.approvals.decide(tenant, found.id, {

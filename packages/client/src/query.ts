@@ -24,6 +24,8 @@ export const queryKeys = {
   run: (id: string) => ["runs", id] as const,
   runEvents: (id: string) => ["runs", id, "events"] as const,
   runArtifacts: (id: string) => ["runs", id, "artifacts"] as const,
+  approvals: (agentId?: string) => ["approvals", agentId ?? "all"] as const,
+  approvalLists: ["approvals"] as const,
   llmSettings: ["settings", "llm"] as const,
 };
 
@@ -132,6 +134,12 @@ export const runArtifactsQuery = (api: ApiClient, id: string) =>
     queryKey: queryKeys.runArtifacts(id),
     queryFn: async () => (await api.runArtifacts(id)).items,
     staleTime: Infinity,
+  });
+
+export const approvalsQuery = (api: ApiClient, agentId?: string) =>
+  queryOptions({
+    queryKey: queryKeys.approvals(agentId),
+    queryFn: async () => (await api.listApprovals(agentId ? { agentId } : {})).items,
   });
 
 export const loginsQuery = (api: ApiClient) =>

@@ -102,7 +102,7 @@ export function timeline(events: readonly RunEvent[]): Timeline {
             title:
               e.payload.verdict === "deny"
                 ? `Not allowed to use ${e.payload.tool}`
-                : `${e.payload.tool} needs approval`,
+                : `Asked you before using ${e.payload.tool}`,
             detail: e.payload.reasons[0] ?? null,
             state: "warn",
             at: e.createdAt,
@@ -183,7 +183,24 @@ export function timeline(events: readonly RunEvent[]): Timeline {
           at: e.createdAt,
         });
         break;
+      case "approval.decided":
+        closeReads();
+        items.push({
+          id: e.id,
+          title:
+            e.payload.decision === "approved"
+              ? "You allowed it"
+              : e.payload.decision === "rejected"
+                ? "You said no"
+                : "No answer in time, so it was not done",
+          detail: null,
+          state: e.payload.decision === "approved" ? "done" : "info",
+          at: e.createdAt,
+        });
+        break;
       case "run.waiting":
+        // Waiting for a person shows as the request and its answer.
+        if (e.payload.reason === "approval") break;
         closeReads();
         items.push({
           id: e.id,

@@ -2,6 +2,7 @@ import {
   MOOD_LABELS,
   moodFor,
   useAgent,
+  useApprovals,
   useChatThread,
   useNewThread,
   useRun,
@@ -118,6 +119,8 @@ function Chat({ agent }: { agent: Agent }) {
   const { run: liveRun, events } = useRun(threadRun?.id);
   const run: Run | undefined = liveRun.data ?? threadRun;
   const active = !!run && ACTIVE.has(run.status);
+  const { data: approvals } = useApprovals(agent.id);
+  const waitingOnYou = approvals?.filter((a) => a.runId === run?.id) ?? [];
   const busyElsewhere = !!latest && latest.id !== run?.id && ACTIVE.has(latest.status);
   const now = useNow(active);
   const lastEvent = events.data?.at(-1) ?? null;
@@ -305,6 +308,7 @@ function Chat({ agent }: { agent: Agent }) {
                     now={now}
                     stopping={stop.isPending}
                     onStop={stopRun}
+                    approvals={waitingOnYou}
                   />
                 )}
                 {failedUnanswered && run && (

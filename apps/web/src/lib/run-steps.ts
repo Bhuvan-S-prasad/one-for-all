@@ -58,6 +58,9 @@ function detailFor(tool: string, args: unknown): string | null {
 
 export function runSteps(events: readonly RunEvent[]): RunStep[] {
   const steps = new Map<string, RunStep>();
+  // Calls held for a person: what they would do, and their approval.
+  const asked = new Map<string, string>();
+  const approvalOf = new Map<string, string>();
   for (const event of events) {
     switch (event.type) {
       case "tool.called": {
@@ -87,14 +90,40 @@ export function runSteps(events: readonly RunEvent[]): RunStep[] {
         break;
       }
       case "policy.decided":
-        if (event.payload.verdict !== "auto") {
+        if (event.payload.verdict === "deny") {
           steps.set(event.payload.toolCallId, {
             id: event.payload.toolCallId,
             label: `Not allowed to use ${event.payload.tool}`,
             detail: event.payload.reasons[0] ?? null,
             state: "blocked",
           });
+        } else if (event.payload.verdict !== "auto") {
+          const [doing] = TOOL_LABELS[event.payload.tool] ?? [`Using ${event.payload.tool}`];
+          asked.set(event.payload.toolCallId, doing);
+          steps.set(event.payload.toolCallId, {
+            id: event.payload.toolCallId,
+            label: "Waiting for your answer",
+            detail: doing,
+            state: "active",
+          });
         }
+        break;
+      case "approval.decided": {
+        // Approved: the call that follows takes the step over.
+        const id = event.payload.approvalId;
+        const call = [...asked.keys()].find((k) => approvalOf.get(k) === id);
+        if (call && event.payload.decision !== "approved") {
+          steps.set(call, {
+            id: call,
+            label: event.payload.decision === "rejected" ? "You said no" : "No answer in time",
+            detail: asked.get(call) ?? null,
+            state: "blocked",
+          });
+        }
+        break;
+      }
+      case "approval.requested":
+        approvalOf.set(event.payload.toolCallId, event.payload.approvalId);
         break;
     }
   }
@@ -207,8 +236,11 @@ export function runSummary(events: readonly RunEvent[]): RunSummary {
     pagesRead: sources.filter((s) => s.state === "read").length,
     failed: events.filter((e) => e.type === "tool.failed").length,
     compacted: events.some((e) => e.type === "run.compacted"),
-    blocked: events.filter((e) => e.type === "policy.decided" && e.payload.verdict !== "auto")
-      .length,
+    blocked: events.filter(
+      (e) =>
+        (e.type === "policy.decided" && e.payload.verdict === "deny") ||
+        (e.type === "approval.decided" && e.payload.decision !== "approved"),
+    ).length,
   };
 }
 
@@ -232,6 +264,8 @@ export interface RunPhase {
   readonly kind: "queued" | "thinking" | "working" | "waiting";
   /** For waiting: when it expects to carry on. */
   readonly until: string | null;
+  /** For waiting: on a person's answer, or on the model's capacity. */
+  readonly waitingFor?: "you" | "model";
 }
 
 const DOING: Record<string, string> = {
@@ -261,8 +295,18 @@ export function runPhase(status: string, events: readonly RunEvent[]): RunPhase 
     return { label: "Getting ready", detail: null, kind: "queued", until: null };
   }
   if (status === "waiting" || last.type === "run.waiting") {
-    const until = last.type === "run.waiting" ? (last.payload.until ?? null) : null;
-    return { label: "Waiting for the model", detail: null, kind: "waiting", until };
+    const wait = events.findLast((e) => e.type === "run.waiting");
+    const until = wait?.type === "run.waiting" ? (wait.payload.until ?? null) : null;
+    if (wait?.type === "run.waiting" && wait.payload.reason === "approval") {
+      return { label: "Waiting for you", detail: null, kind: "waiting", until, waitingFor: "you" };
+    }
+    return {
+      label: "Waiting for the model",
+      detail: null,
+      kind: "waiting",
+      until,
+      waitingFor: "model",
+    };
   }
   // The newest tool call that has not finished yet is what it is doing.
   const open = new Map<string, Extract<RunEvent, { type: "tool.called" }>>();

@@ -52,7 +52,10 @@ export interface ApprovalStore {
   decide(
     ctx: TenantContext,
     id: string,
-    input: { readonly status: Exclude<ApprovalStatus, "pending">; readonly decidedBy: string | null },
+    input: {
+      readonly status: Exclude<ApprovalStatus, "pending">;
+      readonly decidedBy: string | null;
+    },
   ): Promise<ApprovalRecord | null>;
   /** Pending approvals, newest first, optionally for one agent or run. */
   listPending(

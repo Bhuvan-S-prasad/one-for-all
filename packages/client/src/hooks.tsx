@@ -20,6 +20,7 @@ import {
   agentStatsQuery,
   agentThreadQuery,
   agentThreadsQuery,
+  approvalsQuery,
   healthQuery,
   llmSettingsQuery,
   loginsQuery,
@@ -335,6 +336,23 @@ export function useForgetMemory() {
 }
 
 // ── Settings ─────────────────────────────────────────────────────────────────
+
+// ── Approvals ────────────────────────────────────────────────────────────────
+
+/** Requests waiting for a person, for one agent or all. Kept fresh by run events. */
+export function useApprovals(agentId?: string) {
+  return useQuery(approvalsQuery(useApiClient(), agentId));
+}
+
+export function useDecideApproval() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, decision }: { id: string; decision: "approve" | "reject" }) =>
+      api.decideApproval(id, decision),
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: queryKeys.approvalLists }),
+  });
+}
 
 // ── Saved logins and the computer (M3.08, M3.10) ─────────────────────────────
 

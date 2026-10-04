@@ -1,6 +1,7 @@
-import type { Agent, FamiliarMood, Run, RunEvent } from "@ofa/contracts";
+import type { Agent, Approval, FamiliarMood, Run, RunEvent } from "@ofa/contracts";
 import { Link } from "@tanstack/react-router";
 import { Square } from "lucide-react";
+import { ApprovalCard } from "@/components/approval-card";
 import { Familiar } from "@/components/familiar";
 import { StepList } from "@/components/chat/reply";
 import { countdown, duration } from "@/lib/format";
@@ -46,11 +47,14 @@ export function LiveRun({
   now,
   stopping,
   onStop,
+  approvals = [],
 }: {
   agent: Agent;
   run: Run;
   events: readonly RunEvent[];
   mood: FamiliarMood;
+  /** This run's requests waiting for a person, answered right here. */
+  approvals?: readonly Approval[];
   now: number;
   stopping: boolean;
   onStop: () => void;
@@ -93,7 +97,11 @@ export function LiveRun({
           </span>
         </div>
 
-        {phase.kind === "waiting" && (
+        {approvals.map((approval) => (
+          <ApprovalCard key={approval.id} approval={approval} agent={agent} />
+        ))}
+
+        {phase.kind === "waiting" && phase.waitingFor !== "you" && (
           <p className="rounded-[14px] border border-warning/30 bg-warning/10 px-3.5 py-2.5 text-[13.5px]">
             The free models allow 20 requests a minute, so {agent.name} is waiting its turn.
             {phase.until && (

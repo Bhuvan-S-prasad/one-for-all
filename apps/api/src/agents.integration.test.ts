@@ -438,7 +438,9 @@ describe.skipIf(!hasDb)("M2 API (integration)", async () => {
       expect.objectContaining({ id: asked.id, status: "pending", threadId, tool: "browser.click" }),
     ]);
 
-    expect((await send("POST", `/api/approvals/${asked.id}`, { decision: "maybe" })).status).toBe(422);
+    expect((await send("POST", `/api/approvals/${asked.id}`, { decision: "maybe" })).status).toBe(
+      422,
+    );
     const ok = await send("POST", `/api/approvals/${asked.id}`, { decision: "approve" });
     expect(ok.status).toBe(200);
     expect(approvalSchema.parse(await ok.json())).toMatchObject({ status: "approved" });
