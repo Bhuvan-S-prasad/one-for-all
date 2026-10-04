@@ -38,7 +38,10 @@ const server = serve(
       mode: config.mode,
       version: config.version,
     });
-    if (config.server.host !== "127.0.0.1" && config.server.host !== "localhost") {
+    // Inside the self-host container the app listens on 0.0.0.0 and Compose
+    // publishes it on 127.0.0.1 only (M2.28), so the warning is noise there.
+    const inContainer = process.env.OFA_IN_CONTAINER === "1";
+    if (!inContainer && config.server.host !== "127.0.0.1" && config.server.host !== "localhost") {
       logger.warn(
         "bound to a non-loopback address; make sure only a trusted network can reach it",
         {
@@ -48,6 +51,22 @@ const server = serve(
     }
   },
 );
+
+app.injectWebSocket(server);
+
+// A taken port is the usual start-up failure in development (another API
+// still running); say so plainly instead of an unhandled-error stack trace.
+server.on("error", (error: NodeJS.ErrnoException) => {
+  if (error.code === "EADDRINUSE") {
+    logger.error(
+      `port ${config.server.port} is already in use: is another API running? Stop it, or set PORT`,
+      { host: config.server.host, port: config.server.port },
+    );
+  } else {
+    logger.error("server failed to start", { error });
+  }
+  void container.close().finally(() => process.exit(1));
+});
 
 let stopping = false;
 async function shutdown(signal: string) {

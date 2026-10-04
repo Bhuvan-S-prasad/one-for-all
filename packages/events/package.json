@@ -1,0 +1,22 @@
+{
+  "name": "@ofa/events",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Event bus adapters (Postgres LISTEN/NOTIFY, in-memory) and the typed bus event catalog. Server-only.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run --passWithNoTests --exclude \"**/*.integration.test.ts\"",
+    "test:integration": "vitest run --passWithNoTests integration"
+  },
+  "dependencies": {
+    "@ofa/contracts": "workspace:*",
+    "@ofa/core": "workspace:*",
+    "postgres": "3.4.9",
+    "zod": "4.6.5"
+  }
+}

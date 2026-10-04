@@ -1,10 +1,28 @@
-import { QueryClient, queryOptions } from "@tanstack/react-query";
-import { ApiError, type ApiClient } from "./api-client";
+import { infiniteQueryOptions, QueryClient, queryOptions } from "@tanstack/react-query";
+import { ApiError, type ApiClient, type MemoryFilter, type RunFilter } from "./api-client";
 
 export const queryKeys = {
   session: ["session"] as const,
   setupStatus: ["setup-status"] as const,
   health: ["health"] as const,
+  agents: ["agents"] as const,
+  agent: (id: string) => ["agents", id] as const,
+  agentThread: (id: string) => ["agents", id, "thread"] as const,
+  agentThreads: (id: string, q?: string) => ["threads", "list", id, q ?? ""] as const,
+  threadLists: ["threads", "list"] as const,
+  thread: (id: string) => ["threads", id] as const,
+  agentStats: ["agents-stats"] as const,
+  memories: (filter: MemoryFilter) => ["memories", filter] as const,
+  memoryLists: ["memories"] as const,
+  usage: ["settings", "usage"] as const,
+  messages: (threadId: string) => ["threads", threadId, "messages"] as const,
+  runs: (agentId?: string) => ["runs", "list", agentId ?? "all"] as const,
+  runLists: ["runs", "list"] as const,
+  runSearch: (filter: RunFilter) => ["runs", "search", filter] as const,
+  runSearches: ["runs", "search"] as const,
+  run: (id: string) => ["runs", id] as const,
+  runEvents: (id: string) => ["runs", id, "events"] as const,
+  llmSettings: ["settings", "llm"] as const,
 };
 
 /** Shared by hooks and router loaders, so both read the same cache entry. */
@@ -26,6 +44,89 @@ export const healthQuery = (api: ApiClient) =>
     refetchInterval: 30_000,
     retry: false,
   });
+
+// Live data below is kept fresh by the realtime socket (`useRealtimeSync`),
+// so it does not poll.
+
+export const agentsQuery = (api: ApiClient) =>
+  queryOptions({ queryKey: queryKeys.agents, queryFn: async () => (await api.listAgents()).items });
+
+export const agentQuery = (api: ApiClient, id: string) =>
+  queryOptions({ queryKey: queryKeys.agent(id), queryFn: () => api.getAgent(id) });
+
+export const agentThreadQuery = (api: ApiClient, agentId: string) =>
+  queryOptions({
+    queryKey: queryKeys.agentThread(agentId),
+    queryFn: () => api.agentThread(agentId),
+    staleTime: Infinity,
+  });
+
+/** An agent's chats, a page at a time (UX.13). */
+export const agentThreadsQuery = (api: ApiClient, agentId: string, q?: string) =>
+  infiniteQueryOptions({
+    queryKey: queryKeys.agentThreads(agentId, q),
+    queryFn: ({ pageParam }) =>
+      api.agentThreads(agentId, { q, limit: 30, ...(pageParam ? { cursor: pageParam } : {}) }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (page) => page.nextCursor,
+  });
+
+export const threadQuery = (api: ApiClient, id: string) =>
+  queryOptions({ queryKey: queryKeys.thread(id), queryFn: () => api.getThread(id) });
+
+export const agentStatsQuery = (api: ApiClient) =>
+  queryOptions({
+    queryKey: queryKeys.agentStats,
+    queryFn: async () => (await api.agentStats()).items,
+  });
+
+export const memoriesQuery = (api: ApiClient, filter: MemoryFilter) =>
+  queryOptions({
+    queryKey: queryKeys.memories(filter),
+    queryFn: async () => (await api.listMemories(filter)).items,
+  });
+
+/** Today's model requests; refreshed each minute while shown (UX.11). */
+export const usageQuery = (api: ApiClient) =>
+  queryOptions({
+    queryKey: queryKeys.usage,
+    queryFn: () => api.usageToday(),
+    refetchInterval: 60_000,
+  });
+
+export const messagesQuery = (api: ApiClient, threadId: string) =>
+  queryOptions({
+    queryKey: queryKeys.messages(threadId),
+    queryFn: async () => (await api.listMessages(threadId, { limit: 100 })).items,
+  });
+
+export const runsQuery = (api: ApiClient, agentId?: string) =>
+  queryOptions({
+    queryKey: queryKeys.runs(agentId),
+    queryFn: async () => (await api.listRuns({ agentId, limit: 50 })).items,
+  });
+
+/** Activity: filtered runs, a page at a time (UX.10). */
+export const runSearchQuery = (api: ApiClient, filter: RunFilter) =>
+  infiniteQueryOptions({
+    queryKey: queryKeys.runSearch(filter),
+    queryFn: ({ pageParam }) =>
+      api.listRuns({ ...filter, limit: 40, ...(pageParam ? { cursor: pageParam } : {}) }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (page) => page.nextCursor,
+  });
+
+export const runQuery = (api: ApiClient, id: string) =>
+  queryOptions({ queryKey: queryKeys.run(id), queryFn: () => api.getRun(id) });
+
+export const runEventsQuery = (api: ApiClient, id: string) =>
+  queryOptions({
+    queryKey: queryKeys.runEvents(id),
+    queryFn: async () => (await api.runEvents(id)).items,
+  });
+
+export const llmSettingsQuery = (api: ApiClient) =>
+  queryOptions({ queryKey: queryKeys.llmSettings, queryFn: () => api.llmSettings() });
 
 /** Query client with defaults suited to this API. */
 export function createQueryClient(): QueryClient {

@@ -1,15 +1,59 @@
-export { ApiError, createApiClient, type ApiClient, type ApiClientOptions } from "./api-client";
+export {
+  ApiError,
+  createApiClient,
+  type ApiClient,
+  type ApiClientOptions,
+  type MemoryFilter,
+  type RunFilter,
+} from "./api-client";
 export {
   ApiClientProvider,
+  useAgent,
+  useAgents,
+  useAgentStats,
+  useAgentThread,
+  useAgentThreads,
+  useAskAgent,
+  useChatThread,
+  useConfirmMemory,
+  useForgetMemory,
+  useMemories,
+  useNewThread,
+  useRetryRun,
   useApiClient,
+  useCreateAgent,
+  useDeleteLlmKey,
   useFirstRunSetup,
   useHealth,
+  useLlmSettings,
   useLogin,
   useLogout,
+  useRealtimeSync,
+  useRun,
+  useRuns,
+  useRunSearch,
+  useSaveLlmKey,
+  useSendMessage,
   useSession,
   useSetupStatus,
+  useStopRun,
+  useThreadMessages,
+  useUpdateAgent,
+  useUpdateThread,
+  useUsageToday,
 } from "./hooks";
-export { createQueryClient, healthQuery, queryKeys, sessionQuery, setupStatusQuery } from "./query";
+export {
+  agentQuery,
+  agentsQuery,
+  agentThreadQuery,
+  createQueryClient,
+  healthQuery,
+  queryKeys,
+  sessionQuery,
+  setupStatusQuery,
+} from "./query";
+export { applyRealtime, connectRealtime, type RealtimeConnection } from "./realtime";
+export { MOOD_LABELS, moodFor, type MoodInput } from "./moods";
 export {
   FAMILIAR_MOOD_COLORS,
   familiarParts,

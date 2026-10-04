@@ -14,10 +14,15 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as SetupRouteImport } from './routes/setup'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AppActivityRouteImport } from './routes/_app/activity'
-import { Route as AppAgentsRouteImport } from './routes/_app/agents'
 import { Route as AppApprovalsRouteImport } from './routes/_app/approvals'
 import { Route as AppConnectionsRouteImport } from './routes/_app/connections'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
+import { Route as AppAgentsIndexRouteImport } from './routes/_app/agents.index'
+import { Route as AppAgentsNewRouteImport } from './routes/_app/agents.new'
+import { Route as AppAgentsAgentIdIndexRouteImport } from './routes/_app/agents.$agentId.index'
+import { Route as AppAgentsAgentIdEditRouteImport } from './routes/_app/agents.$agentId.edit'
+import { Route as AppAgentsAgentIdHistoryRouteImport } from './routes/_app/agents.$agentId.history'
+import { Route as AppAgentsAgentIdMemoryRouteImport } from './routes/_app/agents.$agentId.memory'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -43,11 +48,6 @@ const AppActivityRoute = AppActivityRouteImport.update({
   path: '/activity',
   getParentRoute: () => AppRoute,
 } as any)
-const AppAgentsRoute = AppAgentsRouteImport.update({
-  id: '/agents',
-  path: '/agents',
-  getParentRoute: () => AppRoute,
-} as any)
 const AppApprovalsRoute = AppApprovalsRouteImport.update({
   id: '/approvals',
   path: '/approvals',
@@ -63,26 +63,66 @@ const AppSettingsRoute = AppSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAgentsIndexRoute = AppAgentsIndexRouteImport.update({
+  id: '/agents/',
+  path: '/agents/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAgentsNewRoute = AppAgentsNewRouteImport.update({
+  id: '/agents/new',
+  path: '/agents/new',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAgentsAgentIdIndexRoute = AppAgentsAgentIdIndexRouteImport.update({
+  id: '/agents/$agentId/',
+  path: '/agents/$agentId/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAgentsAgentIdEditRoute = AppAgentsAgentIdEditRouteImport.update({
+  id: '/agents/$agentId/edit',
+  path: '/agents/$agentId/edit',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAgentsAgentIdHistoryRoute = AppAgentsAgentIdHistoryRouteImport.update({
+  id: '/agents/$agentId/history',
+  path: '/agents/$agentId/history',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAgentsAgentIdMemoryRoute = AppAgentsAgentIdMemoryRouteImport.update({
+  id: '/agents/$agentId/memory',
+  path: '/agents/$agentId/memory',
+  getParentRoute: () => AppRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/login': typeof LoginRoute
   '/setup': typeof SetupRoute
   '/activity': typeof AppActivityRoute
-  '/agents': typeof AppAgentsRoute
   '/approvals': typeof AppApprovalsRoute
   '/connections': typeof AppConnectionsRoute
   '/settings': typeof AppSettingsRoute
+  '/agents/new': typeof AppAgentsNewRoute
+  '/agents/': typeof AppAgentsIndexRoute
+  '/agents/$agentId/edit': typeof AppAgentsAgentIdEditRoute
+  '/agents/$agentId/history': typeof AppAgentsAgentIdHistoryRoute
+  '/agents/$agentId/memory': typeof AppAgentsAgentIdMemoryRoute
+  '/agents/$agentId/': typeof AppAgentsAgentIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/setup': typeof SetupRoute
   '/activity': typeof AppActivityRoute
-  '/agents': typeof AppAgentsRoute
   '/approvals': typeof AppApprovalsRoute
   '/connections': typeof AppConnectionsRoute
   '/settings': typeof AppSettingsRoute
   '/': typeof AppIndexRoute
+  '/agents/new': typeof AppAgentsNewRoute
+  '/agents': typeof AppAgentsIndexRoute
+  '/agents/$agentId/edit': typeof AppAgentsAgentIdEditRoute
+  '/agents/$agentId/history': typeof AppAgentsAgentIdHistoryRoute
+  '/agents/$agentId/memory': typeof AppAgentsAgentIdMemoryRoute
+  '/agents/$agentId': typeof AppAgentsAgentIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -90,11 +130,16 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/setup': typeof SetupRoute
   '/_app/activity': typeof AppActivityRoute
-  '/_app/agents': typeof AppAgentsRoute
   '/_app/approvals': typeof AppApprovalsRoute
   '/_app/connections': typeof AppConnectionsRoute
   '/_app/settings': typeof AppSettingsRoute
   '/_app/': typeof AppIndexRoute
+  '/_app/agents/new': typeof AppAgentsNewRoute
+  '/_app/agents/': typeof AppAgentsIndexRoute
+  '/_app/agents/$agentId/edit': typeof AppAgentsAgentIdEditRoute
+  '/_app/agents/$agentId/history': typeof AppAgentsAgentIdHistoryRoute
+  '/_app/agents/$agentId/memory': typeof AppAgentsAgentIdMemoryRoute
+  '/_app/agents/$agentId/': typeof AppAgentsAgentIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -103,31 +148,46 @@ export interface FileRouteTypes {
     | '/login'
     | '/setup'
     | '/activity'
-    | '/agents'
     | '/approvals'
     | '/connections'
     | '/settings'
+    | '/agents/new'
+    | '/agents/'
+    | '/agents/$agentId/edit'
+    | '/agents/$agentId/history'
+    | '/agents/$agentId/memory'
+    | '/agents/$agentId/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
     | '/setup'
     | '/activity'
-    | '/agents'
     | '/approvals'
     | '/connections'
     | '/settings'
     | '/'
+    | '/agents/new'
+    | '/agents'
+    | '/agents/$agentId/edit'
+    | '/agents/$agentId/history'
+    | '/agents/$agentId/memory'
+    | '/agents/$agentId'
   id:
     | '__root__'
     | '/_app'
     | '/login'
     | '/setup'
     | '/_app/activity'
-    | '/_app/agents'
     | '/_app/approvals'
     | '/_app/connections'
     | '/_app/settings'
     | '/_app/'
+    | '/_app/agents/new'
+    | '/_app/agents/'
+    | '/_app/agents/$agentId/edit'
+    | '/_app/agents/$agentId/history'
+    | '/_app/agents/$agentId/memory'
+    | '/_app/agents/$agentId/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -173,13 +233,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppActivityRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/agents': {
-      id: '/_app/agents'
-      path: '/agents'
-      fullPath: '/agents'
-      preLoaderRoute: typeof AppAgentsRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/approvals': {
       id: '/_app/approvals'
       path: '/approvals'
@@ -201,25 +254,77 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/agents/': {
+      id: '/_app/agents/'
+      path: '/agents'
+      fullPath: '/agents/'
+      preLoaderRoute: typeof AppAgentsIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/agents/new': {
+      id: '/_app/agents/new'
+      path: '/agents/new'
+      fullPath: '/agents/new'
+      preLoaderRoute: typeof AppAgentsNewRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/agents/$agentId/': {
+      id: '/_app/agents/$agentId/'
+      path: '/agents/$agentId'
+      fullPath: '/agents/$agentId/'
+      preLoaderRoute: typeof AppAgentsAgentIdIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/agents/$agentId/edit': {
+      id: '/_app/agents/$agentId/edit'
+      path: '/agents/$agentId/edit'
+      fullPath: '/agents/$agentId/edit'
+      preLoaderRoute: typeof AppAgentsAgentIdEditRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/agents/$agentId/history': {
+      id: '/_app/agents/$agentId/history'
+      path: '/agents/$agentId/history'
+      fullPath: '/agents/$agentId/history'
+      preLoaderRoute: typeof AppAgentsAgentIdHistoryRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/agents/$agentId/memory': {
+      id: '/_app/agents/$agentId/memory'
+      path: '/agents/$agentId/memory'
+      fullPath: '/agents/$agentId/memory'
+      preLoaderRoute: typeof AppAgentsAgentIdMemoryRouteImport
+      parentRoute: typeof AppRoute
+    }
   }
 }
 
 interface AppRouteChildren {
   AppActivityRoute: typeof AppActivityRoute
-  AppAgentsRoute: typeof AppAgentsRoute
   AppApprovalsRoute: typeof AppApprovalsRoute
   AppConnectionsRoute: typeof AppConnectionsRoute
   AppSettingsRoute: typeof AppSettingsRoute
   AppIndexRoute: typeof AppIndexRoute
+  AppAgentsNewRoute: typeof AppAgentsNewRoute
+  AppAgentsIndexRoute: typeof AppAgentsIndexRoute
+  AppAgentsAgentIdEditRoute: typeof AppAgentsAgentIdEditRoute
+  AppAgentsAgentIdHistoryRoute: typeof AppAgentsAgentIdHistoryRoute
+  AppAgentsAgentIdMemoryRoute: typeof AppAgentsAgentIdMemoryRoute
+  AppAgentsAgentIdIndexRoute: typeof AppAgentsAgentIdIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
   AppActivityRoute: AppActivityRoute,
-  AppAgentsRoute: AppAgentsRoute,
   AppApprovalsRoute: AppApprovalsRoute,
   AppConnectionsRoute: AppConnectionsRoute,
   AppSettingsRoute: AppSettingsRoute,
   AppIndexRoute: AppIndexRoute,
+  AppAgentsNewRoute: AppAgentsNewRoute,
+  AppAgentsIndexRoute: AppAgentsIndexRoute,
+  AppAgentsAgentIdEditRoute: AppAgentsAgentIdEditRoute,
+  AppAgentsAgentIdHistoryRoute: AppAgentsAgentIdHistoryRoute,
+  AppAgentsAgentIdMemoryRoute: AppAgentsAgentIdMemoryRoute,
+  AppAgentsAgentIdIndexRoute: AppAgentsAgentIdIndexRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

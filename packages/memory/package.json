@@ -1,0 +1,23 @@
+{
+  "name": "@ofa/memory",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Memory stores and recall (full text now; vectors when an embedding model is configured). Server-only.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run --passWithNoTests --exclude \"**/*.integration.test.ts\"",
+    "test:integration": "tsx src/scripts/prepare-test-db.ts && vitest run --passWithNoTests integration"
+  },
+  "dependencies": {
+    "@ofa/core": "workspace:*",
+    "@ofa/db": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "4.23.15"
+  }
+}

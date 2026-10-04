@@ -87,6 +87,12 @@ export const runEvent = pgTable(
     workspaceId: workspaceId(),
     runId: uuid("run_id").notNull(),
     seq: integer("seq").notNull(),
+    /**
+     * Unique within the run, chosen by the writer (e.g. `model-3`). A retried
+     * step writes the same key, so the event is not duplicated; `seq` is
+     * assigned by the database in append order.
+     */
+    key: text("key"),
     /** e.g. `model.called`, `tool.called`, `policy.decided`, `approval.decided`. */
     type: text("type").notNull(),
     payload: jsonb("payload")
@@ -102,6 +108,7 @@ export const runEvent = pgTable(
       foreignColumns: [run.workspaceId, run.id],
     }),
     unique("run_event_run_seq_uq").on(t.runId, t.seq),
+    unique("run_event_run_key_uq").on(t.runId, t.key),
   ],
 );
 

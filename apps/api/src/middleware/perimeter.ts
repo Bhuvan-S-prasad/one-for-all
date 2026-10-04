@@ -17,8 +17,12 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 export function hostCheck(allowedHosts: readonly string[]): MiddlewareHandler<AppEnv> {
   const allowed = new Set(allowedHosts.map((host) => host.toLowerCase()));
   return async (c, next) => {
-    // The Node adapter builds the URL from the Host header.
-    const host = new URL(c.req.url).host.toLowerCase();
+    // Prefer the raw Node request's Host header. WebSocket upgrades are
+    // re-dispatched as a Fetch Request, which drops `Host` (a forbidden
+    // header), so the URL would always say `localhost`.
+    const incoming = (c.env as { incoming?: { headers?: { host?: string } } } | undefined)
+      ?.incoming;
+    const host = (incoming?.headers?.host ?? new URL(c.req.url).host).toLowerCase();
     if (!allowed.has(host)) {
       c.get("logger").warn("rejected host", { host });
       throw new AppError("forbidden", "Unknown host. Open the app at its configured APP_URL.");

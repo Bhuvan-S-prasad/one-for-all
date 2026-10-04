@@ -1,4 +1,4 @@
-import { useSession } from "@ofa/client";
+import { useRealtimeSync, useSession } from "@ofa/client";
 import { createFileRoute, Navigate, Outlet, redirect } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { loadSession, loadSetupStatus } from "@/lib/guards";
@@ -24,10 +24,18 @@ function AppLayout() {
   // Live session from the cache: becomes null after sign-out or expiry.
   const { data: session } = useSession();
   const initial = Route.useRouteContext().session;
+  // Live updates for every signed-in page (runs, messages, agents).
+  useRealtimeSync(session === null ? null : realtimeUrl());
   if (session === null) return <Navigate to="/login" />;
   return (
     <AppShell session={session ?? initial}>
       <Outlet />
     </AppShell>
   );
+}
+
+/** Same origin as the page; Vite proxies it in development. */
+function realtimeUrl(): string {
+  const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+  return `${scheme}://${window.location.host}/api/ws`;
 }

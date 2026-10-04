@@ -53,6 +53,12 @@
   --warning: #9a6700;
   --info: #5b45d6;
 
+  /* Chart series (UX.16): a validated categorical order; values are always printed. */
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
+  --chart-4: #eda100;
+
   --radius: 14px;
 }
 
@@ -91,6 +97,11 @@
   --success: #6fe39a;
   --warning: #ffc93a;
   --info: #b7a6ff;
+
+  --chart-1: #3987e5;
+  --chart-2: #d95926;
+  --chart-3: #199e70;
+  --chart-4: #c98500;
 }
 
 @theme inline {
@@ -125,6 +136,10 @@
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-info: var(--info);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
 
   /* Fields 14px, cards 22px, panels 28px, the setup card 32px; buttons are pills. */
   --radius-sm: calc(var(--radius) - 4px);

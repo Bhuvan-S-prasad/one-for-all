@@ -1,11 +1,22 @@
 import { sql } from "drizzle-orm";
-import { boolean, check, foreignKey, index, pgTable, text, uuid } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  check,
+  customType,
+  foreignKey,
+  index,
+  pgTable,
+  text,
+  uuid,
+} from "drizzle-orm/pg-core";
 import { agent } from "./agents";
 import { user } from "./auth";
 import { createdAt, embedding, id, timestampAt, updatedAt } from "./columns";
 import { memoryKind, memoryScope } from "./enums";
 import { run } from "./runs";
 import { workspaceId } from "./tenancy";
+
+const tsvector = customType<{ data: string }>({ dataType: () => "tsvector" });
 
 /**
  * Semantic memory: facts and preferences (ARCHITECTURE.md §8). Scope decides
@@ -27,6 +38,10 @@ export const memory = pgTable(
     agentId: uuid("agent_id"),
     userId: text("user_id").references(() => user.id, { onDelete: "cascade" }),
     content: text("content").notNull(),
+    /** Full-text index of `content`: recall works with no embedding model at all. */
+    contentSearch: tsvector("content_search").generatedAlwaysAs(
+      sql`to_tsvector('english', content)`,
+    ),
     embedding: embedding("embedding"),
     /** `provider:model` that produced `embedding`; re-embedded when it changes. */
     embeddingModel: text("embedding_model"),
@@ -60,5 +75,6 @@ export const memory = pgTable(
       sql`(${t.embedding} is null) = (${t.embeddingModel} is null)`,
     ),
     index("memory_workspace_scope_agent_idx").on(t.workspaceId, t.scope, t.agentId),
+    index("memory_content_search_idx").using("gin", t.contentSearch),
   ],
 );

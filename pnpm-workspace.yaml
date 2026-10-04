@@ -2,8 +2,12 @@ packages:
   - apps/*
   - packages/*
   - tooling/*
+  - evals
 
 # Dependencies allowed to run install scripts. Everything else is blocked.
 # esbuild: installs its platform binary; used by tsx, drizzle-kit and Vite.
 allowBuilds:
   esbuild: true
+  # protobufjs (via inngest -> OpenTelemetry): its install script only prints a
+  # version notice. Declined explicitly so installs don't stop to ask.
+  protobufjs: false

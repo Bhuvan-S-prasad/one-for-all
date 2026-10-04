@@ -1,11 +1,20 @@
 import { randomUUID } from "node:crypto";
 import type { AgentSpec } from "@ofa/contracts";
-import { asId, type TenantContext, type UserId, type WorkspaceId } from "@ofa/core";
+import {
+  asId,
+  type RunContext,
+  type TenantContext,
+  type UserId,
+  type WorkspaceId,
+} from "@ofa/core";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadRootEnv } from "./env";
 import {
   createDatabase,
+  createRunStore,
+  createThreadStore,
+  createToolCallStore,
   deleteSecret,
   findSecretByName,
   listSecrets,
@@ -218,5 +227,115 @@ describe.skipIf(!appUrl || !ownerUrl)("agent tables (integration)", () => {
     expect(await listSecrets(app.db, ctx)).toHaveLength(1);
     expect(await deleteSecret(app.db, ctx, first.id)).toBe(true);
     expect(await findSecretByName(app.db, ctx, write.name)).toBeNull();
+  });
+
+  describe("runtime stores", () => {
+    const published: unknown[] = [];
+    const publish = async (_ws: string, payload: unknown) => void published.push(payload);
+    const runs = createRunStore(app.db, { publish: publish as never });
+
+    async function runCtx(): Promise<RunContext> {
+      return { ...ctx, agentId: asId(agentId), runId: asId(await newRun()) };
+    }
+
+    it("appends in order, skips repeated keys, and announces each event", async () => {
+      const rc = await runCtx();
+      published.length = 0;
+      await runs.append(rc, rc.runId, [
+        { key: "a", type: "run.started", payload: {} },
+        { key: "b", type: "run.resumed", payload: {} },
+      ]);
+      await runs.append(rc, rc.runId, [
+        { key: "b", type: "run.resumed", payload: {} },
+        { key: "c", type: "run.resumed", payload: {} },
+      ]);
+      const rows = await withTenant(app.db, ctx, (tx) =>
+        tx.select().from(schema.runEvent).where(eq(schema.runEvent.runId, rc.runId)),
+      );
+      expect(rows.map((r) => [r.seq, r.key]).sort()).toEqual([
+        [0, "a"],
+        [1, "b"],
+        [2, "c"],
+      ]);
+      expect(published).toHaveLength(3);
+    });
+
+    const keysOf = async (runId: string) =>
+      (
+        await withTenant(app.db, ctx, (tx) =>
+          tx
+            .select({ key: schema.runEvent.key })
+            .from(schema.runEvent)
+            .where(eq(schema.runEvent.runId, runId))
+            .orderBy(schema.runEvent.seq),
+        )
+      ).map((r) => r.key);
+
+    it("closes the log once the run has ended, except for run.ended", async () => {
+      const rc = await runCtx();
+      await runs.update(rc, rc.runId, { status: "cancelled" });
+      await runs.append(rc, rc.runId, [
+        { key: "late", type: "tool.completed", payload: {} },
+        { key: "learn-model", type: "model.called", payload: {} },
+        { key: "end", type: "run.ended", payload: {} },
+      ]);
+      expect(await keysOf(rc.runId)).toEqual(["end"]);
+    });
+
+    it("lets a succeeded run's learning pass add to its closed log", async () => {
+      const rc = await runCtx();
+      await runs.update(rc, rc.runId, { status: "succeeded" });
+      await runs.append(rc, rc.runId, [
+        { key: "late", type: "tool.completed", payload: {} },
+        { key: "learn-model", type: "model.called", payload: {} },
+      ]);
+      expect(await keysOf(rc.runId)).toEqual(["learn-model"]);
+    });
+
+    it("leaves an ended run's status alone when asked", async () => {
+      const rc = await runCtx();
+      await runs.update(rc, rc.runId, { status: "cancelled" });
+      await runs.update(rc, rc.runId, { status: "succeeded", onlyIfActive: true });
+      await runs.update(rc, rc.runId, { status: "running", onlyIfStatus: "waiting" });
+      expect((await runs.get(rc, rc.runId))?.status).toBe("cancelled");
+    });
+
+    it("posts one reply per run, even when the step is retried", async () => {
+      const rc = await runCtx();
+      const [t] = await withTenant(app.db, ctx, (tx) =>
+        tx
+          .insert(schema.thread)
+          .values({ workspaceId: ctx.workspaceId })
+          .returning({ id: schema.thread.id }),
+      );
+      const threads = createThreadStore(app.db);
+      const first = await threads.addAgentMessage(rc, {
+        threadId: asId(t?.id ?? ""),
+        content: "Hi",
+      });
+      const again = await threads.addAgentMessage(rc, {
+        threadId: asId(t?.id ?? ""),
+        content: "Hi",
+      });
+      expect(again).toBe(first);
+      expect(await threads.recentMessages(ctx, asId(t?.id ?? ""), 10)).toHaveLength(1);
+    });
+
+    it("records a tool call once and returns the stored result after", async () => {
+      const rc = await runCtx();
+      const calls = createToolCallStore(app.db);
+      const input = {
+        idempotencyKey: `${rc.runId}:tool-0-0`,
+        tool: "web.search",
+        args: { q: "x" },
+        verdict: "auto" as const,
+      };
+      expect(await calls.begin(rc, input)).toEqual({ created: true });
+      await calls.complete(rc, input.idempotencyKey, { result: "found", untrusted: true });
+      expect(await calls.begin(rc, input)).toEqual({
+        created: false,
+        existing: { status: "done", result: "found", untrusted: true },
+      });
+    });
   });
 });

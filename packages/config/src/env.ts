@@ -62,6 +62,11 @@ export const envSchema = z
     LLM_MODELS_STANDARD: z.string().optional(),
     LLM_MODELS_STRONG: z.string().optional(),
 
+    /** Self-hosted SearXNG for web.search. Unset: web search reports it is not set up. */
+    SEARXNG_URL: z.url().optional(),
+    /** OTLP/HTTP endpoint for traces (e.g. a local Phoenix). Unset: traces are off (ADR-0019). */
+    OTEL_EXPORTER_OTLP_ENDPOINT: z.url().optional(),
+
     INNGEST_DEV: flag.optional(),
     INNGEST_BASE_URL: z.url().optional(),
     INNGEST_EVENT_KEY: z.string().optional(),

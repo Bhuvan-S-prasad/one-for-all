@@ -15,7 +15,12 @@ describe("loadConfig", () => {
     expect(config.database.migrationUrl).toBe(valid.DATABASE_URL);
     expect(config.inngest.dev).toBe(true);
     expect(config.server.allowedOrigins).toEqual(["http://localhost:3000"]);
-    expect(config.server.allowedHosts).toEqual(["localhost:3000", "127.0.0.1:3000", "[::1]:3000"]);
+    expect(config.server.allowedHosts).toEqual([
+      "localhost:3000",
+      "127.0.0.1:3000",
+      "[::1]:3000",
+      "host.docker.internal:3000",
+    ]);
     expect(config.log.format).toBe("pretty");
     expect(config.llm).toEqual({
       provider: "openrouter",
@@ -40,6 +45,7 @@ describe("loadConfig", () => {
       "localhost:3000",
       "127.0.0.1:3000",
       "[::1]:3000",
+      "host.docker.internal:3000",
       "other.example:8443",
     ]);
   });

@@ -61,6 +61,9 @@ export const runErrorSchema = z.object({
 });
 export type RunError = z.infer<typeof runErrorSchema>;
 
+/** Length of the request and reply previews on a run. */
+export const RUN_PREVIEW_CHARS = 280;
+
 export const runSchema = z.object({
   id: idSchema,
   agentId: idSchema,
@@ -75,6 +78,13 @@ export const runSchema = z.object({
   createdAt: timestampSchema,
   startedAt: timestampSchema.nullable(),
   endedAt: timestampSchema.nullable(),
+  /**
+   * The start of the message that started the run, and of the agent's reply
+   * (UX.10). Sent in run lists and single reads; absent from live updates,
+   * which keep the values already known.
+   */
+  request: z.string().max(RUN_PREVIEW_CHARS).nullable().optional(),
+  reply: z.string().max(RUN_PREVIEW_CHARS).nullable().optional(),
 });
 export type Run = z.infer<typeof runSchema>;
 
@@ -108,7 +118,8 @@ const RUN_EVENT_PAYLOADS = {
     provider: z.string().max(50),
     model: modelName,
     tier: modelTierSchema,
-    promptVersion: z.string().max(50).optional(),
+    // Every template the call used, joined with "+" (e.g. "platform.rules@3+agent.identity@1+…").
+    promptVersion: z.string().max(200).optional(),
     inputTokens: count,
     outputTokens: count,
     costUsd: usd,

@@ -36,6 +36,20 @@
       "when": 1790869281814,
       "tag": "0004_m2_row_level_security",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790931021876,
+      "tag": "0005_run_event_key",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790931867124,
+      "tag": "0006_memory_full_text",
+      "breakpoints": true
     }
   ]
 }

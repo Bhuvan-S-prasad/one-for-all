@@ -32,12 +32,16 @@ services:
       # Must match the address you open in the browser, including the port.
       APP_URL: ${APP_URL:-http://localhost:${APP_PORT:-3000}}
       # Extra host names to accept, comma-separated (e.g. a Tailscale name).
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}
+      # `app:3000` is how the Inngest container reaches the app; its requests
+      # are signed with INNGEST_SIGNING_KEY.
+      ALLOWED_HOSTS: app:3000,${ALLOWED_HOSTS:-}
       DATABASE_URL: postgres://${APP_DB_USER:-oneforall_app}:${APP_DB_PASSWORD:?run infra/scripts/init-env.sh first}@postgres:5432/${POSTGRES_DB:-oneforall}
       DATABASE_MIGRATION_URL: postgres://${POSTGRES_USER:-oneforall}:${POSTGRES_PASSWORD:?run infra/scripts/init-env.sh first}@postgres:5432/${POSTGRES_DB:-oneforall}
       AUTH_SECRET: ${AUTH_SECRET:?run infra/scripts/init-env.sh first}
       VAULT_KEY: ${VAULT_KEY:?run infra/scripts/init-env.sh first}
+      INNGEST_DEV: "0"
       INNGEST_BASE_URL: http://inngest:8288
+      SEARXNG_URL: http://searxng:8080
       INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY:?run infra/scripts/init-env.sh first}
       INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:?run infra/scripts/init-env.sh first}
       # Model provider (ADR-0022). Keys are saved per workspace in Settings.
@@ -75,14 +79,24 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    # The app's Inngest endpoint (`-u http://app:3000/api/inngest`) is added in M2,
-    # when the first durable functions exist.
+    # Inngest calls the app's functions at /api/inngest.
     command: >-
       inngest start
+      -u http://app:3000/api/inngest
       --event-key ${INNGEST_EVENT_KEY:?run infra/scripts/init-env.sh first}
       --signing-key ${INNGEST_SIGNING_KEY:?run infra/scripts/init-env.sh first}
       --postgres-uri postgres://${POSTGRES_USER:-oneforall}:${POSTGRES_PASSWORD:?run infra/scripts/init-env.sh first}@postgres:5432/inngest
     mem_limit: 512m
+
+  # Web search for agents. Internal only: reachable from the app, not the host.
+  searxng:
+    image: searxng/searxng:2026.9.25-12f8b6515
+    restart: unless-stopped
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?run infra/scripts/init-env.sh first}
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    mem_limit: 256m
 
 volumes:
   postgres-data:

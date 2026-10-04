@@ -70,3 +70,26 @@ export const sendMessageResponseSchema = z.object({
   run: runSchema.nullable(),
 });
 export type SendMessageResponse = z.infer<typeof sendMessageResponseSchema>;
+
+// ── Chat history (UX.13) ─────────────────────────────────────────────────────
+
+/** Length of the first-message preview in a chat list. */
+export const THREAD_PREVIEW_CHARS = 160;
+
+/** A chat in an agent's history: the thread plus what it is about. */
+export const threadSummarySchema = threadSchema.extend({
+  /** The start of the first message the person wrote; null for an empty chat. */
+  preview: z.string().max(THREAD_PREVIEW_CHARS).nullable(),
+  messageCount: z.number().int().min(0),
+  lastMessageAt: timestampSchema.nullable(),
+});
+export type ThreadSummary = z.infer<typeof threadSummarySchema>;
+
+/** Rename a chat, or archive it (and bring it back). */
+export const updateThreadRequestSchema = z
+  .object({
+    title: z.string().trim().min(1).max(120).nullable().optional(),
+    archived: z.boolean().optional(),
+  })
+  .refine((v) => v.title !== undefined || v.archived !== undefined, "Nothing to change");
+export type UpdateThreadRequest = z.infer<typeof updateThreadRequestSchema>;

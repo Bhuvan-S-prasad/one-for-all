@@ -1,0 +1,24 @@
+# SearXNG for the web.search tool (ARCHITECTURE.md §9.3). Private to the
+# Compose network (self-host) or 127.0.0.1 (dev); no public instance features.
+# The secret comes from SEARXNG_SECRET in the environment.
+use_default_settings: true
+
+general:
+  instance_name: "One-for-All search"
+  enable_metrics: false
+
+server:
+  limiter: false
+  image_proxy: false
+  public_instance: false
+  method: "GET"
+
+search:
+  safe_search: 1
+  # The tool reads JSON; html stays on for checking results by hand.
+  formats:
+    - html
+    - json
+
+ui:
+  static_use_hash: true
