@@ -17,6 +17,7 @@ export {
   type AgentWithGrants,
   type AgentWrite,
 } from "./repos/agents";
+export { createArtifactStore } from "./repos/artifacts";
 export { recordAudit, type AuditEntry } from "./repos/audit";
 export {
   directThread,

@@ -5,6 +5,7 @@ import { loadConfig } from "@ofa/config";
 import {
   agentSchema,
   agentStatsListSchema,
+  artifactListSchema,
   llmSettingsSchema,
   memoryItemSchema,
   memoryListSchema,
@@ -336,6 +337,40 @@ describe.skipIf(!hasDb)("M2 API (integration)", async () => {
     expect((await send("DELETE", `/api/memories/${kept.id}`)).status).toBe(204);
     expect((await send("DELETE", `/api/memories/${kept.id}`)).status).toBe(404);
     expect((await get("/api/memories?verified=maybe")).status).toBe(422);
+  });
+
+  it("lists a run's artifacts and serves their content only as a download", async () => {
+    const runCtx = { ...tenant(), agentId: asId<AgentId>(agentId), runId: asId<RunId>(retryRunId) };
+    const kept = await container.artifacts.put(runCtx, {
+      key: "k1",
+      kind: "file",
+      name: "report <draft>.html",
+      mimeType: "text/html",
+      content: "<script>alert(1)</script>",
+      untrusted: true,
+    });
+    // The same key from a retried step finds the same artifact.
+    const again = await container.artifacts.put(runCtx, {
+      key: "k1",
+      kind: "file",
+      name: "other",
+      mimeType: "text/plain",
+      content: "x",
+      untrusted: false,
+    });
+    expect(again.id).toBe(kept.id);
+
+    const list = artifactListSchema.parse(await (await get(`/api/runs/${retryRunId}/artifacts`)).json());
+    expect(list.items).toEqual([
+      expect.objectContaining({ id: kept.id, kind: "file", size: 25, untrusted: true }),
+    ]);
+    const content = await get(`/api/artifacts/${kept.id}/content`);
+    expect(content.status).toBe(200);
+    expect(content.headers.get("content-type")).toBe("application/octet-stream");
+    expect(content.headers.get("content-disposition")).toBe('attachment; filename="report _draft_.html"');
+    expect(content.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(await content.text()).toBe("<script>alert(1)</script>");
+    expect((await get("/api/artifacts/00000000-0000-4000-8000-000000000000")).status).toBe(404);
   });
 
   it("counts today's model requests against the daily quota, and runs per agent", async () => {

@@ -12,6 +12,12 @@ import {
 // risk annotations and taint escalation. Workspace and personal rules, the
 // always-human list and approvals arrive in M4.
 
+/**
+ * Tools of the platform itself, available to every agent without a grant:
+ * reopening its own saved output (M3.06). A grant can still block one.
+ */
+export const PLATFORM_TOOLS: ReadonlySet<string> = new Set(["artifacts.read"]);
+
 /** The grant that covers a tool: an exact name beats an app wildcard (`hubspot.*`). */
 export function grantFor(
   grants: readonly AgentGrantRule[],
@@ -31,7 +37,10 @@ export function createPolicyEngine(options: PolicyEngineOptions): PolicyEngine {
   return {
     async evaluate({ ctx, tool, tainted }): Promise<PolicyDecision> {
       const agent = await options.agents.get(ctx, ctx.agentId);
-      const grant = agent ? grantFor(agent.grants, tool.name) : undefined;
+      const grant = agent
+        ? (grantFor(agent.grants, tool.name) ??
+          (PLATFORM_TOOLS.has(tool.name) ? { tool: tool.name, mode: "auto" as const } : undefined))
+        : undefined;
 
       // 1. Not granted, or blocked by the user: nothing else matters.
       if (!grant)

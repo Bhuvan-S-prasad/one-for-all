@@ -158,6 +158,8 @@ export type ToolOutcome =
       readonly content: string;
       /** The content came from outside the system; the run becomes tainted. */
       readonly untrusted: boolean;
+      /** Long output kept as an artifact (the content says how to reopen it), or a file kept for people. */
+      readonly artifactId?: string;
       readonly verdict: Verdict;
       readonly reasons: readonly string[];
       readonly durationMs: number;

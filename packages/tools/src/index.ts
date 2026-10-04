@@ -13,6 +13,7 @@ export {
 } from "./define";
 export { createToolExecutor, type ToolExecutorOptions } from "./executor";
 export { builtinTools, type BuiltinToolDeps } from "./builtins/index";
+export { artifactsReadTool } from "./builtins/artifacts";
 export { browserTools, fileTools, pageText, shellTool } from "./builtins/computer";
 export { htmlTitle, htmlToText } from "./builtins/html";
 export { recallTool, rememberTool, todoTool } from "./builtins/memory";

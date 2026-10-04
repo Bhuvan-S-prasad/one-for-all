@@ -5,6 +5,7 @@
 import type { Config } from "@ofa/config";
 import type {
   AgentDirectory,
+  ArtifactStore,
   CredentialVault,
   EventBus,
   LLMGateway,
@@ -16,6 +17,7 @@ import type {
 } from "@ofa/core";
 import {
   createAgentDirectory,
+  createArtifactStore,
   createDatabase,
   createRunStore,
   createThreadStore,
@@ -88,6 +90,7 @@ export interface Container {
   readonly memory: MemoryStore;
   /** The agents' computer (M3); null when this server has none. */
   readonly sandbox: SandboxProvider | null;
+  readonly artifacts: ArtifactStore;
   readonly dispatcher: RunDispatcher;
   readonly inngest: Inngest;
   readonly functions: ReturnType<typeof createFunctions>;
@@ -160,6 +163,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
   const memory = createPgMemoryStore(db);
   // The agents' computer: the Docker sandbox in self-host (ADR-0025).
   const sandbox = config.sandbox ? createDockerSandbox(config.sandbox) : null;
+  const artifacts = createArtifactStore(db);
 
   const tools = createToolExecutor({
     registry: createToolRegistry(
@@ -175,6 +179,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     calls: createToolCallStore(db),
     agents,
     redact: (ctx, text) => vault.redact(ctx, text),
+    artifacts,
     telemetry,
   });
 
@@ -210,6 +215,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     threads,
     memory,
     sandbox,
+    artifacts,
     dispatcher: overrides.dispatcher ?? createRunDispatcher(inngest),
     inngest,
     functions,

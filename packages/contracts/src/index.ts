@@ -1,4 +1,5 @@
 export * from "./agents";
+export * from "./artifacts";
 export * from "./auth";
 export * from "./blocks";
 export * from "./common";

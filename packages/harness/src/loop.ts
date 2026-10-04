@@ -484,6 +484,7 @@ export async function runAgent(
           tool: call.name,
           durationMs: outcome.durationMs,
           untrusted: outcome.untrusted,
+          ...(outcome.artifactId ? { artifactId: outcome.artifactId } : {}),
           preview: preview(outcome.content, 500),
         }),
       );

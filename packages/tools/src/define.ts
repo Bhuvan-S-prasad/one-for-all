@@ -1,4 +1,6 @@
 import type {
+  ArtifactInput,
+  ArtifactRecord,
   JsonSchema,
   MemoryScope,
   RunContext,
@@ -20,6 +22,12 @@ export interface ToolRunContext extends RunContext {
   /** The run has read untrusted content; memory written now is unverified. */
   readonly tainted: boolean;
   readonly memoryScopes: readonly MemoryScope[];
+  /** This run's artifacts (M3.06); absent when the server keeps none. Reads see only this agent's. */
+  readonly artifacts?: {
+    put(input: ArtifactInput): Promise<ArtifactRecord>;
+    get(id: string): Promise<ArtifactRecord | null>;
+    read(id: string): Promise<Uint8Array | null>;
+  };
 }
 
 export interface ToolRunResult {
@@ -27,6 +35,8 @@ export interface ToolRunResult {
   readonly content: string | Record<string, unknown> | unknown[];
   /** True when the content came from outside the system (web pages, email, API data). */
   readonly untrusted: boolean;
+  /** An artifact the tool kept (e.g. a copy of a file it wrote), shown to people with the result. */
+  readonly artifactId?: string;
 }
 
 export interface ToolDefinition<Input = unknown> {

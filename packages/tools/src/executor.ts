@@ -1,6 +1,8 @@
 import {
+  artifactUri,
   noopTelemetry,
   type AgentDirectory,
+  type ArtifactStore,
   type PolicyEngine,
   type RunContext,
   type Telemetry,
@@ -8,7 +10,7 @@ import {
   type ToolExecutor,
   type ToolOutcome,
 } from "@ofa/core";
-import { grantFor } from "@ofa/policy";
+import { grantFor, PLATFORM_TOOLS } from "@ofa/policy";
 import type { ToolRegistry, ToolRunContext, ToolRunResult } from "./define";
 
 // The tool executor (ARCHITECTURE.md §9.1, "Execution"): the one place a tool
@@ -23,8 +25,12 @@ export interface ToolExecutorOptions {
   /** Replace known secret values in output (vault redaction). */
   readonly redact?: (ctx: RunContext, text: string) => Promise<string>;
   readonly telemetry?: Telemetry;
-  /** Longest output the model sees. Default 12,000 characters. */
+  /**
+   * Longest output the model sees. Default 12,000 characters. Longer output
+   * is kept as an artifact the agent can reopen, when `artifacts` is set.
+   */
   readonly maxResultChars?: number;
+  readonly artifacts?: ArtifactStore;
   readonly timeoutMs?: number;
   readonly now?: () => number;
 }
@@ -57,6 +63,7 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
   const timeoutMs = options.timeoutMs ?? 60_000;
   const now = options.now ?? Date.now;
   const redact = options.redact ?? (async (_ctx: RunContext, text: string) => text);
+  const store = options.artifacts;
 
   return {
     async listTools(ctx) {
@@ -65,7 +72,8 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
       if (!agent) return [];
       return registry.descriptors().filter((d) => {
         const grant = grantFor(agent.grants, d.name);
-        return grant !== undefined && grant.mode !== "blocked";
+        if (grant) return grant.mode !== "blocked";
+        return PLATFORM_TOOLS.has(d.name);
       });
     },
 
@@ -127,6 +135,22 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
           idempotencyKey: request.idempotencyKey,
           tainted: request.tainted,
           memoryScopes: agent?.memoryScopes ?? [],
+          ...(store
+            ? {
+                artifacts: {
+                  put: (input) => store.put(ctx, input),
+                  // An agent reopens only its own artifacts.
+                  get: async (id) => {
+                    const found = await store.get(ctx, id);
+                    return found && found.agentId === ctx.agentId ? found : null;
+                  },
+                  read: async (id) => {
+                    const found = await store.get(ctx, id);
+                    return found && found.agentId === ctx.agentId ? store.read(ctx, id) : null;
+                  },
+                },
+              }
+            : {}),
         };
         const idempotent = !!(tool.annotations.readOnly || tool.annotations.idempotent);
         const begun = await calls.begin(ctx, {
@@ -181,7 +205,23 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
           };
         }
 
-        const content = limit(await redact(ctx, asText(result.content)), maxChars);
+        const full = await redact(ctx, asText(result.content));
+        let content = limit(full, maxChars);
+        let artifactId = result.artifactId;
+        if (full.length > maxChars && store) {
+          // Too long for the context: keep it whole, show the start and the handle (§7).
+          const saved = await store.put(ctx, {
+            key: `${request.idempotencyKey}:output`,
+            kind: "output",
+            name: `${request.name} output`,
+            mimeType: "text/plain; charset=utf-8",
+            content: full,
+            untrusted: result.untrusted,
+          });
+          artifactId ??= saved.id;
+          const head = Math.max(0, maxChars - 300);
+          content = `${full.slice(0, head)}\n…[the full output, ${full.length.toLocaleString("en")} characters, is saved as ${artifactUri(saved.id)}; read on with artifacts.read and from: ${head}]`;
+        }
         await calls.complete(ctx, request.idempotencyKey, {
           result: content,
           untrusted: result.untrusted,
@@ -190,6 +230,7 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
           status: "ok",
           content,
           untrusted: result.untrusted,
+          ...(artifactId ? { artifactId } : {}),
           verdict: decision.verdict,
           reasons: decision.reasons,
           durationMs: now() - started,

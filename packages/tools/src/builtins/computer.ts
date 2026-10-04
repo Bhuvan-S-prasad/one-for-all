@@ -31,6 +31,29 @@ const KEYS = [
   "End",
 ] as const;
 
+const MIME: Record<string, string> = {
+  md: "text/markdown",
+  txt: "text/plain",
+  csv: "text/csv",
+  tsv: "text/tab-separated-values",
+  json: "application/json",
+  html: "text/html",
+  htm: "text/html",
+  xml: "application/xml",
+  yaml: "application/yaml",
+  yml: "application/yaml",
+  py: "text/x-python",
+  js: "text/javascript",
+  sh: "text/x-shellscript",
+  svg: "image/svg+xml",
+};
+
+/** A file's type from its name; plain text when unknown (everything written here is text). */
+export function mimeFor(path: string): string {
+  const ext = path.toLowerCase().split(".").pop() ?? "";
+  return MIME[ext] ?? "text/plain";
+}
+
 /** Output kept from a command, per stream. */
 const SHELL_OUTPUT_CHARS = 8_000;
 
@@ -227,9 +250,19 @@ export function fileTools(sandbox: SandboxProvider | null) {
       annotations: { idempotent: true },
       async run({ path, content }, ctx) {
         await (await computer(sandbox, ctx)).writeFile(ctx.agentId, path, content);
+        // A copy for the person, shown as a file card with the reply (M3.06).
+        const kept = await ctx.artifacts?.put({
+          key: `${ctx.idempotencyKey}:file`,
+          kind: "file",
+          name: path.split("/").pop() || path,
+          mimeType: mimeFor(path),
+          content,
+          untrusted: ctx.tainted,
+        });
         return {
           content: `Wrote ${path} (${new TextEncoder().encode(content).length.toLocaleString("en")} bytes).`,
           untrusted: false,
+          ...(kept ? { artifactId: kept.id } : {}),
         };
       },
     }),

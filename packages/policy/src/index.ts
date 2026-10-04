@@ -1,1 +1,1 @@
-export { createPolicyEngine, grantFor, type PolicyEngineOptions } from "./engine";
+export { createPolicyEngine, grantFor, PLATFORM_TOOLS, type PolicyEngineOptions } from "./engine";
