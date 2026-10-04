@@ -1,5 +1,5 @@
 import type { TenantContext } from "@ofa/core";
-import { and, asc, desc, eq, exists, gt, ilike, inArray, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, exists, gt, gte, ilike, inArray, lt, or, sql } from "drizzle-orm";
 import type { Database } from "../client";
 import { message, run, runEvent } from "../schema/index";
 import { withTenant } from "../tenant";
@@ -18,7 +18,7 @@ export async function getRun(db: Database, ctx: TenantContext, id: string) {
 type RunStatusValue = (typeof run.$inferSelect)["status"];
 
 /** `%`, `_` and `\` match literally in a search. */
-function likePattern(text: string): string {
+export function likePattern(text: string): string {
   return `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 }
 
@@ -151,3 +151,54 @@ export async function getRunEvent(db: Database, ctx: TenantContext, runId: strin
   );
   return row ?? null;
 }
+
+/** Model calls logged since a time, per model (UX.11: the day's free quota). */
+export async function modelCallsSince(
+  db: Database,
+  ctx: TenantContext,
+  since: Date,
+): Promise<{ model: string; calls: number }[]> {
+  const rows = await withTenant(db, ctx, (tx) =>
+    tx
+      .select({
+        model: sql<string>`${runEvent.payload}->>'model'`,
+        calls: sql<number>`count(*)::int`,
+      })
+      .from(runEvent)
+      .where(and(eq(runEvent.type, "model.called"), gte(runEvent.createdAt, since)))
+      .groupBy(sql`${runEvent.payload}->>'model'`),
+  );
+  return rows.map((r) => ({ model: r.model ?? "", calls: Number(r.calls) }));
+}
+
+/**
+ * Per agent (UX.12): runs started since a time, and the latest run that
+ * finished well.
+ */
+export async function agentRunStats(
+  db: Database,
+  ctx: TenantContext,
+  since: Date,
+): Promise<{ agentId: string; runsSince: number; lastSucceeded: RunRow | null }[]> {
+  return withTenant(db, ctx, async (tx) => {
+    const counts = await tx
+      .select({ agentId: run.agentId, runs: sql<number>`count(*)::int` })
+      .from(run)
+      .where(gte(run.createdAt, since))
+      .groupBy(run.agentId);
+    const latest = await tx
+      .selectDistinctOn([run.agentId])
+      .from(run)
+      .where(eq(run.status, "succeeded"))
+      .orderBy(run.agentId, desc(run.createdAt));
+    const stats = new Map<string, { runsSince: number; lastSucceeded: RunRow | null }>();
+    for (const c of counts) stats.set(c.agentId, { runsSince: Number(c.runs), lastSucceeded: null });
+    for (const row of latest) {
+      const entry = stats.get(row.agentId) ?? { runsSince: 0, lastSucceeded: null };
+      stats.set(row.agentId, { ...entry, lastSucceeded: row });
+    }
+    return [...stats].map(([agentId, s]) => ({ agentId, ...s }));
+  });
+}
+
+type RunRow = typeof run.$inferSelect;

@@ -140,3 +140,85 @@ export async function searchMemories(
     return rows.map(toRecord);
   });
 }
+
+// ── Review (UX.14) ───────────────────────────────────────────────────────────
+// People see and manage what their agents learned. A person sees workspace
+// facts, every agent's own facts, and the private notes agents keep about
+// them, never the notes kept about someone else.
+
+export interface MemoryReviewRow {
+  readonly id: string;
+  readonly scope: MemoryScope;
+  readonly kind: MemoryKind;
+  readonly agentId: string | null;
+  readonly content: string;
+  readonly verified: boolean;
+  readonly sourceRunId: string | null;
+  readonly createdAt: Date;
+}
+
+const reviewColumns = {
+  ...columns,
+  agentId: memory.agentId,
+  sourceRunId: memory.sourceRunId,
+};
+
+function visibleToPerson(ctx: TenantContext): SQL {
+  return or(
+    sql`${memory.scope} <> 'agent_user'`,
+    eq(memory.userId, ctx.userId),
+  )!;
+}
+
+/** Facts for review: one agent's (with the shared ones), one run's, or only unverified. */
+export async function listMemoriesForReview(
+  db: Database,
+  ctx: TenantContext,
+  options: { agentId?: string; runId?: string; verified?: boolean; limit: number },
+): Promise<MemoryReviewRow[]> {
+  return withTenant(db, ctx, (tx) =>
+    tx
+      .select(reviewColumns)
+      .from(memory)
+      .where(
+        and(
+          visibleToPerson(ctx),
+          options.agentId
+            ? or(eq(memory.agentId, options.agentId), eq(memory.scope, "workspace"))
+            : undefined,
+          options.runId ? eq(memory.sourceRunId, options.runId) : undefined,
+          options.verified !== undefined ? eq(memory.verified, options.verified) : undefined,
+          or(isNull(memory.expiresAt), gt(memory.expiresAt, sql`now()`)),
+        ),
+      )
+      .orderBy(desc(memory.createdAt))
+      .limit(options.limit),
+  );
+}
+
+/** Mark a fact as checked by a person, so agents may use it. */
+export async function confirmMemory(
+  db: Database,
+  ctx: TenantContext,
+  id: string,
+): Promise<MemoryReviewRow | null> {
+  const [row] = await withTenant(db, ctx, (tx) =>
+    tx
+      .update(memory)
+      .set({ verified: true, updatedAt: new Date() })
+      .where(and(eq(memory.id, id), visibleToPerson(ctx)))
+      .returning(reviewColumns),
+  );
+  return row ?? null;
+}
+
+/** Delete a fact. True when it existed. */
+export async function forgetMemory(db: Database, ctx: TenantContext, id: string): Promise<boolean> {
+  const rows = await withTenant(db, ctx, (tx) =>
+    tx
+      .delete(memory)
+      .where(and(eq(memory.id, id), visibleToPerson(ctx)))
+      .returning({ id: memory.id }),
+  );
+  return rows.length > 0;
+}

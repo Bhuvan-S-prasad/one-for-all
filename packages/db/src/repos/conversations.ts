@@ -1,8 +1,9 @@
 import { type TenantContext } from "@ofa/core";
-import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, or, sql, type SQL } from "drizzle-orm";
 import type { Database } from "../client";
 import { message, run, thread, threadMember } from "../schema/index";
 import { withTenant, type Tx } from "../tenant";
+import { likePattern } from "./runs";
 
 // Threads, messages and the run a message starts (M2.19).
 
@@ -47,9 +48,45 @@ export async function getThread(
   });
 }
 
+/** Direct threads between this person and one agent, not archived. */
+function directWith(ctx: TenantContext, agentId: string): SQL {
+  return and(
+    eq(thread.kind, "direct"),
+    isNull(thread.archivedAt),
+    sql`exists (select 1 from ${threadMember} m where m.thread_id = ${thread.id} and m.agent_id = ${agentId})`,
+    sql`exists (select 1 from ${threadMember} m where m.thread_id = ${thread.id} and m.user_id = ${ctx.userId})`,
+  )!;
+}
+
+async function insertDirectThread(tx: Tx, ctx: TenantContext, agentId: string): Promise<string> {
+  const [created] = await tx
+    .insert(thread)
+    .values({ workspaceId: ctx.workspaceId, kind: "direct", createdBy: ctx.userId })
+    .returning({ id: thread.id });
+  if (!created) throw new Error("thread insert returned no row");
+  await tx.insert(threadMember).values([
+    { workspaceId: ctx.workspaceId, threadId: created.id, memberType: "user", userId: ctx.userId },
+    { workspaceId: ctx.workspaceId, threadId: created.id, memberType: "agent", agentId },
+  ]);
+  return created.id;
+}
+
+/** Serialise thread creation for this person and agent, so two tabs make one thread. */
+async function lockDirect(tx: Tx, ctx: TenantContext, agentId: string): Promise<void> {
+  await tx.execute(
+    sql`select pg_advisory_xact_lock(hashtext(${`direct:${ctx.userId}:${agentId}`}))`,
+  );
+}
+
+async function withMembers(tx: Tx, id: string): Promise<ThreadWithMembers> {
+  const [row] = await tx.select().from(thread).where(eq(thread.id, id)).limit(1);
+  if (!row) throw new Error("thread vanished");
+  return { ...row, members: (await membersOf(tx, [id])).get(id) ?? [] };
+}
+
 /**
- * The person's direct thread with an agent, created on first use. Chat with
- * one agent always continues in the same thread.
+ * The person's current direct thread with an agent (the one used most
+ * recently), created on first use. "New chat" starts another (UX.13).
  */
 export async function directThread(
   db: Database,
@@ -57,40 +94,141 @@ export async function directThread(
   agentId: string,
 ): Promise<ThreadWithMembers> {
   return withTenant(db, ctx, async (tx) => {
-    // Serialise creation for this person and agent, so two tabs make one thread.
-    await tx.execute(
-      sql`select pg_advisory_xact_lock(hashtext(${`direct:${ctx.userId}:${agentId}`}))`,
-    );
+    await lockDirect(tx, ctx, agentId);
     const [existing] = await tx
       .select({ id: thread.id })
       .from(thread)
-      .innerJoin(threadMember, eq(threadMember.threadId, thread.id))
+      .where(directWith(ctx, agentId))
+      .orderBy(desc(thread.updatedAt), desc(thread.createdAt))
+      .limit(1);
+    return withMembers(tx, existing?.id ?? (await insertDirectThread(tx, ctx, agentId)));
+  });
+}
+
+/**
+ * A fresh direct thread with an agent (UX.13). When the current one has no
+ * messages yet it is reused, so pressing New chat twice makes one empty chat.
+ */
+export async function newDirectThread(
+  db: Database,
+  ctx: TenantContext,
+  agentId: string,
+): Promise<ThreadWithMembers> {
+  return withTenant(db, ctx, async (tx) => {
+    await lockDirect(tx, ctx, agentId);
+    const [empty] = await tx
+      .select({ id: thread.id })
+      .from(thread)
       .where(
         and(
-          eq(thread.kind, "direct"),
-          isNull(thread.archivedAt),
-          eq(threadMember.agentId, agentId),
-          sql`exists (select 1 from ${threadMember} m where m.thread_id = ${thread.id} and m.user_id = ${ctx.userId})`,
+          directWith(ctx, agentId),
+          sql`not exists (select 1 from ${message} where ${message.threadId} = ${thread.id})`,
         ),
       )
-      .orderBy(asc(thread.createdAt))
+      .orderBy(desc(thread.updatedAt))
       .limit(1);
-    let id = existing?.id;
-    if (!id) {
-      const [created] = await tx
-        .insert(thread)
-        .values({ workspaceId: ctx.workspaceId, kind: "direct", createdBy: ctx.userId })
-        .returning({ id: thread.id });
-      if (!created) throw new Error("thread insert returned no row");
-      id = created.id;
-      await tx.insert(threadMember).values([
-        { workspaceId: ctx.workspaceId, threadId: id, memberType: "user", userId: ctx.userId },
-        { workspaceId: ctx.workspaceId, threadId: id, memberType: "agent", agentId },
-      ]);
+    if (empty) {
+      // Bring it to the top, so it is the current chat.
+      await tx.update(thread).set({ updatedAt: new Date() }).where(eq(thread.id, empty.id));
+      return withMembers(tx, empty.id);
     }
-    const [row] = await tx.select().from(thread).where(eq(thread.id, id)).limit(1);
-    if (!row) throw new Error("thread vanished");
-    return { ...row, members: (await membersOf(tx, [id])).get(id) ?? [] };
+    return withMembers(tx, await insertDirectThread(tx, ctx, agentId));
+  });
+}
+
+export interface ThreadSummaryRow extends ThreadWithMembers {
+  /** The start of the first message the person wrote. */
+  readonly preview: string | null;
+  readonly messageCount: number;
+  readonly lastMessageAt: Date | null;
+}
+
+/**
+ * A person's chats with one agent, most recent first (UX.13). `search`
+ * matches any message in the chat; `%` and `_` match literally.
+ */
+export async function listDirectThreads(
+  db: Database,
+  ctx: TenantContext,
+  agentId: string,
+  options: { limit: number; before?: string; search?: string; previewChars: number },
+): Promise<{ items: ThreadSummaryRow[]; nextCursor: string | null }> {
+  return withTenant(db, ctx, async (tx) => {
+    let pivot: { updatedAt: Date; id: string } | undefined;
+    if (options.before) {
+      [pivot] = await tx
+        .select({ updatedAt: thread.updatedAt, id: thread.id })
+        .from(thread)
+        .where(eq(thread.id, options.before))
+        .limit(1);
+    }
+    const rows = await tx
+      .select({
+        thread,
+        preview: sql<string | null>`(select left(${message.content}, ${options.previewChars}) from ${message}
+          where ${message.threadId} = ${thread.id} and ${message.authorType} = 'user'
+          order by ${message.createdAt} asc limit 1)`,
+        messageCount: sql<number>`(select count(*)::int from ${message} where ${message.threadId} = ${thread.id})`,
+        lastMessageAt: sql<string | null>`(select max(${message.createdAt}) from ${message} where ${message.threadId} = ${thread.id})`,
+      })
+      .from(thread)
+      .where(
+        and(
+          directWith(ctx, agentId),
+          options.search
+            ? sql`exists (select 1 from ${message} where ${message.threadId} = ${thread.id}
+                and ${message.content} ilike ${likePattern(options.search)})`
+            : undefined,
+          pivot
+            ? or(
+                lt(thread.updatedAt, pivot.updatedAt),
+                and(eq(thread.updatedAt, pivot.updatedAt), lt(thread.id, pivot.id)),
+              )
+            : undefined,
+        ),
+      )
+      .orderBy(desc(thread.updatedAt), desc(thread.id))
+      .limit(options.limit + 1);
+    const more = rows.length > options.limit;
+    const page = rows.slice(0, options.limit);
+    const members = await membersOf(
+      tx,
+      page.map((r) => r.thread.id),
+    );
+    return {
+      items: page.map((r) => ({
+        ...r.thread,
+        members: members.get(r.thread.id) ?? [],
+        preview: r.preview,
+        messageCount: Number(r.messageCount),
+        lastMessageAt: r.lastMessageAt ? new Date(r.lastMessageAt) : null,
+      })),
+      nextCursor: more ? (page.at(-1)?.thread.id ?? null) : null,
+    };
+  });
+}
+
+/** Rename a thread or archive it (and bring it back). */
+export async function updateThread(
+  db: Database,
+  ctx: TenantContext,
+  id: string,
+  patch: { title?: string | null; archived?: boolean },
+): Promise<ThreadWithMembers | null> {
+  return withTenant(db, ctx, async (tx) => {
+    const set: Partial<typeof thread.$inferInsert> = {};
+    if (patch.title !== undefined) set.title = patch.title;
+    if (patch.archived !== undefined) set.archivedAt = patch.archived ? new Date() : null;
+    if (Object.keys(set).length > 0) {
+      const [row] = await tx
+        .update(thread)
+        .set(set)
+        .where(eq(thread.id, id))
+        .returning({ id: thread.id });
+      if (!row) return null;
+    }
+    const [row] = await tx.select({ id: thread.id }).from(thread).where(eq(thread.id, id));
+    return row ? withMembers(tx, row.id) : null;
   });
 }
 
@@ -171,6 +309,23 @@ export async function startTurn(
     await tx.update(thread).set({ updatedAt: new Date() }).where(eq(thread.id, input.threadId));
     return { message: messageRow, run: runRow };
   });
+}
+
+/** The person's message that started a run, if a message started it. */
+export async function runRequestMessage(
+  db: Database,
+  ctx: TenantContext,
+  runId: string,
+): Promise<MessageRow | null> {
+  const [row] = await withTenant(db, ctx, (tx) =>
+    tx
+      .select()
+      .from(message)
+      .where(and(eq(message.runId, runId), eq(message.authorType, "user")))
+      .orderBy(asc(message.createdAt))
+      .limit(1),
+  );
+  return row ?? null;
 }
 
 export async function getMessage(

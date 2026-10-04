@@ -3,12 +3,22 @@ import {
   runEventSchema,
   type Agent,
   type AgentSpec,
+  type MemoryItem,
   type Message,
   type Run,
   type RunEvent,
   type Thread,
+  type ThreadSummary,
 } from "@ofa/contracts";
-import type { AgentWithGrants, MessageRow, RunEventRow, RunRow, ThreadWithMembers } from "@ofa/db";
+import type {
+  AgentWithGrants,
+  MemoryReviewRow,
+  MessageRow,
+  RunEventRow,
+  RunRow,
+  ThreadSummaryRow,
+  ThreadWithMembers,
+} from "@ofa/db";
 
 // Database rows → API shapes from `@ofa/contracts`. The client validates
 // every response against the same schemas (ADR-0021).
@@ -97,4 +107,26 @@ export function toRunEvent(row: RunEventRow): RunEvent | null {
     payload: row.payload,
   });
   return parsed.success ? parsed.data : null;
+}
+
+export function toThreadSummary(row: ThreadSummaryRow): ThreadSummary {
+  return {
+    ...toThread(row),
+    preview: row.preview,
+    messageCount: row.messageCount,
+    lastMessageAt: row.lastMessageAt?.toISOString() ?? null,
+  };
+}
+
+export function toMemoryItem(row: MemoryReviewRow): MemoryItem {
+  return {
+    id: row.id,
+    scope: row.scope,
+    kind: row.kind,
+    agentId: row.agentId,
+    content: row.content,
+    verified: row.verified,
+    sourceRunId: row.sourceRunId,
+    createdAt: row.createdAt.toISOString(),
+  };
 }

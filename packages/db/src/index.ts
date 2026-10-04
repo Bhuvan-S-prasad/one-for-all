@@ -22,23 +22,39 @@ export {
   directThread,
   getMessage,
   getThread,
+  listDirectThreads,
   listMessages,
+  newDirectThread,
+  runRequestMessage,
   startTurn,
+  updateThread,
   type MessageRow,
   type RunRow,
   type ThreadMemberRow,
   type ThreadRow,
+  type ThreadSummaryRow,
   type ThreadWithMembers,
 } from "./repos/conversations";
 export {
+  agentRunStats,
   getRun,
   getRunEvent,
   listRunEvents,
   listRuns,
+  modelCallsSince,
   runPreviews,
   type RunEventRow,
 } from "./repos/runs";
-export { insertMemory, searchMemories, type MemoryInsert, type MemorySearch } from "./repos/memory";
+export {
+  confirmMemory,
+  forgetMemory,
+  insertMemory,
+  listMemoriesForReview,
+  searchMemories,
+  type MemoryInsert,
+  type MemoryReviewRow,
+  type MemorySearch,
+} from "./repos/memory";
 export {
   deleteSecret,
   findSecretById,
