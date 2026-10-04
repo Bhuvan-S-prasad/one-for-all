@@ -49,10 +49,7 @@ export const approval = pgTable(
       foreignColumns: [agent.workspaceId, agent.id],
     }).onDelete("cascade"),
     unique("approval_run_call_uq").on(t.runId, t.toolCallId),
-    check(
-      "approval_status_ck",
-      sql`${t.status} in ('pending', 'approved', 'rejected', 'expired')`,
-    ),
+    check("approval_status_ck", sql`${t.status} in ('pending', 'approved', 'rejected', 'expired')`),
     index("approval_workspace_status_idx").on(t.workspaceId, t.status, t.createdAt),
   ],
 );

@@ -127,7 +127,8 @@ describe("computer tools", () => {
   it("say in plain words what a held call would do, for the approval card", async () => {
     const { provider, calls } = fakeSandbox();
     const tools = browserTools(provider);
-    const describe = (name: string, args: unknown) => byName(tools, name).describe!(args as never, ctx);
+    const describe = (name: string, args: unknown) =>
+      byName(tools, name).describe!(args as never, ctx);
     expect(await describe("browser.click", { ref: 9 })).toBe(
       "Click the button “Pay now” on a.example",
     );

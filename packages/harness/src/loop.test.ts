@@ -321,7 +321,13 @@ describe("approvals", () => {
       usage: { inputTokens: 0, outputTokens: 0, costUsd: 0, modelCalls: 0, toolCalls: 0 },
     });
     runtime.threads.messages.set(threadId, [
-      { id: asId("m1"), author: "user", agentId: null, content: "Submit it", createdAt: new Date() },
+      {
+        id: asId("m1"),
+        author: "user",
+        agentId: null,
+        content: "Submit it",
+        createdAt: new Date(),
+      },
     ]);
     const llm = createScriptedLLM([
       { toolCalls: [{ name: "browser.click", args: { ref: 9 } }] },
@@ -401,9 +407,10 @@ describe("approvals", () => {
       "message.created",
       "run.ended",
     ]);
-    expect(runtime.runs.events.find((e) => e.type === "approval.decided")?.payload).toMatchObject(
-      { decision: "approved", decidedBy: "usr_1" },
-    );
+    expect(runtime.runs.events.find((e) => e.type === "approval.decided")?.payload).toMatchObject({
+      decision: "approved",
+      decidedBy: "usr_1",
+    });
   });
 
   it("tells the model when the person said no, and runs nothing", async () => {
