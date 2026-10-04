@@ -38,6 +38,10 @@ export function applyRealtime(queryClient: QueryClient, message: RealtimeMessage
           (a, b) => a.seq - b.seq,
         ),
       );
+      // A file or long output was kept (M3.06).
+      if (event.type === "tool.completed" && event.payload.artifactId) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.runArtifacts(event.runId) });
+      }
       // Something was learned: the review lists change (UX.14).
       if (event.type === "memory.written") {
         void queryClient.invalidateQueries({ queryKey: queryKeys.memoryLists });

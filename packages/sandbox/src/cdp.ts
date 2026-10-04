@@ -24,6 +24,8 @@ export interface CdpConnection {
       match?: (params: Record<string, unknown>) => boolean;
     },
   ): Promise<Record<string, unknown> | null>;
+  /** Called once when the connection closes, from either side. */
+  onClose(handler: () => void): void;
   close(): void;
 }
 
@@ -84,7 +86,9 @@ export async function connectCdp(
       }
     }
   });
+  const closeHandlers = new Set<() => void>();
   socket.addEventListener("close", () => {
+    for (const handler of closeHandlers) handler();
     for (const waiting of pending.values()) {
       clearTimeout(waiting.timer);
       waiting.reject(new SandboxError("unavailable", "The browser closed the connection"));
@@ -131,6 +135,9 @@ export async function connectCdp(
           resolve(params);
         });
       });
+    },
+    onClose(handler) {
+      closeHandlers.add(handler);
     },
     close() {
       socket.close();

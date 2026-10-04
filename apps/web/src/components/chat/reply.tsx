@@ -1,4 +1,4 @@
-import { useRun } from "@ofa/client";
+import { useRun, useRunArtifacts } from "@ofa/client";
 import type { Agent, Message, Run, RunEvent } from "@ofa/contracts";
 import { Link } from "@tanstack/react-router";
 import {
@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
+import { FileCard } from "@/components/chat/file-card";
 import { Familiar } from "@/components/familiar";
 import { headingId, Markdown } from "@/components/markdown";
 import { duration, shortTime } from "@/lib/format";
@@ -390,6 +391,12 @@ export function Reply({
   const blocks = useMemo(() => parseMarkdown(message.content), [message.content]);
   const sources = useMemo(() => runSources(events.data ?? []), [events.data]);
   const doc = isDocument(message.content, blocks);
+  // Files the agent wrote in this run (M3.06), fetched only when there are some.
+  const wroteFiles = (events.data ?? []).some(
+    (e) => e.type === "tool.completed" && e.payload.tool === "files.write" && e.payload.artifactId,
+  );
+  const { data: artifacts } = useRunArtifacts(message.runId ?? undefined, { enabled: wroteFiles });
+  const files = (artifacts ?? []).filter((a) => a.kind === "file");
 
   return (
     <article
@@ -434,6 +441,14 @@ export function Reply({
                 ))}
             </div>
           )}
+        </div>
+      )}
+
+      {files.length > 0 && (
+        <div className="flex flex-col gap-2 sm:max-w-[88%]">
+          {files.map((file) => (
+            <FileCard key={file.id} file={file} agentName={agent.name} />
+          ))}
         </div>
       )}
 

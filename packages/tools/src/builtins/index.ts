@@ -1,7 +1,7 @@
 import type { MemoryStore, SandboxProvider } from "@ofa/core";
 import type { ToolDefinition } from "../define";
 import { artifactsReadTool } from "./artifacts";
-import { browserTools, fileTools, shellTool } from "./computer";
+import { browserTools, fileTools, shellTool, useSavedLoginTool } from "./computer";
 import { recallTool, rememberTool, todoTool } from "./memory";
 import { readUrlTool, webSearchTool, type Fetcher, type WebSearchProvider } from "./web";
 
@@ -22,6 +22,7 @@ export function builtinTools(deps: BuiltinToolDeps): ToolDefinition<never>[] {
     recallTool(deps.memory),
     todoTool(),
     ...browserTools(deps.sandbox ?? null),
+    useSavedLoginTool(deps.sandbox ?? null),
     shellTool(deps.sandbox ?? null),
     ...fileTools(deps.sandbox ?? null),
     artifactsReadTool(),

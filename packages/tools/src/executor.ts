@@ -31,6 +31,11 @@ export interface ToolExecutorOptions {
    */
   readonly maxResultChars?: number;
   readonly artifacts?: ArtifactStore;
+  /** Saved logins, decrypted only when a tool asks for one (M3.08, ADR-0012). */
+  readonly logins?: (
+    ctx: RunContext,
+    site: string,
+  ) => Promise<{ readonly username: string; readonly password: string } | null>;
   readonly timeoutMs?: number;
   readonly now?: () => number;
 }
@@ -135,6 +140,9 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
           idempotencyKey: request.idempotencyKey,
           tainted: request.tainted,
           memoryScopes: agent?.memoryScopes ?? [],
+          ...(options.logins
+            ? { logins: { get: (site: string) => options.logins!(ctx, site) } }
+            : {}),
           ...(store
             ? {
                 artifacts: {

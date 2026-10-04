@@ -18,6 +18,8 @@
 //   POST /files/list  {agent, path}
 //   POST /browser {agent}              start the agent's browser; {path} of its CDP endpoint
 //   POST /restart {agent?}             stop an agent's processes (or every agent's)
+//   POST /takeover {agent, on}         a person has the agent's browser (M3.07): the
+//                                      agent's own requests for it are refused meanwhile
 //   GET  /cdp/<agent>/devtools/...     WebSocket proxy to that agent's browser
 //
 // No dependencies: Node built-ins only. The token never reaches agent
@@ -214,6 +216,9 @@ function killGroup(pid) {
 }
 
 // ── Browsers ────────────────────────────────────────────────────────────────
+
+/** Agents whose browser a person has taken over (M3.07). In memory: a restart hands it back. */
+const takenOver = new Set();
 
 /** agentId → { user, xvfb, chrome, wsPath, timer } */
 const browsers = new Map();
@@ -452,8 +457,20 @@ const routes = {
   },
 
   async "POST /browser"(body) {
+    // While a person has taken over, only the person's own connection gets in.
+    if (takenOver.has(body.agent) && body.person !== true) {
+      throw httpError(423, "A person is using this browser right now");
+    }
     const entry = await browserFor(body.agent);
     return { path: `/cdp/${entry.user.agentId}${entry.wsPath}` };
+  },
+
+  async "POST /takeover"(body) {
+    await agentUser(body.agent);
+    if (body.on === true) takenOver.add(body.agent);
+    else takenOver.delete(body.agent);
+    log(body.on === true ? "takeover started" : "takeover ended", { agent: body.agent });
+    return { on: takenOver.has(body.agent) };
   },
 
   async "POST /restart"(body) {
@@ -515,12 +532,17 @@ server.on("upgrade", (req, socket, head) => {
     upstream.pipe(socket);
     socket.pipe(upstream);
   });
+  // An open connection (someone watching, a long tool call) keeps the browser in use.
+  const keepAlive = setInterval(() => touch(entry), 60_000);
   const close = () => {
+    clearInterval(keepAlive);
     upstream.destroy();
     socket.destroy();
   };
   upstream.on("error", close);
+  upstream.on("close", close);
   socket.on("error", close);
+  socket.on("close", close);
 });
 
 // Volumes come up owned by whoever created them: put the layout right.

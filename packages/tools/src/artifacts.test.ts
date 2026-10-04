@@ -28,13 +28,17 @@ const ctx: RunContext = {
   runId: asId("run-1"),
 };
 
-function memoryArtifacts(): ArtifactStore & { rows: Map<string, ArtifactRecord & { content: Uint8Array }> } {
+function memoryArtifacts(): ArtifactStore & {
+  rows: Map<string, ArtifactRecord & { content: Uint8Array }>;
+} {
   const rows = new Map<string, ArtifactRecord & { content: Uint8Array }>();
   let n = 0;
   return {
     rows,
     async put(c, input) {
-      const existing = [...rows.values()].find((r) => r.runId === c.runId && r.name === `${input.key}`);
+      const existing = [...rows.values()].find(
+        (r) => r.runId === c.runId && r.name === `${input.key}`,
+      );
       if (existing) return existing;
       const id = `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`;
       const content = new TextEncoder().encode(String(input.content));
@@ -136,7 +140,9 @@ describe("artifacts", () => {
     expect(outcome.status).toBe("ok");
     if (outcome.status !== "ok") return;
     expect(outcome.content.length).toBeLessThan(8_200);
-    expect(outcome.content).toMatch(/saved as artifact:\/\/[0-9a-f-]{36}; read on with artifacts\.read and from: 7700/);
+    expect(outcome.content).toMatch(
+      /saved as artifact:\/\/[0-9a-f-]{36}; read on with artifacts\.read and from: 7700/,
+    );
     expect(outcome.artifactId).toBeDefined();
     const saved = artifacts.rows.get(outcome.artifactId!);
     expect(saved).toMatchObject({ kind: "output", name: "test.long output", untrusted: true });
@@ -148,7 +154,10 @@ describe("artifacts", () => {
     expect((await executor.listTools(ctx)).map((t) => t.name)).toContain("artifacts.read");
     const first = await executor.execute(call("test.long", {}, "run-1:t1"), ctx);
     const uri = first.status === "ok" ? `artifact://${first.artifactId}` : "";
-    const read = await executor.execute(call("artifacts.read", { uri, from: 19_000 }, "run-1:t2"), ctx);
+    const read = await executor.execute(
+      call("artifacts.read", { uri, from: 19_000 }, "run-1:t2"),
+      ctx,
+    );
     expect(read).toMatchObject({ status: "ok", untrusted: true });
     expect(read.status === "ok" && read.content).toContain("x end");
   });
@@ -157,7 +166,14 @@ describe("artifacts", () => {
     const { executor, artifacts } = setup();
     const theirs = await artifacts.put(
       { ...ctx, agentId: asId("agent-b") },
-      { key: "k", kind: "output", name: "secret", mimeType: "text/plain", content: "theirs", untrusted: false },
+      {
+        key: "k",
+        kind: "output",
+        name: "secret",
+        mimeType: "text/plain",
+        content: "theirs",
+        untrusted: false,
+      },
     );
     const read = await executor.execute(
       call("artifacts.read", { uri: `artifact://${theirs.id}`, from: 0 }, "run-1:t3"),

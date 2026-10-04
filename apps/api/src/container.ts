@@ -3,6 +3,7 @@
 // runs the API, the Inngest functions (agent runs) and the event bus.
 
 import type { Config } from "@ofa/config";
+import { loginSecretNames } from "@ofa/core";
 import type {
   AgentDirectory,
   ArtifactStore,
@@ -180,6 +181,17 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     agents,
     redact: (ctx, text) => vault.redact(ctx, text),
     artifacts,
+    // Saved logins, decrypted only here, when use_saved_login asks (ADR-0012).
+    async logins(ctx, site) {
+      const names = loginSecretNames(site);
+      const [userRef, passwordRef] = await Promise.all([
+        vault.find(ctx, names.username),
+        vault.find(ctx, names.password),
+      ]);
+      if (!userRef || !passwordRef) return null;
+      const { username } = JSON.parse(await vault.reveal(ctx, userRef)) as { username: string };
+      return { username, password: await vault.reveal(ctx, passwordRef) };
+    },
     telemetry,
   });
 

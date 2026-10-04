@@ -13,6 +13,7 @@ import { requireSession, requireTenant } from "./middleware/session";
 import { agentRoutes } from "./routes/agents";
 import { artifactRoutes } from "./routes/artifacts";
 import { healthRoutes } from "./routes/health";
+import { loginRoutes } from "./routes/logins";
 import { memoryRoutes } from "./routes/memories";
 import { runRoutes } from "./routes/runs";
 import { sessionRoutes } from "./routes/session";
@@ -22,6 +23,7 @@ import { threadRoutes } from "./routes/threads";
 import type { AppEnv } from "./types";
 import { mountWebApp } from "./web";
 import { realtimeHandler } from "./ws/gateway";
+import { screenHandler } from "./ws/screen";
 
 export type App = Hono<AppEnv> & {
   /** Attach WebSocket handling to the HTTP server (`/api/ws`). */
@@ -90,12 +92,20 @@ export function createApp(container: Container): App {
   app.route("/api/runs", runRoutes(container));
   app.route("/api/memories", memoryRoutes(container));
   app.route("/api/artifacts", artifactRoutes(container));
+  app.route("/api/logins", loginRoutes(container));
   app.route("/api/settings", settingsRoutes(container));
   app.get(
     "/api/ws",
     requireSession(container.sessions),
     requireTenant(),
     realtimeHandler(container, upgradeWebSocket),
+  );
+  // Watching and taking over an agent's browser (M3.07).
+  app.get(
+    "/api/agents/:id/screen",
+    requireSession(container.sessions),
+    requireTenant(),
+    screenHandler(container, upgradeWebSocket),
   );
 
   // Inngest calls in here to run agent steps. Requests are signed in

@@ -52,6 +52,57 @@ export interface AgentBrowser {
   back(): Promise<PageSnapshot>;
 }
 
+/**
+ * One frame of an agent's browser as a person sees it (M3.07): a JPEG of the
+ * page, and the page's size in CSS pixels, which input coordinates use.
+ */
+export interface ScreenFrame {
+  /** Base64 JPEG. */
+  readonly data: string;
+  readonly width: number;
+  readonly height: number;
+  readonly url: string;
+}
+
+/** What a person does in a taken-over browser. Coordinates are CSS pixels of the page. */
+export type ScreenInput =
+  | {
+      readonly type: "mouse";
+      readonly action: "move" | "down" | "up" | "wheel";
+      readonly x: number;
+      readonly y: number;
+      readonly button?: "left" | "middle" | "right";
+      readonly clicks?: number;
+      readonly deltaX?: number;
+      readonly deltaY?: number;
+      readonly modifiers?: number;
+    }
+  | {
+      readonly type: "key";
+      readonly action: "down" | "up";
+      readonly key: string;
+      readonly code: string;
+      readonly text?: string;
+      readonly modifiers?: number;
+    }
+  | { readonly type: "text"; readonly text: string }
+  | { readonly type: "navigate"; readonly url: string }
+  | { readonly type: "back" }
+  | { readonly type: "reload" };
+
+/**
+ * A live view of an agent's browser (M3.07): streamed frames, and, for a
+ * person who has taken over, their mouse and keyboard. Nothing is recorded:
+ * frames go to the viewer and nowhere else.
+ */
+export interface ScreenSession {
+  onFrame(listener: (frame: ScreenFrame) => void): void;
+  /** Called once if the browser goes away. */
+  onEnd(listener: (reason: string) => void): void;
+  input(event: ScreenInput): Promise<void>;
+  close(): void;
+}
+
 export interface SandboxHandle {
   readonly id: string;
   exec(
@@ -69,6 +120,13 @@ export interface SandboxHandle {
    * another's. Only on a person's explicit request (ADR-0010).
    */
   shareLogin(from: AgentId, to: AgentId, domain: string): Promise<{ cookies: number }>;
+  /** Watch an agent's browser, starting it if needed (a person's view, M3.07). */
+  screen(agentId: AgentId): Promise<ScreenSession>;
+  /**
+   * Hand the agent's browser to a person, or back (M3.07). While a person has
+   * it, the agent's browser tools are refused and say why.
+   */
+  takeover(agentId: AgentId, on: boolean): Promise<void>;
   /** Stop what an agent is running (its browser and commands), or everyone's. */
   restart(agentId?: AgentId): Promise<void>;
   health(): Promise<{ ok: boolean; version?: string }>;
@@ -84,6 +142,7 @@ export class SandboxError extends Error {
       | "not_found"
       | "too_large"
       | "navigation_failed"
+      | "taken_over"
       | "no_element"
       | "timeout",
     message: string,

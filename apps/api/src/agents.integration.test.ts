@@ -339,6 +339,32 @@ describe.skipIf(!hasDb)("M2 API (integration)", async () => {
     expect((await get("/api/memories?verified=maybe")).status).toBe(422);
   });
 
+  it("saves logins in the vault and never sends their values back", async () => {
+    const save = await send("PUT", "/api/logins", {
+      site: "https://www.Example.com/login",
+      username: "sam",
+      password: "correct-horse-battery",
+    });
+    expect(save.status).toBe(201);
+    const listed = await (await get("/api/logins")).text();
+    expect(JSON.parse(listed).items).toEqual([
+      { site: "example.com", updatedAt: expect.any(String) },
+    ]);
+    expect(listed).not.toContain("correct-horse-battery");
+    expect(listed).not.toContain("sam");
+    expect(
+      (
+        await send("PUT", "/api/logins", {
+          site: "example.com",
+          username: "sam",
+          password: "short",
+        })
+      ).status,
+    ).toBe(422);
+    expect((await send("DELETE", "/api/logins/example.com")).status).toBe(204);
+    expect((await send("DELETE", "/api/logins/example.com")).status).toBe(404);
+  });
+
   it("lists a run's artifacts and serves their content only as a download", async () => {
     const runCtx = { ...tenant(), agentId: asId<AgentId>(agentId), runId: asId<RunId>(retryRunId) };
     const kept = await container.artifacts.put(runCtx, {
@@ -360,14 +386,18 @@ describe.skipIf(!hasDb)("M2 API (integration)", async () => {
     });
     expect(again.id).toBe(kept.id);
 
-    const list = artifactListSchema.parse(await (await get(`/api/runs/${retryRunId}/artifacts`)).json());
+    const list = artifactListSchema.parse(
+      await (await get(`/api/runs/${retryRunId}/artifacts`)).json(),
+    );
     expect(list.items).toEqual([
       expect.objectContaining({ id: kept.id, kind: "file", size: 25, untrusted: true }),
     ]);
     const content = await get(`/api/artifacts/${kept.id}/content`);
     expect(content.status).toBe(200);
     expect(content.headers.get("content-type")).toBe("application/octet-stream");
-    expect(content.headers.get("content-disposition")).toBe('attachment; filename="report _draft_.html"');
+    expect(content.headers.get("content-disposition")).toBe(
+      'attachment; filename="report _draft_.html"',
+    );
     expect(content.headers.get("x-content-type-options")).toBe("nosniff");
     expect(await content.text()).toBe("<script>alert(1)</script>");
     expect((await get("/api/artifacts/00000000-0000-4000-8000-000000000000")).status).toBe(404);

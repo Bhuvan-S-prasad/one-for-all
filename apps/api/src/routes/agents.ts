@@ -6,10 +6,12 @@ import {
   toAgentSlug,
   updateAgentRequestSchema,
   type AgentListResponse,
+  shareLoginRequestSchema,
   type AgentStatsList,
+  type ShareLoginResponse,
   type ThreadSummaryPage,
 } from "@ofa/contracts";
-import { NotFoundError } from "@ofa/core";
+import { AppError, asId, normalizeLoginSite, NotFoundError } from "@ofa/core";
 import { workspaceEvent } from "@ofa/events";
 import {
   agentRunStats,
@@ -41,8 +43,9 @@ import type { AppEnv } from "../types";
  *   GET   /api/agents/:id/threads its chats with the person, most recent first (?q=&cursor=) (UX.13)
  *   POST  /api/agents/:id/threads start a new chat (an empty current chat is reused)
  *   GET   /api/agents/stats       per agent: runs this week and the last good result (UX.12)
+ *   POST  /api/agents/:id/logins/share  copy one site's browser login to another agent (ADR-0010)
  */
-export function agentRoutes(deps: Pick<Container, "db" | "sessions" | "bus">) {
+export function agentRoutes(deps: Pick<Container, "db" | "sessions" | "bus" | "sandbox">) {
   const { db } = deps;
   const announce = (workspaceId: string, agentId: string) =>
     deps.bus
@@ -138,6 +141,32 @@ export function agentRoutes(deps: Pick<Container, "db" | "sessions" | "bus">) {
         items: page.items.map(toThreadSummary),
         nextCursor: page.nextCursor,
       } satisfies ThreadSummaryPage);
+    })
+    .post("/:id/logins/share", async (c) => {
+      const tenant = c.get("tenant");
+      const input = await readJson(c, shareLoginRequestSchema);
+      const site = normalizeLoginSite(input.site);
+      if (!site)
+        throw new AppError("validation_failed", "That doesn't look like a website address");
+      const [from, to] = await Promise.all([
+        getAgent(db, tenant, c.req.param("id")),
+        getAgent(db, tenant, input.to),
+      ]);
+      if (!from || !to) throw new NotFoundError("Agent");
+      if (from.id === to.id)
+        throw new AppError("validation_failed", "Pick another agent to share with");
+      if (!deps.sandbox) throw new AppError("conflict", "This server has no computer for agents");
+      const handle = await deps.sandbox.acquire(tenant);
+      const result = await handle.shareLogin(asId(from.id), asId(to.id), site);
+      // Opening one agent's logins to another is security-relevant (ADR-0010).
+      await recordAudit(db, tenant, {
+        action: "login.shared",
+        targetType: "agent",
+        targetId: to.id,
+        data: { from: from.id, site, cookies: result.cookies },
+        ...requestMeta(c),
+      });
+      return c.json(result satisfies ShareLoginResponse);
     })
     .post("/:id/threads", async (c) => {
       const tenant = c.get("tenant");

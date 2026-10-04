@@ -7,6 +7,7 @@ import {
   type SandboxProvider,
 } from "@ofa/core";
 import { copyCookies, createCdpBrowser } from "./browser";
+import { createScreenSession } from "./screen";
 
 // The Docker sandbox (M3.03, ADR-0025): the agents' computer is a long-lived
 // container in the Compose bundle, and this adapter talks to the service
@@ -64,6 +65,12 @@ export function createDockerSandbox(options: DockerSandboxOptions): SandboxProvi
       if (response.status === 401) {
         throw new SandboxError("unavailable", "The app and the sandbox disagree on SANDBOX_TOKEN.");
       }
+      if (response.status === 423) {
+        throw new SandboxError(
+          "taken_over",
+          "A person has taken over your browser right now. Stop and tell them what you need, or try again after they hand it back.",
+        );
+      }
       throw new SandboxError(
         ERROR_CODES[response.status] ?? "unavailable",
         payload.error ?? `The computer answered ${response.status}`,
@@ -72,9 +79,12 @@ export function createDockerSandbox(options: DockerSandboxOptions): SandboxProvi
     return payload;
   }
 
-  /** The agent's CDP endpoint as a WebSocket URL, starting its browser if needed. */
-  async function cdpUrl(agentId: AgentId): Promise<string> {
-    const { path } = await call<{ path: string }>("/browser", { agent: agentId });
+  /**
+   * The agent's CDP endpoint as a WebSocket URL, starting its browser if
+   * needed. `person`: a person's view, which takeover does not lock out.
+   */
+  async function cdpUrl(agentId: AgentId, person = false): Promise<string> {
+    const { path } = await call<{ path: string }>("/browser", { agent: agentId, person });
     const url = new URL(path, base);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     url.searchParams.set("token", options.token);
@@ -118,8 +128,16 @@ export function createDockerSandbox(options: DockerSandboxOptions): SandboxProvi
     },
 
     async shareLogin(from, to, domain) {
-      const cookies = await copyCookies(await cdpUrl(from), await cdpUrl(to), domain);
+      const cookies = await copyCookies(await cdpUrl(from, true), await cdpUrl(to, true), domain);
       return { cookies };
+    },
+
+    async screen(agentId) {
+      return createScreenSession(await cdpUrl(agentId, true));
+    },
+
+    async takeover(agentId, on) {
+      await call("/takeover", { agent: agentId, on });
     },
 
     async restart(agentId) {

@@ -1,12 +1,22 @@
-import { useDeleteLlmKey, useHealth, useLlmSettings, useSaveLlmKey } from "@ofa/client";
+import {
+  useDeleteLlmKey,
+  useDeleteLogin,
+  useHealth,
+  useLlmSettings,
+  useSaveLlmKey,
+  useSaveLogin,
+  useSavedLogins,
+} from "@ofa/client";
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 import { ErrorAlert } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { SecretInput } from "@/components/secret-input";
 import { Card, CardTitle } from "@/components/ui/card";
-import { roleLabel } from "@/lib/format";
+import { roleLabel, timeAgo } from "@/lib/format";
+import { toast } from "@/lib/toast";
 import { setThemePreference, useTheme, type ThemePreference } from "@/lib/theme";
 import { useSignOut } from "@/lib/use-sign-out";
 import { cn } from "@/lib/utils";
@@ -65,6 +75,10 @@ function SettingsPage() {
       </Card>
 
       <ModelCard
+        canEdit={session.workspace?.role === "owner" || session.workspace?.role === "admin"}
+      />
+
+      <SavedLoginsCard
         canEdit={session.workspace?.role === "owner" || session.workspace?.role === "admin"}
       />
 
@@ -172,16 +186,15 @@ function ModelCard({ canEdit }: { canEdit: boolean }) {
                   : `${settings.provider.label} API key`}
               </Label>
               <div className="flex flex-col gap-2 sm:flex-row">
-                <Input
-                  id="llm-key"
-                  type="password"
-                  autoComplete="off"
-                  spellCheck={false}
-                  value={key}
-                  onChange={(e) => setKey(e.target.value)}
-                  placeholder="Paste the key"
-                  aria-describedby="llm-key-note"
-                />
+                <div className="flex-1">
+                  <SecretInput
+                    id="llm-key"
+                    value={key}
+                    onChange={setKey}
+                    placeholder="Paste the key"
+                    aria-describedby="llm-key-note"
+                  />
+                </div>
                 <Button type="submit" disabled={save.isPending || !key.trim()}>
                   Save key
                 </Button>
@@ -208,6 +221,123 @@ function ModelCard({ canEdit }: { canEdit: boolean }) {
             </p>
           )}
         </>
+      )}
+    </Card>
+  );
+}
+
+/**
+ * Saved logins (M3.08, M3.10): an agent with "Sign in with saved logins"
+ * types them into that site's own pages and never sees them. The values go
+ * from this form to the vault and never come back.
+ */
+function SavedLoginsCard({ canEdit }: { canEdit: boolean }) {
+  const { data: logins, error } = useSavedLogins();
+  const save = useSaveLogin();
+  const remove = useDeleteLogin();
+  const [site, setSite] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (!site.trim() || !username || !password) return;
+    save.mutate(
+      { site: site.trim(), username, password },
+      {
+        onSuccess: (saved) => {
+          setSite("");
+          setUsername("");
+          setPassword("");
+          toast(`Saved the login for ${saved.site}`);
+        },
+      },
+    );
+  };
+
+  return (
+    <Card className="flex flex-col gap-4 px-6 py-5">
+      <div className="flex flex-col gap-1">
+        <CardTitle>Saved logins</CardTitle>
+        <p className="text-sm text-muted-foreground">
+          An agent allowed to sign in with saved logins types these into the site's own pages. It
+          never sees them, and they are never shown again here.
+        </p>
+      </div>
+      {error && <ErrorAlert>{error.message}</ErrorAlert>}
+      {logins && logins.length > 0 && (
+        <ul className="flex flex-col divide-y rounded-md border">
+          {logins.map((login) => (
+            <li key={login.site} className="flex items-center gap-3 px-4 py-3">
+              <span className="flex-1 font-semibold">{login.site}</span>
+              <span className="font-mono text-xs text-muted-foreground">
+                saved {timeAgo(login.updatedAt)}
+              </span>
+              {canEdit && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={remove.isPending}
+                  onClick={() =>
+                    remove.mutate(login.site, {
+                      onSuccess: () => toast(`Removed the login for ${login.site}`),
+                      onError: (e) => toast({ message: e.message, tone: "error" }),
+                    })
+                  }
+                >
+                  Remove
+                </Button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {canEdit ? (
+        <form onSubmit={submit} className="grid gap-3 sm:grid-cols-3">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="login-site">Site</Label>
+            <Input
+              id="login-site"
+              value={site}
+              onChange={(e) => setSite(e.target.value)}
+              placeholder="github.com"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="login-username">Username or email</Label>
+            <Input
+              id="login-username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="login-password">Password</Label>
+            <SecretInput id="login-password" value={password} onChange={setPassword} />
+          </div>
+          <div className="flex flex-wrap items-center gap-3 sm:col-span-3">
+            <Button
+              type="submit"
+              disabled={save.isPending || !site.trim() || !username || !password}
+            >
+              Save login
+            </Button>
+            <span className="text-sm text-muted-foreground">
+              Stored encrypted on this server. Passwords need at least 8 characters.
+            </span>
+          </div>
+          {save.error && (
+            <div className="sm:col-span-3">
+              <ErrorAlert>{save.error.message}</ErrorAlert>
+            </div>
+          )}
+        </form>
+      ) : (
+        <p className="text-sm text-muted-foreground">Only an owner or admin can save logins.</p>
       )}
     </Card>
   );

@@ -1,4 +1,11 @@
-import type { AgentBrowser, PageSnapshot, SandboxHandle, SandboxProvider } from "@ofa/core";
+import {
+  hostMatchesSite,
+  normalizeLoginSite,
+  type AgentBrowser,
+  type PageSnapshot,
+  type SandboxHandle,
+  type SandboxProvider,
+} from "@ofa/core";
 import { z } from "zod";
 import { defineTool, type ToolRunContext } from "../define";
 import { READ_CHUNK_CHARS } from "./web";
@@ -169,6 +176,67 @@ export function browserTools(sandbox: SandboxProvider | null) {
       },
     }),
   ];
+}
+
+/**
+ * Sign in with a saved login (M3.08, ADR-0012): the tool types the username
+ * and password into the page's fields; the agent picks the fields and never
+ * sees the values. Only into a page on the login's own site, so a page that
+ * talks the agent into it cannot collect another site's password.
+ */
+export function useSavedLoginTool(sandbox: SandboxProvider | null) {
+  return defineTool({
+    name: "use_saved_login",
+    description:
+      "Sign in on the current page with a login the person saved for this site. Give the numbers of the username and password fields from the latest snapshot; the tool types them in, and you never see the password. Works only on the saved site's own pages.",
+    input: z.object({
+      username_ref: ref
+        .optional()
+        .describe("The username or email field; leave out if the page asks only for the password"),
+      password_ref: ref.describe("The password field"),
+      submit: z.boolean().default(true).describe("Press Enter after the password"),
+    }),
+    annotations: { outbound: true },
+    async run({ username_ref, password_ref, submit }, ctx) {
+      const browser = await browserOf(sandbox, ctx);
+      const page = await browser.snapshot();
+      let host = "";
+      try {
+        host = new URL(page.url).hostname;
+      } catch {
+        // about:blank and the like: no site.
+      }
+      // A login saved for github.com serves login.github.com too: try the
+      // page's host, then each parent down to two labels.
+      const pageSite = normalizeLoginSite(host);
+      const labels = pageSite?.split(".") ?? [];
+      let site: string | null = null;
+      let login: { username: string; password: string } | null = null;
+      for (let i = 0; i <= labels.length - 2 && ctx.logins && !login; i += 1) {
+        const candidate = labels.slice(i).join(".");
+        login = await ctx.logins.get(candidate);
+        if (login) site = candidate;
+      }
+      if (!site || !login || !hostMatchesSite(host, site)) {
+        throw Object.assign(
+          new Error(
+            `There is no saved login for ${host || "this page"}. Ask the person to sign in themselves (they can take over your browser), or to save a login for this site in Settings.`,
+          ),
+          { code: "no_saved_login" },
+        );
+      }
+      if (username_ref !== undefined)
+        await browser.type(username_ref, login.username, { clear: true });
+      const after = await browser.type(password_ref, login.password, { clear: true, submit });
+      // Never hand the values back, even if a page echoes them.
+      const scrub = (text: string) =>
+        text.split(login.password).join("[REDACTED]").split(login.username).join("[username]");
+      return {
+        content: `Typed the saved login for ${site}.\n\n${scrub(pageText(after))}`,
+        untrusted: true,
+      };
+    },
+  });
 }
 
 function clipOutput(text: string, limit: number, keep: "head" | "tail"): string {

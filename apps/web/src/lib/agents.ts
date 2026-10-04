@@ -124,6 +124,12 @@ export const BUILTIN_TOOLS = [
     starter: false,
   },
   {
+    name: "use_saved_login",
+    label: "Sign in with saved logins",
+    hint: "Types a login you saved in Settings into that site. It never sees the password.",
+    starter: false,
+  },
+  {
     name: "shell.run",
     label: "Run commands",
     hint: "A Linux shell on its computer, with Python and git.",

@@ -7,7 +7,7 @@ import {
 } from "@ofa/core";
 import { describe, expect, it } from "vitest";
 import type { ToolRunContext } from "../define";
-import { browserTools, fileTools, pageText, shellTool } from "./computer";
+import { browserTools, fileTools, pageText, shellTool, useSavedLoginTool } from "./computer";
 
 const ctx: ToolRunContext = {
   workspaceId: asId("ws"),
@@ -59,6 +59,10 @@ function fakeSandbox(overrides: Partial<SandboxHandle> = {}) {
     }),
     browser: async () => browser,
     shareLogin: async () => ({ cookies: 0 }),
+    screen: async () => {
+      throw new Error("no screen in tests");
+    },
+    takeover: async () => {},
     restart: async () => {},
     health: async () => ({ ok: true }),
     ...overrides,
@@ -157,5 +161,69 @@ describe("computer tools", () => {
       ctx,
     );
     expect(result.content).toBe("a.png is a binary file (4 bytes); it can't be shown as text.");
+  });
+});
+
+describe("use_saved_login", () => {
+  const saved = { username: "sam@example.com", password: "correct-horse-battery" };
+  const at = (url: string, typedEcho = false) => {
+    const typed: unknown[] = [];
+    const { provider } = fakeSandbox({
+      browser: async () => ({
+        open: async () => ({ url, title: "", outline: "" }),
+        snapshot: async () => ({
+          url,
+          title: "Sign in",
+          outline: '[3] textbox "Email"\n[4] textbox "Password"',
+        }),
+        click: async () => ({ url, title: "", outline: "" }),
+        type: async (ref, text, options) => {
+          typed.push([ref, text, options]);
+          return {
+            url,
+            title: "Signed in",
+            outline: typedEcho ? `Welcome ${saved.username} ${saved.password}` : "Welcome",
+          };
+        },
+        press: async () => ({ url, title: "", outline: "" }),
+        back: async () => ({ url, title: "", outline: "" }),
+      }),
+    });
+    const lookups: string[] = [];
+    const runCtx: ToolRunContext = {
+      ...ctx,
+      logins: {
+        get: async (site) => {
+          lookups.push(site);
+          return site === "example.com" ? saved : null;
+        },
+      },
+    };
+    return { tool: useSavedLoginTool(provider), runCtx, typed, lookups };
+  };
+
+  it("types the saved login on the site's own pages, and never hands the values back", async () => {
+    const { tool, runCtx, typed, lookups } = at("https://login.example.com/signin", true);
+    const result = await tool.run({ username_ref: 3, password_ref: 4, submit: true }, runCtx);
+    expect(lookups).toEqual(["login.example.com", "example.com"]);
+    expect(typed).toEqual([
+      [3, saved.username, { clear: true }],
+      [4, saved.password, { clear: true, submit: true }],
+    ]);
+    const content = result.content as string;
+    expect(content).toContain("Typed the saved login for example.com.");
+    expect(content).not.toContain(saved.password);
+    expect(content).not.toContain(saved.username);
+    expect(tool.annotations.outbound).toBe(true);
+  });
+
+  it("refuses look-alike sites and pages without a saved login", async () => {
+    for (const url of ["https://example.com.evil.test/login", "about:blank"]) {
+      const { tool, runCtx, typed } = at(url);
+      await expect(tool.run({ password_ref: 4, submit: true }, runCtx)).rejects.toMatchObject({
+        code: "no_saved_login",
+      });
+      expect(typed).toEqual([]);
+    }
   });
 });

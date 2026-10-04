@@ -22,6 +22,13 @@ export interface ToolRunContext extends RunContext {
   /** The run has read untrusted content; memory written now is unverified. */
   readonly tainted: boolean;
   readonly memoryScopes: readonly MemoryScope[];
+  /**
+   * A saved login for a site (M3.08), decrypted here, at call time, and only
+   * for the tool that types it (ADR-0012). Absent when the server has no vault.
+   */
+  readonly logins?: {
+    get(site: string): Promise<{ readonly username: string; readonly password: string } | null>;
+  };
   /** This run's artifacts (M3.06); absent when the server keeps none. Reads see only this agent's. */
   readonly artifacts?: {
     put(input: ArtifactInput): Promise<ArtifactRecord>;

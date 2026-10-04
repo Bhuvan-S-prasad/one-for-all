@@ -20,9 +20,11 @@ export {
   useMemories,
   useNewThread,
   useRetryRun,
+  useRunArtifacts,
   useApiClient,
   useCreateAgent,
   useDeleteLlmKey,
+  useDeleteLogin,
   useFirstRunSetup,
   useHealth,
   useLlmSettings,
@@ -33,8 +35,11 @@ export {
   useRuns,
   useRunSearch,
   useSaveLlmKey,
+  useSaveLogin,
+  useSavedLogins,
   useSendMessage,
   useSession,
+  useShareLogin,
   useSetupStatus,
   useStopRun,
   useThreadMessages,
@@ -61,3 +66,4 @@ export {
   type FamiliarParts,
   type FamiliarPattern,
 } from "./familiar";
+export { connectScreen, type ScreenConnection } from "./screen";
