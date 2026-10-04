@@ -9,6 +9,7 @@ import {
   House,
   Keyboard,
   LogOut,
+  MessageCircle,
   Monitor,
   Moon,
   PanelLeftClose,
@@ -25,6 +26,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { BrandMark, Wordmark } from "@/components/brand-mark";
 import { CommandPalette } from "@/components/command-palette";
 import { Familiar } from "@/components/familiar";
+import { Toaster } from "@/components/toaster";
 import { MOOD_WORDS, shouldAnimate, useAgentMoods } from "@/lib/agents";
 import { roleLabel } from "@/lib/format";
 import { isTyping, MOD_K, useGlobalShortcuts, useStoredFlag } from "@/lib/shortcuts";
@@ -134,7 +136,7 @@ export function AppShell({ session, children }: { session: SessionResponse; chil
         </main>
       </div>
 
-      {!fullBleed && <BottomNav stuck={stuck} />}
+      {!fullBleed && <BottomNav stuck={stuck} onAsk={() => openPalette()} />}
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
@@ -142,6 +144,7 @@ export function AppShell({ session, children }: { session: SessionResponse; chil
         onToggleSidebar={() => setCollapsed(!collapsed)}
         initialQuery={paletteQuery}
       />
+      <Toaster raised={!fullBleed} />
     </div>
   );
 }
@@ -642,7 +645,7 @@ const TABS = [
   { to: "/settings", label: "Settings", icon: SlidersHorizontal, exact: false },
 ] as const;
 
-function BottomNav({ stuck }: { stuck: number }) {
+function BottomNav({ stuck, onAsk }: { stuck: number; onAsk: () => void }) {
   return (
     <nav
       aria-label="Main"
@@ -667,13 +670,15 @@ function BottomNav({ stuck }: { stuck: number }) {
           </Link>
         ))}
       </div>
-      <Link
-        to="/agents/new"
-        aria-label="Hatch a new agent"
-        className="flex size-16 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+      <button
+        type="button"
+        onClick={onAsk}
+        aria-label="Ask an agent"
+        className="flex size-16 shrink-0 flex-col items-center justify-center gap-0.5 rounded-full bg-primary text-[10.5px] font-bold text-primary-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
       >
-        <Plus className="size-[26px]" strokeWidth={2.4} aria-hidden />
-      </Link>
+        <MessageCircle className="size-[22px]" strokeWidth={2.4} aria-hidden />
+        Ask
+      </button>
     </nav>
   );
 }

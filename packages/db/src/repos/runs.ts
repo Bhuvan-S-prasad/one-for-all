@@ -192,7 +192,8 @@ export async function agentRunStats(
       .where(eq(run.status, "succeeded"))
       .orderBy(run.agentId, desc(run.createdAt));
     const stats = new Map<string, { runsSince: number; lastSucceeded: RunRow | null }>();
-    for (const c of counts) stats.set(c.agentId, { runsSince: Number(c.runs), lastSucceeded: null });
+    for (const c of counts)
+      stats.set(c.agentId, { runsSince: Number(c.runs), lastSucceeded: null });
     for (const row of latest) {
       const entry = stats.get(row.agentId) ?? { runsSince: 0, lastSucceeded: null };
       stats.set(row.agentId, { ...entry, lastSucceeded: row });

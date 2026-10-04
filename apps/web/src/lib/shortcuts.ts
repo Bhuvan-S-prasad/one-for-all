@@ -28,6 +28,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { keys: "G R", label: "Go to Activity" },
   { keys: "G S", label: "Go to Settings" },
   { keys: "/", label: "Write a message (in a chat)" },
+  { keys: "N", label: "New chat (in a chat)" },
   { keys: "Esc", label: "Stop the agent (in a chat, while it works)" },
   { keys: "Enter · Shift Enter", label: "Send · new line" },
 ];

@@ -388,15 +388,21 @@ function RunList(props: {
         );
       })}
       <div ref={end} className="px-3 pt-3">
-        {props.hasMore && (
-          <button
-            type="button"
-            onClick={props.onMore}
-            disabled={props.loadingMore}
-            className="h-10 w-full rounded-[12px] border border-dashed text-[13px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {props.loadingMore ? "Loading…" : "Show more"}
-          </button>
+        {props.loadingMore ? (
+          <div className="flex flex-col gap-2" aria-busy="true" aria-label="Loading more runs">
+            <div className="skeleton h-14 w-full rounded-[12px]" />
+            <div className="skeleton h-14 w-full rounded-[12px]" />
+          </div>
+        ) : (
+          props.hasMore && (
+            <button
+              type="button"
+              onClick={props.onMore}
+              className="h-10 w-full rounded-[12px] border border-dashed text-[13px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Show more
+            </button>
+          )
         )}
       </div>
     </nav>

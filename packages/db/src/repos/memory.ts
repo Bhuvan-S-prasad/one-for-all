@@ -164,10 +164,7 @@ const reviewColumns = {
 };
 
 function visibleToPerson(ctx: TenantContext): SQL {
-  return or(
-    sql`${memory.scope} <> 'agent_user'`,
-    eq(memory.userId, ctx.userId),
-  )!;
+  return or(sql`${memory.scope} <> 'agent_user'`, eq(memory.userId, ctx.userId))!;
 }
 
 /** Facts for review: one agent's (with the shared ones), one run's, or only unverified. */

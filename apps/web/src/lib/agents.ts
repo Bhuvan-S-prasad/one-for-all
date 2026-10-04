@@ -1,11 +1,30 @@
 import { moodFor, useRuns } from "@ofa/client";
 import type { Agent, FamiliarMood, Run } from "@ofa/contracts";
 
-/** A short, stable tag for an agent's familiar, e.g. `FAM-0412`. */
-export function serialFor(seed: string): string {
-  let hash = 7;
-  for (let i = 0; i < seed.length; i += 1) hash = (hash * 31 + seed.charCodeAt(i)) % 9973;
-  return `FAM-${String(hash).padStart(4, "0")}`;
+/** Starter prompts for an agent, from its job and tools (an empty chat, Home's Ask box). */
+export function starters(agent: Agent): string[] {
+  const tools = new Set(agent.grants.filter((g) => g.mode !== "blocked").map((g) => g.tool));
+  const list: string[] = [];
+  if (tools.has("web.search")) list.push("Find the latest on something for me, with sources");
+  if (tools.has("web.read_url")) list.push("Summarise a page: paste the link here");
+  if (tools.has("remember")) list.push("Remember that I prefer short answers");
+  list.push("What can you help me with?");
+  return list.slice(0, 3);
+}
+
+/**
+ * "@scout compare two tools" → Scout and "compare two tools". Matches an
+ * agent's slug or name (any case); null when the text names no agent.
+ */
+export function parseMention(
+  text: string,
+  agents: readonly Agent[],
+): { agent: Agent; rest: string } | null {
+  const match = /^\s*@([\p{L}\p{N}_-]+)\s*/u.exec(text);
+  if (!match) return null;
+  const name = (match[1] ?? "").toLowerCase();
+  const agent = agents.find((a) => a.slug.toLowerCase() === name || a.name.toLowerCase() === name);
+  return agent ? { agent, rest: text.slice(match[0].length) } : null;
 }
 
 /** Sentences for each mood, as in the design (status is never colour alone). */

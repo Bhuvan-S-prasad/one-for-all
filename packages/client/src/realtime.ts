@@ -38,6 +38,10 @@ export function applyRealtime(queryClient: QueryClient, message: RealtimeMessage
           (a, b) => a.seq - b.seq,
         ),
       );
+      // Something was learned: the review lists change (UX.14).
+      if (event.type === "memory.written") {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.memoryLists });
+      }
       return;
     }
     case "run.updated": {
@@ -67,6 +71,9 @@ export function applyRealtime(queryClient: QueryClient, message: RealtimeMessage
       // Filtered Activity pages refetch when a status change can move a run between them.
       if (known?.status !== run.status) {
         void queryClient.invalidateQueries({ queryKey: queryKeys.runSearches });
+        if (run.status === "succeeded" || !known) {
+          void queryClient.invalidateQueries({ queryKey: queryKeys.agentStats });
+        }
       }
       return;
     }
@@ -80,6 +87,8 @@ export function applyRealtime(queryClient: QueryClient, message: RealtimeMessage
           (a, b) => a.createdAt.localeCompare(b.createdAt),
         ),
       );
+      // Chat lists show each chat's first message and order by last use.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.threadLists });
       return;
     }
     case "agent.updated": {

@@ -53,8 +53,8 @@ function directWith(ctx: TenantContext, agentId: string): SQL {
   return and(
     eq(thread.kind, "direct"),
     isNull(thread.archivedAt),
-    sql`exists (select 1 from ${threadMember} m where m.thread_id = ${thread.id} and m.agent_id = ${agentId})`,
-    sql`exists (select 1 from ${threadMember} m where m.thread_id = ${thread.id} and m.user_id = ${ctx.userId})`,
+    sql`exists (select 1 from ${threadMember} m where m.thread_id = ${thread}.id and m.agent_id = ${agentId})`,
+    sql`exists (select 1 from ${threadMember} m where m.thread_id = ${thread}.id and m.user_id = ${ctx.userId})`,
   )!;
 }
 
@@ -122,7 +122,7 @@ export async function newDirectThread(
       .where(
         and(
           directWith(ctx, agentId),
-          sql`not exists (select 1 from ${message} where ${message.threadId} = ${thread.id})`,
+          sql`not exists (select 1 from ${message} m where m.thread_id = ${thread}.id)`,
         ),
       )
       .orderBy(desc(thread.updatedAt))
@@ -165,19 +165,25 @@ export async function listDirectThreads(
     const rows = await tx
       .select({
         thread,
-        preview: sql<string | null>`(select left(${message.content}, ${options.previewChars}) from ${message}
-          where ${message.threadId} = ${thread.id} and ${message.authorType} = 'user'
-          order by ${message.createdAt} asc limit 1)`,
-        messageCount: sql<number>`(select count(*)::int from ${message} where ${message.threadId} = ${thread.id})`,
-        lastMessageAt: sql<string | null>`(select max(${message.createdAt}) from ${message} where ${message.threadId} = ${thread.id})`,
+        // Subqueries name their columns in full: drizzle leaves column names
+        // unqualified in single-table selects.
+        preview: sql<
+          string | null
+        >`(select left(m.content, ${options.previewChars}) from ${message} m
+          where m.thread_id = ${thread}.id and m.author_type = 'user'
+          order by m.created_at asc limit 1)`,
+        messageCount: sql<number>`(select count(*)::int from ${message} m where m.thread_id = ${thread}.id)`,
+        lastMessageAt: sql<
+          string | null
+        >`(select max(m.created_at) from ${message} m where m.thread_id = ${thread}.id)`,
       })
       .from(thread)
       .where(
         and(
           directWith(ctx, agentId),
           options.search
-            ? sql`exists (select 1 from ${message} where ${message.threadId} = ${thread.id}
-                and ${message.content} ilike ${likePattern(options.search)})`
+            ? sql`exists (select 1 from ${message} m where m.thread_id = ${thread}.id
+                and m.content ilike ${likePattern(options.search)})`
             : undefined,
           pivot
             ? or(
@@ -220,6 +226,9 @@ export async function updateThread(
     if (patch.title !== undefined) set.title = patch.title;
     if (patch.archived !== undefined) set.archivedAt = patch.archived ? new Date() : null;
     if (Object.keys(set).length > 0) {
+      // `updated_at` orders chats by last use: renaming or archiving (and Undo)
+      // must not make a chat the current one.
+      set.updatedAt = sql`${thread.updatedAt}` as unknown as Date;
       const [row] = await tx
         .update(thread)
         .set(set)

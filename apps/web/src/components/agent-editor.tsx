@@ -20,7 +20,7 @@ import { ErrorAlert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { BUILTIN_TOOLS, MOOD_SENTENCES, serialFor, TIER_INFO } from "@/lib/agents";
+import { BUILTIN_TOOLS, MOOD_SENTENCES, TIER_INFO } from "@/lib/agents";
 import { cn } from "@/lib/utils";
 
 // The hatch flow (M2.24), from the design canvas's "Hatch a new agent":
@@ -159,7 +159,7 @@ export function AgentEditor({ initial, mode, saving, error, onCancel, onSave }: 
           className="bg-dots flex flex-col gap-4 border-b p-6 lg:border-r lg:border-b-0"
         >
           <div className="eyebrow flex justify-between text-xs text-muted-foreground">
-            <span>{serialFor(displayName)}</span>
+            <span>Preview</span>
             <span>
               {capitalise(draft.look.form)} · {capitalise(draft.look.eyes)} ·{" "}
               {capitalise(draft.look.skin)}
@@ -260,7 +260,7 @@ export function AgentEditor({ initial, mode, saving, error, onCancel, onSave }: 
                   <Chip key={t} pressed={t === trait} onClick={() => setTrait(t)} large>
                     {TRAITS[t].label}
                     <span className="font-mono text-[11px] font-medium opacity-70">
-                      {String(TRAITS[t].options.length).padStart(2, "0")}
+                      {TRAITS[t].options.length}
                     </span>
                   </Chip>
                 ))}

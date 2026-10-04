@@ -499,3 +499,22 @@ export function linksIn(blocks: readonly Block[]): string[] {
   walk(blocks);
   return found;
 }
+
+/** Plain text of a Markdown preview, for one-line summaries (UX.11). */
+export function previewText(markdown: string): string {
+  return markdown
+    .replace(/```[\s\S]*?(```|$)/g, " ")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}(#{1,6}\s+|[-*+]\s+(\[[ xX]\]\s+)?|\d+[.)]\s+|>\s?)/gm, "")
+    .replace(/^\s*\|?[\s:|-]+\|[\s:|-]*$/gm, " ")
+    .replace(/[*_`~|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** The text of a reply's first heading, when it opens with one. */
+export function leadingHeading(markdown: string): string | null {
+  const match = /^\s*#{1,3}\s+(.+)$/m.exec(markdown);
+  if (!match || markdown.trimStart().indexOf(match[0].trim()) !== 0) return null;
+  return previewText(match[1] ?? "") || null;
+}

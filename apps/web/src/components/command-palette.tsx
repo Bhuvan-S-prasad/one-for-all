@@ -1,16 +1,20 @@
-import { useRunSearch } from "@ofa/client";
+import { queryKeys, useApiClient, useRunSearch } from "@ofa/client";
 import type { Agent } from "@ofa/contracts";
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
   Activity,
   ArrowUp,
   Ghost,
+  History,
   House,
+  Lightbulb,
   Moon,
   PanelLeft,
   Plus,
   Search,
   SlidersHorizontal,
+  SquarePen,
   Sun,
   type LucideIcon,
 } from "lucide-react";
@@ -18,6 +22,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Familiar } from "@/components/familiar";
 import { timeAgo } from "@/lib/format";
 import { SHORTCUTS } from "@/lib/shortcuts";
+import { toast } from "@/lib/toast";
 import { setThemePreference, useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
@@ -65,6 +70,8 @@ function Palette({
   initialQuery?: string;
 }) {
   const navigate = useNavigate();
+  const api = useApiClient();
+  const queryClient = useQueryClient();
   const { dark } = useTheme();
   const [query, setQuery] = useState(initialQuery);
   const [active, setActive] = useState(0);
@@ -138,6 +145,46 @@ function Palette({
         icon: <Familiar look={agent.spec.avatar} size={24} ring="var(--popover)" />,
         run: go(() => void navigate({ to: "/agents/$agentId", params: { agentId: agent.id } })),
       });
+    }
+    // A named agent also offers a new chat, its history and its memory (UX.13, UX.14).
+    const named = q ? agents.filter((a) => matches(a.name, q.replace(/^@/, ""))).slice(0, 2) : [];
+    for (const agent of named) {
+      const params = { agentId: agent.id };
+      list.push(
+        {
+          id: `new-${agent.id}`,
+          group: agent.name,
+          label: `New chat with ${agent.name}`,
+          hint: "N in a chat",
+          icon: icon(SquarePen),
+          // The palette closes first, so this uses the client directly.
+          run: go(
+            () =>
+              void api
+                .newThread(agent.id)
+                .then((thread) => {
+                  queryClient.setQueryData(queryKeys.agentThread(agent.id), thread);
+                  void queryClient.invalidateQueries({ queryKey: queryKeys.threadLists });
+                  return navigate({ to: "/agents/$agentId", params, search: {} });
+                })
+                .catch((e: Error) => toast({ message: e.message, tone: "error" })),
+          ),
+        },
+        {
+          id: `history-${agent.id}`,
+          group: agent.name,
+          label: `${agent.name}'s chat history`,
+          icon: icon(History),
+          run: go(() => void navigate({ to: "/agents/$agentId/history", params })),
+        },
+        {
+          id: `memory-${agent.id}`,
+          group: agent.name,
+          label: `What ${agent.name} remembers`,
+          icon: icon(Lightbulb),
+          run: go(() => void navigate({ to: "/agents/$agentId/memory", params })),
+        },
+      );
     }
     for (const run of runs) {
       const agent = agents.find((a) => a.id === run.agentId);

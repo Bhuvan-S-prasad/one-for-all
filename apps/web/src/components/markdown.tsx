@@ -1,5 +1,6 @@
 import { Check, Copy } from "lucide-react";
 import { Fragment, useState, type ReactNode } from "react";
+import { ChartBlock } from "@/components/chart-block";
 import { inlineText, type Block, type Inline } from "@/lib/markdown";
 import { sourceFor, type RunSource } from "@/lib/run-steps";
 import { cn } from "@/lib/utils";
@@ -196,7 +197,17 @@ function Blocks({
           </p>
         );
       case "code":
-        return <CodeBlock key={i} lang={block.lang} text={block.text} />;
+        // A chart spec in a json block is drawn too: it is checked the same way,
+        // and anything that isn't a valid spec stays code.
+        return block.lang === "chart" || block.lang === "json" ? (
+          <ChartBlock
+            key={i}
+            text={block.text}
+            fallback={<CodeBlock lang={block.lang} text={block.text} />}
+          />
+        ) : (
+          <CodeBlock key={i} lang={block.lang} text={block.text} />
+        );
       case "rule":
         return <hr key={i} className="my-1 border-border" />;
       case "quote":

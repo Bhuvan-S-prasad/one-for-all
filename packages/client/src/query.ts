@@ -1,5 +1,5 @@
 import { infiniteQueryOptions, QueryClient, queryOptions } from "@tanstack/react-query";
-import { ApiError, type ApiClient, type RunFilter } from "./api-client";
+import { ApiError, type ApiClient, type MemoryFilter, type RunFilter } from "./api-client";
 
 export const queryKeys = {
   session: ["session"] as const,
@@ -8,6 +8,13 @@ export const queryKeys = {
   agents: ["agents"] as const,
   agent: (id: string) => ["agents", id] as const,
   agentThread: (id: string) => ["agents", id, "thread"] as const,
+  agentThreads: (id: string, q?: string) => ["threads", "list", id, q ?? ""] as const,
+  threadLists: ["threads", "list"] as const,
+  thread: (id: string) => ["threads", id] as const,
+  agentStats: ["agents-stats"] as const,
+  memories: (filter: MemoryFilter) => ["memories", filter] as const,
+  memoryLists: ["memories"] as const,
+  usage: ["settings", "usage"] as const,
   messages: (threadId: string) => ["threads", threadId, "messages"] as const,
   runs: (agentId?: string) => ["runs", "list", agentId ?? "all"] as const,
   runLists: ["runs", "list"] as const,
@@ -52,6 +59,39 @@ export const agentThreadQuery = (api: ApiClient, agentId: string) =>
     queryKey: queryKeys.agentThread(agentId),
     queryFn: () => api.agentThread(agentId),
     staleTime: Infinity,
+  });
+
+/** An agent's chats, a page at a time (UX.13). */
+export const agentThreadsQuery = (api: ApiClient, agentId: string, q?: string) =>
+  infiniteQueryOptions({
+    queryKey: queryKeys.agentThreads(agentId, q),
+    queryFn: ({ pageParam }) =>
+      api.agentThreads(agentId, { q, limit: 30, ...(pageParam ? { cursor: pageParam } : {}) }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (page) => page.nextCursor,
+  });
+
+export const threadQuery = (api: ApiClient, id: string) =>
+  queryOptions({ queryKey: queryKeys.thread(id), queryFn: () => api.getThread(id) });
+
+export const agentStatsQuery = (api: ApiClient) =>
+  queryOptions({
+    queryKey: queryKeys.agentStats,
+    queryFn: async () => (await api.agentStats()).items,
+  });
+
+export const memoriesQuery = (api: ApiClient, filter: MemoryFilter) =>
+  queryOptions({
+    queryKey: queryKeys.memories(filter),
+    queryFn: async () => (await api.listMemories(filter)).items,
+  });
+
+/** Today's model requests; refreshed each minute while shown (UX.11). */
+export const usageQuery = (api: ApiClient) =>
+  queryOptions({
+    queryKey: queryKeys.usage,
+    queryFn: () => api.usageToday(),
+    refetchInterval: 60_000,
   });
 
 export const messagesQuery = (api: ApiClient, threadId: string) =>

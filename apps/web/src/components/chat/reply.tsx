@@ -8,6 +8,8 @@ import {
   CircleSlash,
   Copy,
   Download,
+  Lightbulb,
+  Play,
   RotateCcw,
   X,
 } from "lucide-react";
@@ -140,14 +142,14 @@ export function SourceList({ sources }: { sources: readonly RunSource[] }) {
           Only pages the agent opened are numbered
         </span>
       </div>
-      <ul className="grid gap-x-3 gap-y-0.5 sm:grid-cols-2">
+      <ul className="-mx-1 flex snap-x snap-mandatory gap-2 overflow-x-auto px-1 pb-1 [scrollbar-width:none] sm:grid sm:grid-cols-2 sm:gap-x-3 sm:gap-y-0.5 sm:overflow-visible sm:pb-0">
         {read.map((s) => (
-          <li key={s.url}>
+          <li key={s.url} className="w-[78%] shrink-0 snap-start sm:w-auto">
             <a
               href={s.url}
               target="_blank"
               rel="noreferrer noopener"
-              className="grid grid-cols-[18px_minmax(0,1fr)] items-center gap-2.5 rounded-[12px] px-2 py-2 text-[13.5px] outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+              className="grid grid-cols-[18px_minmax(0,1fr)] items-center gap-2.5 rounded-[12px] border px-2.5 py-2.5 text-[13.5px] outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring sm:border-0 sm:px-2 sm:py-2"
             >
               <span className="font-mono text-[11.5px] text-muted-foreground">{s.n}</span>
               <span className="truncate">
@@ -303,15 +305,83 @@ function DocumentCard({
   );
 }
 
+const BUDGET_WORDS: Record<string, string> = {
+  step_budget: "step limit",
+  token_budget: "token budget",
+  cost_budget: "cost budget",
+};
+
+/**
+ * Quiet lines under a reply (UX.14, UX.15): what the run learned, and a run
+ * that stopped at its budget, with Continue.
+ */
+function ReplyNotes({
+  agent,
+  events,
+  onContinue,
+}: {
+  agent: Agent;
+  events: readonly RunEvent[];
+  onContinue?: () => void;
+}) {
+  const learned = events.flatMap((e) => (e.type === "memory.written" ? [e.payload] : []));
+  const unconfirmed = learned.filter((m) => !m.verified).length;
+  const ended = events.find((e) => e.type === "run.ended");
+  const budget =
+    ended?.type === "run.ended" ? BUDGET_WORDS[ended.payload.stopReason ?? ""] : undefined;
+  if (learned.length === 0 && !budget) return null;
+  return (
+    <div className="flex flex-col gap-2">
+      {budget && ended?.type === "run.ended" && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[14px] border px-3.5 py-2.5 text-[13px] text-muted-foreground">
+          <span className="min-w-0 flex-1">
+            Stopped at its {budget} after {ended.payload.usage.modelCalls} model calls. The answer
+            so far is above.
+          </span>
+          {onContinue && (
+            <button
+              type="button"
+              onClick={onContinue}
+              className="flex h-8 items-center gap-1.5 rounded-full border border-input px-3 text-[13px] font-semibold text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Play className="size-3.5" aria-hidden /> Continue
+            </button>
+          )}
+        </div>
+      )}
+      {learned.length > 0 && (
+        <Link
+          to="/agents/$agentId/memory"
+          params={{ agentId: agent.id }}
+          className="flex items-center gap-2 self-start rounded-full px-1 text-[12.5px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <Lightbulb className="size-3.5" aria-hidden />
+          Learned {learned.length} thing{learned.length === 1 ? "" : "s"}
+          {unconfirmed > 0 && (
+            <span className="font-semibold text-foreground">
+              · confirm {unconfirmed === learned.length ? "before" : `${unconfirmed} before`}{" "}
+              {agent.name} uses {unconfirmed === 1 ? "it" : "them"}
+            </span>
+          )}
+          <ChevronRight className="size-3.5" aria-hidden />
+        </Link>
+      )}
+    </div>
+  );
+}
+
 export function Reply({
   message,
   agent,
   onRetry,
+  onContinue,
 }: {
   message: Message;
   agent: Agent;
   /** Ask again with the message this reply answered; absent when there is none. */
   onRetry?: () => void;
+  /** Continue a run that stopped at its budget (the latest reply only). */
+  onContinue?: () => void;
 }) {
   const ref = useRef<HTMLElement>(null);
   // Only replies on (or near) the screen load their run's steps and sources.
@@ -347,7 +417,7 @@ export function Reply({
         <div className="flex flex-col gap-3 self-start rounded-[6px_22px_22px_22px] bg-card px-4 py-3 sm:max-w-[88%]">
           <Markdown blocks={blocks} sources={sources} className="text-[15px] leading-relaxed" />
           {sources.some((s) => s.state === "read") && (
-            <div className="flex flex-wrap gap-1.5 border-t pt-2.5">
+            <div className="-mx-1 flex snap-x gap-1.5 overflow-x-auto border-t px-1 pt-2.5 [scrollbar-width:none] sm:flex-wrap sm:overflow-visible">
               {sources
                 .filter((s) => s.state === "read")
                 .map((s) => (
@@ -356,7 +426,7 @@ export function Reply({
                     href={s.url}
                     target="_blank"
                     rel="noreferrer noopener"
-                    className="flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                    className="flex h-8 shrink-0 snap-start items-center gap-1.5 rounded-full border px-3 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring sm:h-7 sm:px-2.5"
                   >
                     <span className="font-mono">{s.n}</span>
                     {s.host}
@@ -366,6 +436,8 @@ export function Reply({
           )}
         </div>
       )}
+
+      {events.data && <ReplyNotes agent={agent} events={events.data} onContinue={onContinue} />}
 
       <div className="flex items-center gap-0.5 opacity-100 transition-opacity md:opacity-0 md:group-focus-within/reply:opacity-100 md:group-hover/reply:opacity-100">
         {!doc && <CopyButton text={message.content} label="Copy the reply" />}

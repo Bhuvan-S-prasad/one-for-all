@@ -1,9 +1,12 @@
 import {
   agentListResponseSchema,
   agentSchema,
+  agentStatsListSchema,
   errorResponseSchema,
   healthResponseSchema,
   llmSettingsSchema,
+  memoryItemSchema,
+  memoryListSchema,
   messagePageSchema,
   runEventListSchema,
   runPageSchema,
@@ -12,13 +15,18 @@ import {
   sessionResponseSchema,
   setupStatusSchema,
   threadSchema,
+  threadSummaryPageSchema,
+  usageTodaySchema,
   type Agent,
   type AgentListResponse,
+  type AgentStatsList,
   type CreateAgentInput,
   type FirstRunSetupRequest,
   type HealthResponse,
   type LlmSettings,
   type LoginRequest,
+  type MemoryItem,
+  type MemoryList,
   type MessagePage,
   type Run,
   type RunEventList,
@@ -28,7 +36,10 @@ import {
   type SessionResponse,
   type SetupStatus,
   type Thread,
+  type ThreadSummaryPage,
   type UpdateAgentRequest,
+  type UpdateThreadRequest,
+  type UsageToday,
 } from "@ofa/contracts";
 import type { ErrorCode } from "@ofa/core";
 import type { z } from "zod";
@@ -73,8 +84,16 @@ export interface RunFilter {
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
+/** Memory review filters (UX.14). */
+export interface MemoryFilter {
+  readonly agentId?: string;
+  readonly runId?: string;
+  /** `false`: only facts waiting to be confirmed. */
+  readonly verified?: boolean;
+}
+
 /** `?a=1&b=2` from defined values only. */
-function query(params: Record<string, string | number | undefined>): string {
+function query(params: Record<string, string | number | boolean | undefined>): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined) search.set(key, String(value));
@@ -169,11 +188,30 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request("POST", "/api/agents", agentSchema, input),
     updateAgent: (id: string, patch: UpdateAgentRequest): Promise<Agent> =>
       request("PATCH", `/api/agents/${encodeURIComponent(id)}`, agentSchema, patch),
-    /** The person's direct thread with an agent, created on first use. */
+    /** The person's current chat with an agent, created on first use. */
     agentThread: (id: string): Promise<Thread> =>
       request("GET", `/api/agents/${encodeURIComponent(id)}/thread`, threadSchema),
+    /** The person's chats with an agent, most recent first (UX.13). */
+    agentThreads: (
+      id: string,
+      page: { q?: string; limit?: number; cursor?: string } = {},
+    ): Promise<ThreadSummaryPage> =>
+      request(
+        "GET",
+        `/api/agents/${encodeURIComponent(id)}/threads${query(page)}`,
+        threadSummaryPageSchema,
+      ),
+    /** Start a new chat with an agent (an empty current chat is reused). */
+    newThread: (id: string): Promise<Thread> =>
+      request("POST", `/api/agents/${encodeURIComponent(id)}/threads`, threadSchema),
+    agentStats: (): Promise<AgentStatsList> =>
+      request("GET", "/api/agents/stats", agentStatsListSchema),
 
     // ── Threads ────────────────────────────────────────────────────────────
+    getThread: (id: string): Promise<Thread> =>
+      request("GET", `/api/threads/${encodeURIComponent(id)}`, threadSchema),
+    updateThread: (id: string, patch: UpdateThreadRequest): Promise<Thread> =>
+      request("PATCH", `/api/threads/${encodeURIComponent(id)}`, threadSchema, patch),
     listMessages: (
       threadId: string,
       page: { limit?: number; cursor?: string } = {},
@@ -210,9 +248,21 @@ export function createApiClient(options: ApiClientOptions = {}) {
       ),
     stopRun: (id: string): Promise<Run> =>
       request("POST", `/api/runs/${encodeURIComponent(id)}/stop`, runSchema),
+    /** Ask again: the run's message, in the same chat, as a new run (UX.12). */
+    retryRun: (id: string): Promise<SendMessageResponse> =>
+      request("POST", `/api/runs/${encodeURIComponent(id)}/retry`, sendMessageResponseSchema),
+
+    // ── Memory (UX.14) ─────────────────────────────────────────────────────
+    listMemories: (filter: MemoryFilter = {}): Promise<MemoryList> =>
+      request("GET", `/api/memories${query({ ...filter })}`, memoryListSchema),
+    confirmMemory: (id: string): Promise<MemoryItem> =>
+      request("POST", `/api/memories/${encodeURIComponent(id)}/confirm`, memoryItemSchema),
+    forgetMemory: (id: string): Promise<void> =>
+      request("DELETE", `/api/memories/${encodeURIComponent(id)}`, null),
 
     // ── Settings ───────────────────────────────────────────────────────────
     llmSettings: (): Promise<LlmSettings> => request("GET", "/api/settings/llm", llmSettingsSchema),
+    usageToday: (): Promise<UsageToday> => request("GET", "/api/settings/usage", usageTodaySchema),
     saveLlmKey: (apiKey: string): Promise<LlmSettings> =>
       request("PUT", "/api/settings/llm/key", llmSettingsSchema, { apiKey }),
     deleteLlmKey: (): Promise<LlmSettings> =>

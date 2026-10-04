@@ -12,6 +12,7 @@ import { requestContext } from "./middleware/request-context";
 import { requireSession, requireTenant } from "./middleware/session";
 import { agentRoutes } from "./routes/agents";
 import { healthRoutes } from "./routes/health";
+import { memoryRoutes } from "./routes/memories";
 import { runRoutes } from "./routes/runs";
 import { sessionRoutes } from "./routes/session";
 import { settingsRoutes } from "./routes/settings";
@@ -86,6 +87,7 @@ export function createApp(container: Container): App {
   app.route("/api/agents", agentRoutes(container));
   app.route("/api/threads", threadRoutes(container));
   app.route("/api/runs", runRoutes(container));
+  app.route("/api/memories", memoryRoutes(container));
   app.route("/api/settings", settingsRoutes(container));
   app.get(
     "/api/ws",

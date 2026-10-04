@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   inlineText,
   isDocument,
+  leadingHeading,
   linksIn,
   outline,
   parseInline,
   parseMarkdown,
+  previewText,
   safeHref,
   type Block,
 } from "./markdown";
@@ -131,5 +133,20 @@ describe("layout helpers", () => {
     expect(safeHref("javascript:alert(1)")).toBeNull();
     expect(safeHref("/relative")).toBeNull();
     expect(safeHref("data:text/html,hi")).toBeNull();
+  });
+});
+
+describe("previewText and leadingHeading", () => {
+  it("strips Markdown down to readable text", () => {
+    expect(
+      previewText(
+        "## Five pillars\n\n- **Context**: what the model sees ([notes](https://a.example))\n- `Tools`\n\n| a | b |\n|---|---|\n| 1 | 2 |",
+      ),
+    ).toBe("Five pillars Context : what the model sees (notes) Tools a b 1 2");
+  });
+
+  it("finds a heading only when the reply opens with it", () => {
+    expect(leadingHeading("# Harness engineering\n\nBody")).toBe("Harness engineering");
+    expect(leadingHeading("Intro first.\n\n## Later")).toBeNull();
   });
 });

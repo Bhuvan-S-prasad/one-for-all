@@ -21,6 +21,8 @@ import { Route as AppAgentsIndexRouteImport } from './routes/_app/agents.index'
 import { Route as AppAgentsNewRouteImport } from './routes/_app/agents.new'
 import { Route as AppAgentsAgentIdIndexRouteImport } from './routes/_app/agents.$agentId.index'
 import { Route as AppAgentsAgentIdEditRouteImport } from './routes/_app/agents.$agentId.edit'
+import { Route as AppAgentsAgentIdHistoryRouteImport } from './routes/_app/agents.$agentId.history'
+import { Route as AppAgentsAgentIdMemoryRouteImport } from './routes/_app/agents.$agentId.memory'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -81,6 +83,16 @@ const AppAgentsAgentIdEditRoute = AppAgentsAgentIdEditRouteImport.update({
   path: '/agents/$agentId/edit',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAgentsAgentIdHistoryRoute = AppAgentsAgentIdHistoryRouteImport.update({
+  id: '/agents/$agentId/history',
+  path: '/agents/$agentId/history',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAgentsAgentIdMemoryRoute = AppAgentsAgentIdMemoryRouteImport.update({
+  id: '/agents/$agentId/memory',
+  path: '/agents/$agentId/memory',
+  getParentRoute: () => AppRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
@@ -93,6 +105,8 @@ export interface FileRoutesByFullPath {
   '/agents/new': typeof AppAgentsNewRoute
   '/agents/': typeof AppAgentsIndexRoute
   '/agents/$agentId/edit': typeof AppAgentsAgentIdEditRoute
+  '/agents/$agentId/history': typeof AppAgentsAgentIdHistoryRoute
+  '/agents/$agentId/memory': typeof AppAgentsAgentIdMemoryRoute
   '/agents/$agentId/': typeof AppAgentsAgentIdIndexRoute
 }
 export interface FileRoutesByTo {
@@ -106,6 +120,8 @@ export interface FileRoutesByTo {
   '/agents/new': typeof AppAgentsNewRoute
   '/agents': typeof AppAgentsIndexRoute
   '/agents/$agentId/edit': typeof AppAgentsAgentIdEditRoute
+  '/agents/$agentId/history': typeof AppAgentsAgentIdHistoryRoute
+  '/agents/$agentId/memory': typeof AppAgentsAgentIdMemoryRoute
   '/agents/$agentId': typeof AppAgentsAgentIdIndexRoute
 }
 export interface FileRoutesById {
@@ -121,6 +137,8 @@ export interface FileRoutesById {
   '/_app/agents/new': typeof AppAgentsNewRoute
   '/_app/agents/': typeof AppAgentsIndexRoute
   '/_app/agents/$agentId/edit': typeof AppAgentsAgentIdEditRoute
+  '/_app/agents/$agentId/history': typeof AppAgentsAgentIdHistoryRoute
+  '/_app/agents/$agentId/memory': typeof AppAgentsAgentIdMemoryRoute
   '/_app/agents/$agentId/': typeof AppAgentsAgentIdIndexRoute
 }
 export interface FileRouteTypes {
@@ -136,6 +154,8 @@ export interface FileRouteTypes {
     | '/agents/new'
     | '/agents/'
     | '/agents/$agentId/edit'
+    | '/agents/$agentId/history'
+    | '/agents/$agentId/memory'
     | '/agents/$agentId/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -149,6 +169,8 @@ export interface FileRouteTypes {
     | '/agents/new'
     | '/agents'
     | '/agents/$agentId/edit'
+    | '/agents/$agentId/history'
+    | '/agents/$agentId/memory'
     | '/agents/$agentId'
   id:
     | '__root__'
@@ -163,6 +185,8 @@ export interface FileRouteTypes {
     | '/_app/agents/new'
     | '/_app/agents/'
     | '/_app/agents/$agentId/edit'
+    | '/_app/agents/$agentId/history'
+    | '/_app/agents/$agentId/memory'
     | '/_app/agents/$agentId/'
   fileRoutesById: FileRoutesById
 }
@@ -258,6 +282,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAgentsAgentIdEditRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/agents/$agentId/history': {
+      id: '/_app/agents/$agentId/history'
+      path: '/agents/$agentId/history'
+      fullPath: '/agents/$agentId/history'
+      preLoaderRoute: typeof AppAgentsAgentIdHistoryRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/agents/$agentId/memory': {
+      id: '/_app/agents/$agentId/memory'
+      path: '/agents/$agentId/memory'
+      fullPath: '/agents/$agentId/memory'
+      preLoaderRoute: typeof AppAgentsAgentIdMemoryRouteImport
+      parentRoute: typeof AppRoute
+    }
   }
 }
 
@@ -270,6 +308,8 @@ interface AppRouteChildren {
   AppAgentsNewRoute: typeof AppAgentsNewRoute
   AppAgentsIndexRoute: typeof AppAgentsIndexRoute
   AppAgentsAgentIdEditRoute: typeof AppAgentsAgentIdEditRoute
+  AppAgentsAgentIdHistoryRoute: typeof AppAgentsAgentIdHistoryRoute
+  AppAgentsAgentIdMemoryRoute: typeof AppAgentsAgentIdMemoryRoute
   AppAgentsAgentIdIndexRoute: typeof AppAgentsAgentIdIndexRoute
 }
 
@@ -282,6 +322,8 @@ const AppRouteChildren: AppRouteChildren = {
   AppAgentsNewRoute: AppAgentsNewRoute,
   AppAgentsIndexRoute: AppAgentsIndexRoute,
   AppAgentsAgentIdEditRoute: AppAgentsAgentIdEditRoute,
+  AppAgentsAgentIdHistoryRoute: AppAgentsAgentIdHistoryRoute,
+  AppAgentsAgentIdMemoryRoute: AppAgentsAgentIdMemoryRoute,
   AppAgentsAgentIdIndexRoute: AppAgentsAgentIdIndexRoute,
 }
 

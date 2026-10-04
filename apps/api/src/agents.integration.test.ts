@@ -4,18 +4,23 @@ import { serve } from "@hono/node-server";
 import { loadConfig } from "@ofa/config";
 import {
   agentSchema,
+  agentStatsListSchema,
   llmSettingsSchema,
+  memoryItemSchema,
+  memoryListSchema,
   realtimeMessageSchema,
   runSchema,
   sendMessageResponseSchema,
   threadSchema,
+  threadSummaryPageSchema,
+  usageTodaySchema,
   type CreateAgentInput,
   type MessageReceivedEvent,
   type RealtimeMessage,
   type RunCancelledEvent,
 } from "@ofa/contracts";
-import { asId, type RunId, type TenantContext } from "@ofa/core";
-import { loadRootEnv, withDatabaseName } from "@ofa/db";
+import { asId, type AgentId, type RunId, type TenantContext } from "@ofa/core";
+import { insertMemory, loadRootEnv, withDatabaseName } from "@ofa/db";
 import { createMemoryEventBus } from "@ofa/events";
 import type { RunDispatcher } from "@ofa/orchestrator";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -248,6 +253,118 @@ describe.skipIf(!hasDb)("M2 API (integration)", async () => {
     expect(res.status).toBe(409);
     expect(started).toHaveLength(1);
     await send("PATCH", `/api/agents/${agentId}`, { status: "active" });
+  });
+
+  let retryRunId = "";
+  it("tries a finished run again with the same message in the same chat", async () => {
+    expect((await send("POST", `/api/runs/${runId}/retry`)).status).toBe(409); // Still queued.
+    await container.runs.update(tenant(), asId<RunId>(runId), {
+      status: "failed",
+      error: { code: "model_failed", message: "The model failed" },
+      endedAt: new Date(),
+    });
+    const res = await send("POST", `/api/runs/${runId}/retry`);
+    expect(res.status).toBe(201);
+    const { message, run } = sendMessageResponseSchema.parse(await res.json());
+    expect(message).toMatchObject({ threadId, content: "What is the capital of Australia?" });
+    expect(run).toMatchObject({ status: "queued", threadId });
+    expect(run!.id).not.toBe(runId);
+    expect(started.at(-1)).toMatchObject({ runId: run!.id, threadId });
+    retryRunId = run!.id;
+  });
+
+  it("starts new chats, lists them most recent first, searches and archives them", async () => {
+    const created = threadSchema.parse(
+      await (await send("POST", `/api/agents/${agentId}/threads`)).json(),
+    );
+    expect(created.id).not.toBe(threadId);
+    // An empty current chat is reused rather than piling up.
+    const again = threadSchema.parse(
+      await (await send("POST", `/api/agents/${agentId}/threads`)).json(),
+    );
+    expect(again.id).toBe(created.id);
+    const current = threadSchema.parse(await (await get(`/api/agents/${agentId}/thread`)).json());
+    expect(current.id).toBe(created.id);
+
+    const list = async (query = "") =>
+      threadSummaryPageSchema.parse(
+        await (await get(`/api/agents/${agentId}/threads${query}`)).json(),
+      ).items;
+    expect((await list()).map((t) => [t.id, t.preview])).toEqual([
+      [created.id, null],
+      [threadId, "What is the capital of Australia?"],
+    ]);
+    expect((await list("?q=australia")).map((t) => t.id)).toEqual([threadId]);
+
+    const archived = await send("PATCH", `/api/threads/${threadId}`, { archived: true });
+    expect(threadSchema.parse(await archived.json()).archivedAt).not.toBeNull();
+    expect((await list()).map((t) => t.id)).toEqual([created.id]);
+    await send("PATCH", `/api/threads/${threadId}`, { archived: false });
+    // Archiving and bringing back keep the order: the new chat stays current.
+    expect((await list()).map((t) => t.id)).toEqual([created.id, threadId]);
+    expect(threadSchema.parse(await (await get(`/api/agents/${agentId}/thread`)).json()).id).toBe(
+      created.id,
+    );
+    expect((await send("PATCH", `/api/threads/${threadId}`, {})).status).toBe(422);
+  });
+
+  it("lists what an agent learned, confirms an unverified fact and forgets one", async () => {
+    const ctx = { ...tenant(), agentId: asId<AgentId>(agentId) };
+    const kept = await insertMemory(container.db, ctx, {
+      scope: "agent",
+      kind: "preference",
+      content: "Avery prefers short answers",
+      verified: true,
+    });
+    const doubtful = await insertMemory(container.db, ctx, {
+      scope: "agent",
+      kind: "fact",
+      content: "Canberra has 2 million people",
+      verified: false,
+    });
+    const items = async (query: string) =>
+      memoryListSchema.parse(await (await get(`/api/memories?${query}`)).json()).items;
+    expect((await items(`agentId=${agentId}`)).map((m) => m.id).sort()).toEqual(
+      [kept.id, doubtful.id].sort(),
+    );
+    expect((await items("verified=false")).map((m) => m.id)).toEqual([doubtful.id]);
+
+    const confirmed = await send("POST", `/api/memories/${doubtful.id}/confirm`);
+    expect(memoryItemSchema.parse(await confirmed.json()).verified).toBe(true);
+    expect(await items("verified=false")).toEqual([]);
+
+    expect((await send("DELETE", `/api/memories/${kept.id}`)).status).toBe(204);
+    expect((await send("DELETE", `/api/memories/${kept.id}`)).status).toBe(404);
+    expect((await get("/api/memories?verified=maybe")).status).toBe(422);
+  });
+
+  it("counts today's model requests against the daily quota, and runs per agent", async () => {
+    // A finished run's log is closed, so the call is logged on the open retry.
+    await container.runs.append(tenant(), asId<RunId>(retryRunId), [
+      {
+        key: "model-1",
+        type: "model.called",
+        payload: {
+          provider: "openrouter",
+          model: "meta-llama/llama-3.3-70b-instruct:free",
+          tier: "fast",
+          inputTokens: 10,
+          outputTokens: 5,
+          costUsd: 0,
+          durationMs: 100,
+          finishReason: "stop",
+          toolCalls: 0,
+        },
+      },
+    ]);
+    const usage = usageTodaySchema.parse(await (await get("/api/settings/usage")).json());
+    expect(usage).toMatchObject({ requests: 1, dailyLimit: 1000, perMinute: 20 });
+    expect(Date.parse(usage.resetsAt) - Date.parse(usage.since)).toBe(86_400_000);
+
+    const stats = agentStatsListSchema.parse(await (await get("/api/agents/stats")).json());
+    expect(stats.items).toEqual([
+      expect.objectContaining({ agentId, runsThisWeek: 2, lastResult: null }),
+    ]);
   });
 
   it("stores the model key encrypted and only ever shows its last four characters", async () => {

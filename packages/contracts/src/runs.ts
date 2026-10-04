@@ -118,7 +118,7 @@ const RUN_EVENT_PAYLOADS = {
     provider: z.string().max(50),
     model: modelName,
     tier: modelTierSchema,
-    // Every template the call used, joined with "+" (e.g. "platform.rules@2+agent.identity@1+…").
+    // Every template the call used, joined with "+" (e.g. "platform.rules@3+agent.identity@1+…").
     promptVersion: z.string().max(200).optional(),
     inputTokens: count,
     outputTokens: count,

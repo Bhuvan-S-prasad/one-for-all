@@ -318,7 +318,7 @@ describe("context assembly", () => {
     expect(system).toContain("Be brief");
     expect(system).toContain("Prefers short answers");
     expect(out.promptVersion).toBe(
-      "platform.rules@2+agent.identity@1+agent.voice@1+harness.task@1",
+      "platform.rules@3+agent.identity@1+agent.voice@1+harness.task@1",
     );
     expect(system).toContain("The request you are working on:\nHi");
   });

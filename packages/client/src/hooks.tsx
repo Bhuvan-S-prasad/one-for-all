@@ -5,17 +5,23 @@ import type {
   LoginRequest,
   Message,
   Run,
+  SendMessageResponse,
+  Thread,
   UpdateAgentRequest,
+  UpdateThreadRequest,
 } from "@ofa/contracts";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import type { ApiClient, RunFilter } from "./api-client";
+import type { ApiClient, MemoryFilter, RunFilter } from "./api-client";
 import {
   agentQuery,
   agentsQuery,
+  agentStatsQuery,
   agentThreadQuery,
+  agentThreadsQuery,
   healthQuery,
   llmSettingsQuery,
+  memoriesQuery,
   messagesQuery,
   queryKeys,
   runEventsQuery,
@@ -24,6 +30,8 @@ import {
   runsQuery,
   sessionQuery,
   setupStatusQuery,
+  threadQuery,
+  usageQuery,
 } from "./query";
 import { connectRealtime } from "./realtime";
 
@@ -144,9 +152,87 @@ export function useUpdateAgent(id: string) {
 
 // ── Chat ─────────────────────────────────────────────────────────────────────
 
-/** The person's direct thread with an agent and its messages. */
+/** The person's current chat with an agent. */
 export function useAgentThread(agentId: string) {
   return useQuery(agentThreadQuery(useApiClient(), agentId));
+}
+
+/** A chat by ID when one is picked from the history, else the current chat (UX.13). */
+export function useChatThread(agentId: string, threadId: string | undefined) {
+  const api = useApiClient();
+  const current = useQuery({ ...agentThreadQuery(api, agentId), enabled: !threadId });
+  const picked = useQuery({ ...threadQuery(api, threadId ?? ""), enabled: !!threadId });
+  return threadId ? picked : current;
+}
+
+/** An agent's chats, most recent first, optionally matching `q`. */
+export function useAgentThreads(agentId: string, q?: string) {
+  return useInfiniteQuery(agentThreadsQuery(useApiClient(), agentId, q || undefined));
+}
+
+/** Start a new chat; it becomes the agent's current chat. */
+export function useNewThread(agentId: string) {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.newThread(agentId),
+    onSuccess: (thread) => {
+      queryClient.setQueryData(queryKeys.agentThread(agentId), thread);
+      queryClient.setQueryData(queryKeys.thread(thread.id), thread);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.threadLists });
+    },
+  });
+}
+
+/** Rename, archive or bring back a chat. */
+export function useUpdateThread() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: UpdateThreadRequest }) =>
+      api.updateThread(id, patch),
+    onSuccess: (thread: Thread) => {
+      queryClient.setQueryData(queryKeys.thread(thread.id), thread);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.threadLists });
+      // The current chat may have changed (archived, or brought back).
+      for (const member of thread.members) {
+        if (member.type === "agent") {
+          void queryClient.invalidateQueries({ queryKey: queryKeys.agentThread(member.agentId) });
+        }
+      }
+    },
+  });
+}
+
+/** Put a sent message and the run it started into the cache. */
+function rememberTurn(
+  queryClient: ReturnType<typeof useQueryClient>,
+  { message, run }: SendMessageResponse,
+) {
+  queryClient.setQueryData<Message[]>(queryKeys.messages(message.threadId), (list) =>
+    list && !list.some((m) => m.id === message.id) ? [...list, message] : list,
+  );
+  if (run) {
+    queryClient.setQueryData(queryKeys.run(run.id), run);
+    void queryClient.invalidateQueries({ queryKey: queryKeys.runLists });
+  }
+  void queryClient.invalidateQueries({ queryKey: queryKeys.threadLists });
+}
+
+/**
+ * Ask an agent from anywhere (Home, UX.11): the message goes to its current
+ * chat, which then opens with the run already going.
+ */
+export function useAskAgent() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ agentId, content }: { agentId: string; content: string }) => {
+      const thread = await queryClient.fetchQuery(agentThreadQuery(api, agentId));
+      return api.sendMessage(thread.id, content);
+    },
+    onSuccess: (turn) => rememberTurn(queryClient, turn),
+  });
 }
 
 export function useThreadMessages(threadId: string | undefined) {
@@ -162,15 +248,7 @@ export function useSendMessage(threadId: string | undefined) {
       if (!threadId) throw new Error("No thread yet");
       return api.sendMessage(threadId, content);
     },
-    onSuccess: ({ message, run }) => {
-      queryClient.setQueryData<Message[]>(queryKeys.messages(message.threadId), (list) =>
-        list && !list.some((m) => m.id === message.id) ? [...list, message] : list,
-      );
-      if (run) {
-        queryClient.setQueryData(queryKeys.run(run.id), run);
-        void queryClient.invalidateQueries({ queryKey: queryKeys.runLists });
-      }
-    },
+    onSuccess: (turn) => rememberTurn(queryClient, turn),
   });
 }
 
@@ -205,7 +283,51 @@ export function useStopRun() {
   });
 }
 
+/** Ask again: the run's message, in its chat, as a new run. */
+export function useRetryRun() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.retryRun(id),
+    onSuccess: (turn) => rememberTurn(queryClient, turn),
+  });
+}
+
+/** Per agent: runs this week and the last good result (UX.12). */
+export function useAgentStats() {
+  return useQuery(agentStatsQuery(useApiClient()));
+}
+
+// ── Memory (UX.14) ───────────────────────────────────────────────────────────
+
+export function useMemories(filter: MemoryFilter, options: { enabled?: boolean } = {}) {
+  return useQuery({ ...memoriesQuery(useApiClient(), filter), enabled: options.enabled ?? true });
+}
+
+export function useConfirmMemory() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.confirmMemory(id),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.memoryLists }),
+  });
+}
+
+export function useForgetMemory() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.forgetMemory(id),
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: queryKeys.memoryLists }),
+  });
+}
+
 // ── Settings ─────────────────────────────────────────────────────────────────
+
+/** Model requests today against the daily free quota (UX.11). */
+export function useUsageToday() {
+  return useQuery(usageQuery(useApiClient()));
+}
 
 export function useLlmSettings() {
   return useQuery(llmSettingsQuery(useApiClient()));

@@ -2,7 +2,8 @@ import {
   MOOD_LABELS,
   moodFor,
   useAgent,
-  useAgentThread,
+  useChatThread,
+  useNewThread,
   useRun,
   useRuns,
   useSendMessage,
@@ -16,12 +17,14 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowUp,
+  History,
   PanelRight,
   Pause,
   Play,
   RotateCcw,
   Settings2,
   Square,
+  SquarePen,
 } from "lucide-react";
 import {
   useCallback,
@@ -32,14 +35,17 @@ import {
   type FormEvent,
   type KeyboardEvent,
 } from "react";
+import { AgentTabs } from "@/components/agent-tabs";
 import { LiveRun, WorkingRing } from "@/components/chat/live-run";
 import { Reply } from "@/components/chat/reply";
 import { RunPanel } from "@/components/chat/run-panel";
 import { Familiar } from "@/components/familiar";
 import { ErrorAlert } from "@/components/ui/alert";
+import { starters } from "@/lib/agents";
 import { duration, shortTime } from "@/lib/format";
 import { runPhase } from "@/lib/run-steps";
 import { isTyping, useStoredFlag } from "@/lib/shortcuts";
+import { toast } from "@/lib/toast";
 import { useNow } from "@/lib/use-now";
 import { cn } from "@/lib/utils";
 
@@ -49,8 +55,15 @@ import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_app/agents/$agentId/")({
   staticData: { title: "Chat", fullBleed: true },
-  validateSearch: (search: Record<string, unknown>): { draft?: string } =>
-    typeof search.draft === "string" && search.draft ? { draft: search.draft.slice(0, 4_000) } : {},
+  // `thread`: a chat picked from the history (UX.13); none means the current one.
+  validateSearch: (search: Record<string, unknown>): { draft?: string; thread?: string } => ({
+    ...(typeof search.draft === "string" && search.draft
+      ? { draft: search.draft.slice(0, 4_000) }
+      : {}),
+    ...(typeof search.thread === "string" && /^[\w-]{1,64}$/.test(search.thread)
+      ? { thread: search.thread }
+      : {}),
+  }),
   component: AgentChatPage,
 });
 
@@ -92,20 +105,30 @@ function ChatSkeleton() {
 
 function Chat({ agent }: { agent: Agent }) {
   const navigate = useNavigate();
-  const { draft } = Route.useSearch();
-  const { data: thread } = useAgentThread(agent.id);
+  const { draft, thread: threadId } = Route.useSearch();
+  const { data: thread, error: threadError } = useChatThread(agent.id, threadId);
   const { data: messages, isPending: loadingMessages } = useThreadMessages(thread?.id);
   const { data: runs } = useRuns(agent.id);
+  // The run shown in the thread is this chat's latest; the agent may be busy
+  // in another chat, which the header and a notice say.
   const latest = runs?.[0];
-  const { run: liveRun, events } = useRun(latest?.id);
-  const run: Run | undefined = liveRun.data ?? latest;
+  const threadRun = thread ? runs?.find((r) => r.threadId === thread.id) : undefined;
+  const { run: liveRun, events } = useRun(threadRun?.id);
+  const run: Run | undefined = liveRun.data ?? threadRun;
   const active = !!run && ACTIVE.has(run.status);
+  const busyElsewhere = !!latest && latest.id !== run?.id && ACTIVE.has(latest.status);
   const now = useNow(active);
   const lastEvent = events.data?.at(-1) ?? null;
-  const mood = moodFor({ agentStatus: agent.status, run, lastEvent, now });
+  const mood = moodFor({
+    agentStatus: agent.status,
+    run: active || !busyElsewhere ? run : latest,
+    lastEvent: active ? lastEvent : null,
+    now,
+  });
   const send = useSendMessage(thread?.id);
   const stop = useStopRun();
   const update = useUpdateAgent(agent.id);
+  const newThread = useNewThread(agent.id);
   const [panelOpen, setPanelOpen] = useStoredFlag("ofa-run-panel", true);
   const celebrate = useJustFinished(run);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -114,23 +137,56 @@ function Chat({ agent }: { agent: Agent }) {
       void navigate({
         to: "/agents/$agentId",
         params: { agentId: agent.id },
-        search: {},
+        search: threadId ? { thread: threadId } : {},
         replace: true,
       }),
-    [navigate, agent.id],
+    [navigate, agent.id, threadId],
   );
 
   const stopRun = useCallback(() => {
     if (run && active && !stop.isPending) stop.mutate(run.id);
   }, [run, active, stop]);
 
-  // "/" writes a message; Escape stops a working agent (unless a menu is open).
+  // A fresh chat: the old one stays in History, and old topics stay out of new tasks.
+  const startNewChat = useCallback(() => {
+    if (newThread.isPending) return;
+    newThread.mutate(undefined, {
+      onSuccess: () => {
+        void navigate({ to: "/agents/$agentId", params: { agentId: agent.id }, search: {} });
+        composerRef.current?.focus();
+      },
+      onError: (error) => toast({ message: error.message, tone: "error" }),
+    });
+  }, [newThread, navigate, agent.id]);
+
+  const togglePause = () => {
+    const before = agent.status;
+    const next = before === "active" ? "paused" : "active";
+    update.mutate(
+      { status: next },
+      {
+        onSuccess: () =>
+          toast({
+            message: next === "paused" ? `${agent.name} paused` : `${agent.name} resumed`,
+            action: { label: "Undo", onClick: () => update.mutate({ status: before }) },
+          }),
+        onError: (error) => toast({ message: error.message, tone: "error" }),
+      },
+    );
+  };
+
+  // "/" writes a message; N starts a new chat; Escape stops a working agent
+  // (unless a menu is open).
   useEffect(() => {
     const onKey = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.key === "/" && !isTyping(event.target)) {
         event.preventDefault();
         composerRef.current?.focus();
+      } else if (event.key.toLowerCase() === "n" && !isTyping(event.target)) {
+        if (document.querySelector('[role="dialog"]')) return;
+        event.preventDefault();
+        startNewChat();
       } else if (
         event.key === "Escape" &&
         active &&
@@ -142,9 +198,20 @@ function Chat({ agent }: { agent: Agent }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, stopRun]);
+  }, [active, stopRun, startNewChat]);
 
-  const sendText = (text: string) => send.mutateAsync(text).then(() => undefined);
+  const sendText = (text: string) =>
+    send.mutateAsync(text).then(() => {
+      // Writing in an older chat makes it the current one.
+      if (threadId) {
+        void navigate({
+          to: "/agents/$agentId",
+          params: { agentId: agent.id },
+          search: {},
+          replace: true,
+        });
+      }
+    });
   const visible = (messages ?? []).filter((m) => m.author.type !== "system" || m.content.trim());
   // The run that last started (or answered) has finished without a reply.
   const lastUser = [...visible].reverse().find((m) => m.author.type === "user");
@@ -152,6 +219,25 @@ function Chat({ agent }: { agent: Agent }) {
   const failedUnanswered = !!run && run.status === "failed" && !answered;
   const stoppedUnanswered = !!run && run.status === "cancelled" && !answered;
   const showPanel = panelOpen && !!run && (events.data?.length ?? 0) > 0;
+  const lastReply = [...visible].reverse().find((m) => m.author.type === "agent");
+
+  if (threadError) {
+    return (
+      <div className="p-6">
+        <ErrorAlert>
+          {threadError.message}{" "}
+          <Link
+            to="/agents/$agentId"
+            params={{ agentId: agent.id }}
+            search={{}}
+            className="underline"
+          >
+            Open the current chat
+          </Link>
+        </ErrorAlert>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full flex-col">
@@ -163,7 +249,9 @@ function Chat({ agent }: { agent: Agent }) {
         now={now}
         celebrate={celebrate}
         pausing={update.isPending}
-        onPause={() => update.mutate({ status: agent.status === "active" ? "paused" : "active" })}
+        onPause={togglePause}
+        onNewChat={startNewChat}
+        canStartNew={visible.length > 0 && !newThread.isPending}
         panelOpen={panelOpen}
         onTogglePanel={run ? () => setPanelOpen(!panelOpen) : undefined}
       />
@@ -179,8 +267,18 @@ function Chat({ agent }: { agent: Agent }) {
               const asked = previousUserMessage(visible, message);
               return asked ? () => void sendText(asked.content) : undefined;
             }}
+            continueFor={(message) =>
+              message.id === lastReply?.id && !active
+                ? () => void sendText("Please continue where you left off.")
+                : undefined
+            }
             tail={
               <>
+                {busyElsewhere && !active && (
+                  <Notice>
+                    {agent.name} is working in another chat. A message here waits its turn.
+                  </Notice>
+                )}
                 {active && run && (
                   <LiveRun
                     agent={agent}
@@ -224,7 +322,7 @@ function Chat({ agent }: { agent: Agent }) {
             resuming={update.isPending}
             onSend={sendText}
             onStop={stopRun}
-            onResume={() => update.mutate({ status: "active" })}
+            onResume={togglePause}
           />
         </div>
         {showPanel && run && (
@@ -279,6 +377,8 @@ function ChatHeader(props: {
   celebrate: boolean;
   pausing: boolean;
   onPause: () => void;
+  onNewChat: () => void;
+  canStartNew: boolean;
   panelOpen: boolean;
   onTogglePanel?: () => void;
 }) {
@@ -287,8 +387,6 @@ function ChatHeader(props: {
   const elapsed =
     active && run ? duration(props.now - Date.parse(run.startedAt ?? run.createdAt)) : null;
   const paused = agent.status !== "active";
-  const tab =
-    "flex h-16 items-center border-b-2 border-transparent px-0.5 text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:text-foreground";
 
   return (
     <header className="flex h-16 shrink-0 items-center gap-3 border-b px-3 md:gap-5 md:px-6">
@@ -334,27 +432,40 @@ function ChatHeader(props: {
         </div>
       </div>
 
-      <nav aria-label={`${agent.name}`} className="hidden h-16 items-center gap-6 md:flex">
-        <span
-          aria-current="page"
-          className={cn(tab, "border-primary font-semibold text-foreground")}
-        >
-          Chat
-        </span>
-        <Link to="/activity" search={{ agent: agent.id }} className={tab}>
-          Activity
-        </Link>
-        <Link to="/agents/$agentId/edit" params={{ agentId: agent.id }} className={tab}>
-          Settings
-        </Link>
-      </nav>
+      <AgentTabs agent={agent} current="chat" className="hidden xl:flex" />
 
       <div className="flex shrink-0 items-center gap-1">
+        <Link
+          to="/agents/$agentId/history"
+          params={{ agentId: agent.id }}
+          aria-label="History"
+          className="flex size-10 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:hidden"
+        >
+          <History className="size-[18px]" aria-hidden />
+        </Link>
+        <Link
+          to="/agents/$agentId/history"
+          params={{ agentId: agent.id }}
+          className="hidden h-10 items-center rounded-full px-3 text-sm text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:flex xl:hidden"
+        >
+          History
+        </Link>
+        <button
+          type="button"
+          onClick={props.onNewChat}
+          disabled={!props.canStartNew}
+          aria-label="New chat"
+          title="New chat (N)"
+          className="flex h-10 items-center gap-2 rounded-full px-2.5 text-sm font-semibold text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40 disabled:hover:bg-transparent md:border md:border-input md:px-3.5 md:text-foreground"
+        >
+          <SquarePen className="size-[17px]" aria-hidden />
+          <span className="hidden md:inline">New chat</span>
+        </button>
         <Link
           to="/agents/$agentId/edit"
           params={{ agentId: agent.id }}
           aria-label="Agent settings"
-          className="flex size-10 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:hidden"
+          className="flex size-10 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring xl:hidden"
         >
           <Settings2 className="size-[18px]" aria-hidden />
         </Link>
@@ -437,17 +548,6 @@ function FailedRun({ agent, run, onRetry }: { agent: Agent; run: Run; onRetry?: 
   );
 }
 
-/** Starter prompts for an empty chat, from the agent's job and tools. */
-function starters(agent: Agent): string[] {
-  const tools = new Set(agent.grants.filter((g) => g.mode !== "blocked").map((g) => g.tool));
-  const list: string[] = [];
-  if (tools.has("web.search")) list.push(`Find the latest on something for me, with sources`);
-  if (tools.has("web.read_url")) list.push("Summarise a page: paste the link here");
-  if (tools.has("remember")) list.push("Remember that I prefer short answers");
-  list.push(`What can you help me with?`);
-  return list.slice(0, 3);
-}
-
 function Thread(props: {
   agent: Agent;
   messages: readonly Message[];
@@ -457,6 +557,7 @@ function Thread(props: {
   tail: React.ReactNode;
   onStarter: (text: string) => void;
   onRetryFor: (message: Message) => (() => void) | undefined;
+  continueFor: (message: Message) => (() => void) | undefined;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLElement>(null);
@@ -560,7 +661,13 @@ function Thread(props: {
                 </span>
               </div>
             ) : m.author.type === "agent" ? (
-              <Reply key={m.id} message={m} agent={props.agent} onRetry={props.onRetryFor(m)} />
+              <Reply
+                key={m.id}
+                message={m}
+                agent={props.agent}
+                onRetry={props.onRetryFor(m)}
+                onContinue={props.continueFor(m)}
+              />
             ) : (
               <Notice key={m.id}>{m.content}</Notice>
             ),
