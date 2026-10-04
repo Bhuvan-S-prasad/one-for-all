@@ -23,6 +23,7 @@ export {
 } from "./builtins/safe-fetch";
 export {
   createSearxngProvider,
+  READ_CHUNK_CHARS,
   readUrlTool,
   webSearchTool,
   type Fetcher,

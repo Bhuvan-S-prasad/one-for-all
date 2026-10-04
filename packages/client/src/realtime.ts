@@ -41,22 +41,33 @@ export function applyRealtime(queryClient: QueryClient, message: RealtimeMessage
       return;
     }
     case "run.updated": {
-      const run = message.run;
+      // Live updates leave out the request and reply previews; keep the known ones.
+      const known = queryClient.getQueryData<Run>(queryKeys.run(message.run.id));
+      const run: Run = {
+        ...message.run,
+        request: message.run.request ?? known?.request,
+        reply: message.run.reply ?? known?.reply,
+      };
       queryClient.setQueryData<Run>(queryKeys.run(run.id), run);
-      let known = false;
+      let listed = false;
       for (const agentId of [undefined, run.agentId]) {
         queryClient.setQueryData<Run[]>(queryKeys.runs(agentId), (runs) => {
           if (!runs) return runs;
-          if (runs.some((r) => r.id === run.id)) known = true;
+          const old = runs.find((r) => r.id === run.id);
+          if (old) listed = true;
           return upsertBy(
             runs,
-            run,
+            { ...run, request: run.request ?? old?.request, reply: run.reply ?? old?.reply },
             (r) => r.id,
             (a, b) => b.createdAt.localeCompare(a.createdAt),
           );
         });
       }
-      if (!known) void queryClient.invalidateQueries({ queryKey: queryKeys.runLists });
+      if (!listed) void queryClient.invalidateQueries({ queryKey: queryKeys.runLists });
+      // Filtered Activity pages refetch when a status change can move a run between them.
+      if (known?.status !== run.status) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.runSearches });
+      }
       return;
     }
     case "message.created": {

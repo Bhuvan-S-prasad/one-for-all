@@ -239,6 +239,19 @@ export async function runAgent(
         const compacted = await steps.run(`compact-${i}`, async () => {
           const result = await compactTurns(deps.llm, ctx, summary, turns);
           if (result) {
+            const after = assembleContext(
+              {
+                today: start.today,
+                agent,
+                tools: context.tools,
+                memories: context.memories,
+                todos,
+                history: context.history,
+                summary: result.summary,
+                turns: turns.slice(result.replaced),
+              },
+              budget,
+            );
             await log([
               ...modelCallEvents(
                 `compact-${i}-model`,
@@ -246,10 +259,15 @@ export async function runAgent(
                 result.response,
                 result.promptVersion,
               ),
-              runEvent(`compact-${i}`, "run.compacted", {
-                tokensBefore: assembled.tokens.total,
-                tokensAfter: Math.round(assembled.tokens.total * 0.4),
-              }),
+              // An empty summary replaced nothing, so there is nothing to report.
+              ...(result.replaced > 0
+                ? [
+                    runEvent(`compact-${i}`, "run.compacted", {
+                      tokensBefore: assembled.tokens.total,
+                      tokensAfter: after.tokens.total,
+                    }),
+                  ]
+                : []),
             ]);
           }
           return result;

@@ -1,5 +1,5 @@
 import type { AgentProfile, MemoryRecord } from "@ofa/core";
-import type { RunResult } from "@ofa/harness";
+import type { HarnessOptions, RunResult } from "@ofa/harness";
 import type { WebFixture } from "../fixtures/web";
 
 /** What one attempt left behind: the reply, the run log and the end state. */
@@ -37,4 +37,6 @@ export interface EvalCase {
   readonly prompt: string;
   readonly web: WebFixture;
   readonly checks: readonly Check[];
+  /** Harness options for this case, e.g. a small context window to force compaction. */
+  readonly harness?: HarnessOptions;
 }

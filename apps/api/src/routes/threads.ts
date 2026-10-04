@@ -10,7 +10,7 @@ import { getAgent, getThread, listMessages, startTurn } from "@ofa/db";
 import { Hono } from "hono";
 import type { Container } from "../container";
 import { toMessage, toRun, toThread } from "../lib/mappers";
-import { readJson } from "../lib/validate";
+import { readJson, readQuery } from "../lib/validate";
 import { requireSession, requireTenant } from "../middleware/session";
 import type { AppEnv } from "../types";
 
@@ -37,7 +37,7 @@ export function threadRoutes(
     })
     .get("/:id/messages", async (c) => {
       const tenant = c.get("tenant");
-      const query = paginationQuerySchema.parse(c.req.query());
+      const query = readQuery(c, paginationQuerySchema);
       const thread = await getThread(db, tenant, c.req.param("id"));
       if (!thread) throw new NotFoundError("Thread");
       const page = await listMessages(db, tenant, thread.id, {

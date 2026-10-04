@@ -66,6 +66,17 @@ export function noMemory(name: string, pattern: RegExp): Check {
   };
 }
 
+/** The run log has an event of this type (e.g. `run.compacted`). */
+export function logged(type: string): Check {
+  return {
+    name: `logged ${type}`,
+    grade: (t) =>
+      t.events.some((e) => e.type === type)
+        ? { pass: true }
+        : { pass: false, detail: `no ${type} event` },
+  };
+}
+
 export function withinModelCalls(max: number): Check {
   return {
     name: `at most ${max} model calls`,

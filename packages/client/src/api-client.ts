@@ -23,6 +23,7 @@ import {
   type Run,
   type RunEventList,
   type RunPage,
+  type RunStatus,
   type SendMessageResponse,
   type SessionResponse,
   type SetupStatus,
@@ -60,6 +61,14 @@ export interface ApiClientOptions {
   readonly fetch?: typeof fetch;
   /** Workspace to act in; sent as `x-workspace-id`. Defaults to the first one. */
   readonly workspaceId?: () => string | undefined;
+}
+
+/** Activity filters for `listRuns` (UX.10). */
+export interface RunFilter {
+  readonly agentId?: string;
+  readonly status?: readonly RunStatus[];
+  /** Search over what was asked. */
+  readonly q?: string;
 }
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -185,9 +194,12 @@ export function createApiClient(options: ApiClientOptions = {}) {
       ),
 
     // ── Runs ───────────────────────────────────────────────────────────────
-    listRuns: (
-      filter: { agentId?: string; limit?: number; cursor?: string } = {},
-    ): Promise<RunPage> => request("GET", `/api/runs${query(filter)}`, runPageSchema),
+    listRuns: (filter: RunFilter & { limit?: number; cursor?: string } = {}): Promise<RunPage> =>
+      request(
+        "GET",
+        `/api/runs${query({ ...filter, status: filter.status?.length ? filter.status.join(",") : undefined })}`,
+        runPageSchema,
+      ),
     getRun: (id: string): Promise<Run> =>
       request("GET", `/api/runs/${encodeURIComponent(id)}`, runSchema),
     runEvents: (id: string, after?: number): Promise<RunEventList> =>

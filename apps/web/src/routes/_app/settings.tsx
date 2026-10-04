@@ -1,4 +1,4 @@
-import { useDeleteLlmKey, useLlmSettings, useSaveLlmKey } from "@ofa/client";
+import { useDeleteLlmKey, useHealth, useLlmSettings, useSaveLlmKey } from "@ofa/client";
 import { createFileRoute } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 import { ErrorAlert } from "@/components/ui/alert";
@@ -95,7 +95,20 @@ function SettingsPage() {
           </Button>
         </Card>
       </div>
+      <AboutLine />
     </div>
+  );
+}
+
+/** Version and server state, moved here from the header (UX.03). */
+function AboutLine() {
+  const health = useHealth();
+  if (!health.data) return null;
+  return (
+    <p className="px-1 font-mono text-xs text-muted-foreground">
+      One-for-All {health.data.version} · {health.data.mode} ·{" "}
+      {health.data.status === "ok" ? "server healthy" : "server degraded"}
+    </p>
   );
 }
 

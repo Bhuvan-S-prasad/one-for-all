@@ -18,6 +18,7 @@ import {
   parseFacts,
   runAgent,
   type HarnessMiddleware,
+  type HarnessOptions,
   type ScriptedReply,
 } from "./index";
 
@@ -52,7 +53,11 @@ const search: ToolDescriptor = {
   source: "builtin",
 };
 
-function setup(script: ScriptedReply[], profile: AgentProfile = agent) {
+function setup(
+  script: ScriptedReply[],
+  profile: AgentProfile = agent,
+  extra: { options?: HarnessOptions; toolText?: string } = {},
+) {
   const runtime = createMemoryRuntime();
   runtime.agents.profiles.set(profile.id, profile);
   runtime.runs.records.set(ctx.runId, {
@@ -75,7 +80,10 @@ function setup(script: ScriptedReply[], profile: AgentProfile = agent) {
   ]);
   const llm = createScriptedLLM(script);
   const tools = createFakeToolExecutor([
-    { descriptor: search, run: () => okOutcome("pgvector 0.9 was released on 2026-09-12.", true) },
+    {
+      descriptor: search,
+      run: () => okOutcome(extra.toolText ?? "pgvector 0.9 was released on 2026-09-12.", true),
+    },
   ]);
   const steps = createMemoStepRunner();
   const deps = {
@@ -85,6 +93,7 @@ function setup(script: ScriptedReply[], profile: AgentProfile = agent) {
     agents: runtime.agents,
     threads: runtime.threads,
     memory: runtime.memory,
+    ...(extra.options ? { options: extra.options } : {}),
   };
   const run = (middleware: HarnessMiddleware[] = []) =>
     runAgent({ ctx, threadId, trigger: "message" }, { ...deps, middleware }, steps);
@@ -178,6 +187,45 @@ describe("runAgent", () => {
     expect(tools.calls).toHaveLength(1);
   });
 
+  it("after compaction, keeps the notes out of the conversation and restates the request", async () => {
+    const call = (q: string) => ({ toolCalls: [{ name: "web.search", args: { query: q } }] });
+    const notes = "## Decisions made\n- Searched twice\n## Open items\n- Write the answer";
+    const { runtime, llm, run } = setup(
+      [call("a"), call("b"), { text: notes }, { text: "pgvector 0.9 came out on 2026-09-12." }],
+      agent,
+      { options: { maxContextTokens: 8_000 }, toolText: "x".repeat(12_000) },
+    );
+    const result = await run();
+    expect(result.stopReason).toBe("final_answer");
+    expect(types(runtime)).toContain("run.compacted");
+    const compacted = runtime.runs.events.find((e) => e.type === "run.compacted");
+    const { tokensBefore, tokensAfter } = compacted?.payload as Record<string, number>;
+    expect(tokensAfter).toBeLessThan(tokensBefore!);
+
+    const answerCall = llm.requests[3]!;
+    // Never disguised as something the person wrote.
+    expect(answerCall.messages.filter((m) => m.role === "user").map((m) => m.content)).toEqual([
+      "When was pgvector 0.9 released?",
+    ]);
+    const system = answerCall.messages[0]?.content ?? "";
+    expect(system).toContain("The request you are working on:\nWhen was pgvector 0.9 released?");
+    expect(system).toContain("Your private notes from earlier steps");
+    expect(system).toContain("- Searched twice");
+    expect(system.indexOf("The request")).toBeLessThan(system.indexOf("Your private notes"));
+  });
+
+  it("keeps the steps when compaction returns nothing", async () => {
+    const call = (q: string) => ({ toolCalls: [{ name: "web.search", args: { query: q } }] });
+    const { runtime, llm, run } = setup(
+      [call("a"), call("b"), { text: "" }, { text: "Done." }],
+      agent,
+      { options: { maxContextTokens: 8_000 }, toolText: "x".repeat(12_000) },
+    );
+    expect((await run()).stopReason).toBe("final_answer");
+    expect(types(runtime)).not.toContain("run.compacted");
+    expect(llm.requests[3]?.messages.filter((m) => m.role === "tool")).toHaveLength(2);
+  });
+
   it("stops a loop of identical calls", async () => {
     const same = { toolCalls: [{ name: "web.search", args: { query: "same" } }] };
     const { runtime, run } = setup([same, same, same]);
@@ -269,7 +317,10 @@ describe("context assembly", () => {
     expect(system.indexOf("One-for-All")).toBeLessThan(system.indexOf("Your name is Scout"));
     expect(system).toContain("Be brief");
     expect(system).toContain("Prefers short answers");
-    expect(out.promptVersion).toBe("platform.rules@1+agent.identity@1+agent.voice@1");
+    expect(out.promptVersion).toBe(
+      "platform.rules@2+agent.identity@1+agent.voice@1+harness.task@1",
+    );
+    expect(system).toContain("The request you are working on:\nHi");
   });
 
   it("drops the oldest history first but always keeps the latest message", () => {

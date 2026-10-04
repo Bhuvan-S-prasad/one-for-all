@@ -7,9 +7,9 @@ import type {
   Run,
   UpdateAgentRequest,
 } from "@ofa/contracts";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import type { ApiClient } from "./api-client";
+import type { ApiClient, RunFilter } from "./api-client";
 import {
   agentQuery,
   agentsQuery,
@@ -20,6 +20,7 @@ import {
   queryKeys,
   runEventsQuery,
   runQuery,
+  runSearchQuery,
   runsQuery,
   sessionQuery,
   setupStatusQuery,
@@ -177,6 +178,14 @@ export function useSendMessage(threadId: string | undefined) {
 
 export function useRuns(agentId?: string) {
   return useQuery(runsQuery(useApiClient(), agentId));
+}
+
+/** Activity: runs matching filters, newest first, loaded a page at a time. */
+export function useRunSearch(filter: RunFilter, options: { enabled?: boolean } = {}) {
+  return useInfiniteQuery({
+    ...runSearchQuery(useApiClient(), filter),
+    enabled: options.enabled ?? true,
+  });
 }
 
 /** A run and its event log, live while it is open. */

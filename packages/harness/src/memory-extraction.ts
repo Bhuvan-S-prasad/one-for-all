@@ -73,7 +73,9 @@ export async function extractMemories(input: ExtractionInput) {
     {
       tier: "fast",
       messages: [{ role: "user", content: MEMORY_EXTRACTION.render({ transcript }) }],
-      maxOutputTokens: 400,
+      // The JSON itself is short; reasoning models spend most of this
+      // thinking first, and 400 cut them off before any JSON (session 8).
+      maxOutputTokens: 1_500,
       temperature: 0,
       promptVersion: promptRef(MEMORY_EXTRACTION),
     },

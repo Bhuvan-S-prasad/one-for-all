@@ -1,7 +1,7 @@
 import type { TenantContext } from "@ofa/core";
-import { and, asc, desc, eq, gt, lt, or } from "drizzle-orm";
+import { and, asc, desc, eq, exists, gt, ilike, inArray, lt, or, sql } from "drizzle-orm";
 import type { Database } from "../client";
-import { run, runEvent } from "../schema/index";
+import { message, run, runEvent } from "../schema/index";
 import { withTenant } from "../tenant";
 
 // Runs and their event logs, read by the API for Activity (M2.19).
@@ -15,11 +15,27 @@ export async function getRun(db: Database, ctx: TenantContext, id: string) {
   return row ?? null;
 }
 
-/** Newest runs first, optionally for one agent. */
+type RunStatusValue = (typeof run.$inferSelect)["status"];
+
+/** `%`, `_` and `\` match literally in a search. */
+function likePattern(text: string): string {
+  return `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+}
+
+/**
+ * Newest runs first. Filters: one agent, some statuses, and `search` over what
+ * was asked (the message that started the run).
+ */
 export async function listRuns(
   db: Database,
   ctx: TenantContext,
-  options: { limit: number; agentId?: string; before?: string },
+  options: {
+    limit: number;
+    agentId?: string;
+    before?: string;
+    statuses?: readonly RunStatusValue[];
+    search?: string;
+  },
 ) {
   return withTenant(db, ctx, async (tx) => {
     let pivot: { createdAt: Date; id: string } | undefined;
@@ -36,6 +52,21 @@ export async function listRuns(
       .where(
         and(
           options.agentId ? eq(run.agentId, options.agentId) : undefined,
+          options.statuses?.length ? inArray(run.status, [...options.statuses]) : undefined,
+          options.search
+            ? exists(
+                tx
+                  .select({ one: sql`1` })
+                  .from(message)
+                  .where(
+                    and(
+                      eq(message.runId, run.id),
+                      eq(message.authorType, "user"),
+                      ilike(message.content, likePattern(options.search)),
+                    ),
+                  ),
+              )
+            : undefined,
           pivot
             ? or(
                 lt(run.createdAt, pivot.createdAt),
@@ -50,6 +81,41 @@ export async function listRuns(
     const items = rows.slice(0, options.limit);
     return { items, nextCursor: more ? (items.at(-1)?.id ?? null) : null };
   });
+}
+
+/**
+ * The start of what was asked and of the reply, per run (UX.10): the user
+ * message that started each run and the agent message it posted.
+ */
+export async function runPreviews(
+  db: Database,
+  ctx: TenantContext,
+  runIds: readonly string[],
+  chars: number,
+): Promise<Map<string, { request: string | null; reply: string | null }>> {
+  const previews = new Map<string, { request: string | null; reply: string | null }>();
+  if (runIds.length === 0) return previews;
+  const rows = await withTenant(db, ctx, (tx) =>
+    tx
+      .select({
+        runId: message.runId,
+        authorType: message.authorType,
+        text: sql<string>`left(${message.content}, ${chars})`,
+      })
+      .from(message)
+      .where(
+        and(inArray(message.runId, [...runIds]), inArray(message.authorType, ["user", "agent"])),
+      )
+      .orderBy(asc(message.createdAt)),
+  );
+  for (const row of rows) {
+    if (!row.runId) continue;
+    const entry = previews.get(row.runId) ?? { request: null, reply: null };
+    if (row.authorType === "user") entry.request ??= row.text;
+    else entry.reply ??= row.text;
+    previews.set(row.runId, entry);
+  }
+  return previews;
 }
 
 /** A run's events in order, optionally only those after `afterSeq`. */

@@ -1,4 +1,10 @@
-export { ApiError, createApiClient, type ApiClient, type ApiClientOptions } from "./api-client";
+export {
+  ApiError,
+  createApiClient,
+  type ApiClient,
+  type ApiClientOptions,
+  type RunFilter,
+} from "./api-client";
 export {
   ApiClientProvider,
   useAgent,
@@ -15,6 +21,7 @@ export {
   useRealtimeSync,
   useRun,
   useRuns,
+  useRunSearch,
   useSaveLlmKey,
   useSendMessage,
   useSession,

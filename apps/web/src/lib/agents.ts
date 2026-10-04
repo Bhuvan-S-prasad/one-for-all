@@ -42,6 +42,25 @@ export function useAgentMoods(
   return map;
 }
 
+export const BUSY_MOODS: ReadonlySet<FamiliarMood> = new Set(["thinking", "working", "waiting"]);
+
+/**
+ * Whether a familiar should move (UX.06): when it is busy, stuck, or the one
+ * on screen. Everything else holds still so lists stay calm.
+ */
+export function shouldAnimate(mood: FamiliarMood, onScreen = false): boolean {
+  return onScreen || BUSY_MOODS.has(mood) || mood === "error";
+}
+
+/** One word for the sidebar and lists; idle says nothing. */
+export const MOOD_WORDS: Partial<Record<FamiliarMood, string>> = {
+  thinking: "Working",
+  working: "Working",
+  waiting: "Waiting",
+  error: "Stuck",
+  asleep: "Asleep",
+};
+
 export const TIER_INFO = {
   fast: { label: "Fast", hint: "Quick replies, simple lookups." },
   standard: { label: "Standard", hint: "Most jobs. A good default." },

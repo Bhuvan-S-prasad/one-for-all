@@ -73,14 +73,28 @@ export function webSearchTool(provider: WebSearchProvider | null) {
 
 export type Fetcher = (url: string) => Promise<SafeResponse>;
 
+/**
+ * Characters returned per read. Seven full pages filled a free model's window
+ * and forced compaction mid-task (session 8); the agent reads on with `from`
+ * when it needs more of one page.
+ */
+export const READ_CHUNK_CHARS = 6_000;
+
 export function readUrlTool(fetcher: Fetcher = (url) => safeFetch(url)) {
   return defineTool({
     name: "web.read_url",
-    description:
-      "Read a web page or text document and return its text. Public http(s) addresses only.",
-    input: z.object({ url: z.url().max(2_000).describe("The page to read") }),
+    description: `Read a web page or text document and return its text, ${READ_CHUNK_CHARS.toLocaleString("en")} characters at a time. Public http(s) addresses only.`,
+    input: z.object({
+      url: z.url().max(2_000).describe("The page to read"),
+      from: z
+        .number()
+        .int()
+        .min(0)
+        .default(0)
+        .describe("Character to start from, to read further into a long page"),
+    }),
     annotations: { readOnly: true, idempotent: true },
-    async run({ url }) {
+    async run({ url, from }) {
       const page = await fetcher(url);
       if (page.status >= 400) {
         throw Object.assign(new Error(`The page answered HTTP ${page.status}`), {
@@ -99,8 +113,16 @@ export function readUrlTool(fetcher: Fetcher = (url) => safeFetch(url)) {
           code: "unsupported_type",
         });
       }
+      const chunk = text.slice(from, from + READ_CHUNK_CHARS);
+      const end = from + chunk.length;
+      const more =
+        end < text.length
+          ? `\n…[characters ${from}–${end} of ${text.length}; call again with from: ${end} to read more]`
+          : page.truncated
+            ? "\n…[page cut at 2 MB]"
+            : "";
       return {
-        content: `Source: ${page.url}\n\n${text}${page.truncated ? "\n…[page cut at 2 MB]" : ""}`,
+        content: `Source: ${page.url}\n\n${chunk || "(nothing more on this page)"}${more}`,
         untrusted: true,
       };
     },

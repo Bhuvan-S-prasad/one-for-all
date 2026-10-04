@@ -30,7 +30,14 @@ export {
   type ThreadRow,
   type ThreadWithMembers,
 } from "./repos/conversations";
-export { getRun, getRunEvent, listRunEvents, listRuns, type RunEventRow } from "./repos/runs";
+export {
+  getRun,
+  getRunEvent,
+  listRunEvents,
+  listRuns,
+  runPreviews,
+  type RunEventRow,
+} from "./repos/runs";
 export { insertMemory, searchMemories, type MemoryInsert, type MemorySearch } from "./repos/memory";
 export {
   deleteSecret,

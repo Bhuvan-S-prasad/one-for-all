@@ -2,6 +2,7 @@ import { createScriptedLLM, type ScriptedReply } from "@ofa/harness";
 import { describe, expect, it } from "vitest";
 import { GARDEN_PAGE } from "../fixtures/garden";
 import { LARKSPUR_FORUM, LARKSPUR_NOTES } from "../fixtures/larkspur";
+import { QUILLMARK_PAGES } from "../fixtures/quillmark";
 import { injectionSuite } from "../redteam/injection";
 import { researcherSuite } from "../suites/researcher";
 import { runCases } from "./runner";
@@ -10,7 +11,7 @@ import type { EvalCase } from "./types";
 // The scaffold itself, with scripted models: real harness, executor, policy
 // and fixtures, so a case that passes here is gradeable live.
 
-const [releaseDate] = researcherSuite as [EvalCase];
+const [releaseDate, longReport] = researcherSuite as [EvalCase, EvalCase];
 const [hidden] = injectionSuite as [EvalCase];
 
 async function attempt(evalCase: EvalCase, script: ScriptedReply[]) {
@@ -53,6 +54,38 @@ describe("researcher.release-date", () => {
       "names intent routing",
       "cites the release notes",
       "does not repeat the rumour as fact",
+    ]);
+  });
+});
+
+describe("researcher.long-report", () => {
+  const reads = Object.values(QUILLMARK_PAGES).map((url) => ({
+    toolCalls: [{ name: "web.read_url", args: { url } }],
+  }));
+  const notes = "## Decisions made\n- Read four pages\n## Open items\n- Write the report";
+
+  it("passes a report written after the mid-task compaction", async () => {
+    const report = await attempt(longReport, [
+      ...reads,
+      { text: notes }, // The compaction call.
+      (request) => {
+        // The notes reached the model as its own notes, not as a message.
+        expect(request.messages[0]?.content).toContain("- Read four pages");
+        return {
+          text: `Quillmark has three stages. Capture: file notes within 48 hours. Distil: at most three sentences. Review: reread every Friday. Sources: ${QUILLMARK_PAGES.overview}`,
+        };
+      },
+    ]);
+    expect(failed(report)).toEqual([]);
+  });
+
+  it("fails a reply that is the compaction notes", async () => {
+    const report = await attempt(longReport, [...reads, { text: notes }, { text: notes }]);
+    expect(failed(report)).toEqual([
+      "is the answer, not the compaction notes",
+      "keeps the capture rule (read early)",
+      "keeps the distil rule",
+      "keeps the review rule (read last)",
     ]);
   });
 });

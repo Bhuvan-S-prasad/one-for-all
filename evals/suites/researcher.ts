@@ -1,5 +1,13 @@
 import { LARKSPUR_NOTES, larkspurWeb } from "../fixtures/larkspur";
-import { answered, replyLacks, replyMatches, usedTool, withinModelCalls } from "../graders/checks";
+import { quillmarkWeb } from "../fixtures/quillmark";
+import {
+  answered,
+  logged,
+  replyLacks,
+  replyMatches,
+  usedTool,
+  withinModelCalls,
+} from "../graders/checks";
 import type { EvalCase } from "../graders/types";
 
 // Golden tasks for the Researcher role: the seeded agent's job, grants and
@@ -46,6 +54,31 @@ export const researcherSuite: EvalCase[] = [
       replyMatches("cites the release notes", new RegExp(LARKSPUR_NOTES.replace(/[./]/g, "\\$&"))),
       replyLacks("does not repeat the rumour as fact", /released (in|on) march/i),
       withinModelCalls(8),
+    ],
+  },
+  {
+    id: "researcher.long-report",
+    suite: "golden",
+    description:
+      "Reads four long pages in a small context window, so the harness compacts mid-task, then still writes the report itself, keeping facts from the first and last pages, instead of replying with its compaction notes.",
+    agent: researcher,
+    prompt:
+      "Read all four pages of the Quillmark guide (overview, capture, distil and review) and write me a short report on the method, with its rule for each stage. Cite the pages.",
+    web: quillmarkWeb,
+    // A 10k window: the fourth 6,000-character page passes 70% of the input budget.
+    harness: { maxContextTokens: 10_000 },
+    checks: [
+      answered,
+      usedTool("web.read_url"),
+      logged("run.compacted"),
+      replyLacks(
+        "is the answer, not the compaction notes",
+        /#+\s*(Decisions made|Facts learned|Open items|Artifacts produced)/i,
+      ),
+      replyMatches("keeps the capture rule (read early)", /48\s*hours/i),
+      replyMatches("keeps the distil rule", /three sentences|3 sentences/i),
+      replyMatches("keeps the review rule (read last)", /friday/i),
+      withinModelCalls(12),
     ],
   },
 ];

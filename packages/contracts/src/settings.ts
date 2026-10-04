@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { agentSchema, modelTierSchema } from "./agents";
 import { idSchema, pageSchema, paginationQuerySchema } from "./common";
-import { runEventSchema, runSchema } from "./runs";
+import { RUN_STATUSES, runEventSchema, runSchema, runStatusSchema } from "./runs";
 import { messageSchema } from "./threads";
 
 // Response envelopes and settings (M2.19).
@@ -15,7 +15,16 @@ export type MessagePage = z.infer<typeof messagePageSchema>;
 export const runPageSchema = pageSchema(runSchema);
 export type RunPage = z.infer<typeof runPageSchema>;
 
-export const runListQuerySchema = paginationQuerySchema.extend({ agentId: idSchema.optional() });
+/** Activity filters (UX.10): `status=running,failed` and a search over what was asked. */
+export const runListQuerySchema = paginationQuerySchema.extend({
+  agentId: idSchema.optional(),
+  status: z
+    .string()
+    .optional()
+    .transform((value) => (value ? value.split(",").filter(Boolean) : undefined))
+    .pipe(z.array(runStatusSchema).max(RUN_STATUSES.length).optional()),
+  q: z.string().trim().min(1).max(200).optional(),
+});
 export type RunListQuery = z.infer<typeof runListQuerySchema>;
 
 export const runEventListSchema = z.object({ items: z.array(runEventSchema) });

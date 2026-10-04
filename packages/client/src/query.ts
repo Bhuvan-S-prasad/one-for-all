@@ -1,5 +1,5 @@
-import { QueryClient, queryOptions } from "@tanstack/react-query";
-import { ApiError, type ApiClient } from "./api-client";
+import { infiniteQueryOptions, QueryClient, queryOptions } from "@tanstack/react-query";
+import { ApiError, type ApiClient, type RunFilter } from "./api-client";
 
 export const queryKeys = {
   session: ["session"] as const,
@@ -11,6 +11,8 @@ export const queryKeys = {
   messages: (threadId: string) => ["threads", threadId, "messages"] as const,
   runs: (agentId?: string) => ["runs", "list", agentId ?? "all"] as const,
   runLists: ["runs", "list"] as const,
+  runSearch: (filter: RunFilter) => ["runs", "search", filter] as const,
+  runSearches: ["runs", "search"] as const,
   run: (id: string) => ["runs", id] as const,
   runEvents: (id: string) => ["runs", id, "events"] as const,
   llmSettings: ["settings", "llm"] as const,
@@ -62,6 +64,16 @@ export const runsQuery = (api: ApiClient, agentId?: string) =>
   queryOptions({
     queryKey: queryKeys.runs(agentId),
     queryFn: async () => (await api.listRuns({ agentId, limit: 50 })).items,
+  });
+
+/** Activity: filtered runs, a page at a time (UX.10). */
+export const runSearchQuery = (api: ApiClient, filter: RunFilter) =>
+  infiniteQueryOptions({
+    queryKey: queryKeys.runSearch(filter),
+    queryFn: ({ pageParam }) =>
+      api.listRuns({ ...filter, limit: 40, ...(pageParam ? { cursor: pageParam } : {}) }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (page) => page.nextCursor,
   });
 
 export const runQuery = (api: ApiClient, id: string) =>

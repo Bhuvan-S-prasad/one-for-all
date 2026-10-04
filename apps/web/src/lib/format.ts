@@ -67,3 +67,28 @@ export function duration(ms: number): string {
 export function count(n: number, noun: string): string {
   return `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`;
 }
+
+/** "14:05" in local time, for message times. */
+export function shortTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+/** "Today", "Yesterday", or "Mon 29 Sep", for grouping by day. */
+export function dayLabel(iso: string, now: Date = new Date()): string {
+  const day = new Date(iso);
+  const start = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const diff = Math.round((start(now) - start(day)) / 86_400_000);
+  if (diff === 0) return "Today";
+  if (diff === 1) return "Yesterday";
+  return shortDate(day);
+}
+
+/** "0:42" until a time, for countdowns; "0:00" once it has passed. */
+export function countdown(untilIso: string, now: number): string {
+  const seconds = Math.max(0, Math.ceil((Date.parse(untilIso) - now) / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}

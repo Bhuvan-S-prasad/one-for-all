@@ -37,6 +37,8 @@ export interface CompactionResult {
   readonly response: LLMResponse;
 }
 
+export const COMPACTION_OUTPUT_TOKENS = 4_000;
+
 /** Summarise all but the latest turn group. Returns null when there is nothing to fold. */
 export async function compactTurns(
   llm: LLMGateway,
@@ -58,15 +60,19 @@ export async function compactTurns(
           }),
         },
       ],
-      maxOutputTokens: 1_500,
+      // Room for reasoning models, which spend output tokens thinking before
+      // they write; 1,500 cut summaries off mid-sentence (session 8).
+      maxOutputTokens: COMPACTION_OUTPUT_TOKENS,
       temperature: 0,
       promptVersion: promptRef(COMPACTION),
     },
     ctx,
   );
+  const summary = response.text.trim();
   return {
-    summary: response.text.trim(),
-    replaced: cut,
+    // No notes came back: keep the steps as they are rather than lose them.
+    summary: summary || (previous ?? ""),
+    replaced: summary ? cut : 0,
     promptVersion: promptRef(COMPACTION),
     inputTokens: response.usage.inputTokens,
     outputTokens: response.usage.outputTokens,

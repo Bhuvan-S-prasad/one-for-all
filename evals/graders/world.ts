@@ -117,6 +117,7 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
         agents: runtime.agents,
         threads: runtime.threads,
         memory: runtime.memory,
+        ...(evalCase.harness ? { options: evalCase.harness } : {}),
       },
       patientSteps(createMemoStepRunner(), options.wait ?? sleep),
     );

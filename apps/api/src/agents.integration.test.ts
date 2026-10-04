@@ -222,6 +222,20 @@ describe.skipIf(!hasDb)("M2 API (integration)", async () => {
     expect(events.items).toMatchObject([{ seq: 0, type: "run.started" }]);
   });
 
+  it("shows what each run was asked, and filters by status and by what was asked", async () => {
+    const one = runSchema.parse(await (await get(`/api/runs/${runId}`)).json());
+    expect(one).toMatchObject({ request: "What is the capital of Australia?", reply: null });
+    const ids = async (query: string) =>
+      ((await (await get(`/api/runs?${query}`)).json()) as { items: { id: string }[] }).items.map(
+        (r) => r.id,
+      );
+    expect(await ids("status=queued,running")).toEqual([runId]);
+    expect(await ids("status=failed")).toEqual([]);
+    expect(await ids("q=australia")).toEqual([runId]);
+    expect(await ids("q=100%25")).toEqual([]); // "%" matches itself, not everything.
+    expect((await get("/api/runs?status=nonsense")).status).toBe(422);
+  });
+
   it("sends Stop for an active run", async () => {
     const res = await send("POST", `/api/runs/${runId}/stop`);
     expect(res.status).toBe(202);

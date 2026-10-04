@@ -24,3 +24,17 @@ export async function readJson<T extends z.ZodType>(c: Context, schema: T): Prom
   }
   return parsed.data;
 }
+
+/** Parse the query string the same way: a bad value is a 422, not a 500. */
+export function readQuery<T extends z.ZodType>(c: Context, schema: T): z.infer<T> {
+  const parsed = schema.safeParse(c.req.query());
+  if (!parsed.success) {
+    throw new AppError("validation_failed", "Some query parameters are invalid", {
+      issues: parsed.error.issues.map((issue) => ({
+        path: issue.path.join("."),
+        message: issue.message,
+      })),
+    });
+  }
+  return parsed.data;
+}

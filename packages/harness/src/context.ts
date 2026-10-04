@@ -1,5 +1,5 @@
 import type { LLMMessage, ToolDescriptor } from "@ofa/core";
-import { AGENT_IDENTITY, AGENT_VOICE, PLATFORM_RULES, promptRef } from "./prompts";
+import { AGENT_IDENTITY, AGENT_VOICE, PLATFORM_RULES, TASK_STATE, promptRef } from "./prompts";
 import { estimateMessages, estimateTokens, estimateTools, truncateToTokens } from "./tokens";
 
 // Context assembly (ARCHITECTURE.md §7): the prompt is built from typed
@@ -160,46 +160,56 @@ export function assembleContext(input: ContextInput, budget: ContextBudget): Ass
   const memory = memoryLines.length
     ? `What you remember (may be out of date; check sources for anything important):\n${memoryLines.join("\n")}`
     : "";
+  // Task and plan, restated every step (§7): the latest request, the agent's
+  // todo list, and its notes from compacted steps. Half the plan budget goes
+  // to the request, half to the todo list; the notes count against history.
+  const latestRequest = [...input.history].reverse().find((m) => m.author === "user");
+  const task = latestRequest
+    ? truncateToTokens(latestRequest.content, Math.floor(budget.plan / 2))
+    : "";
   const plan = input.todos?.length
     ? truncateToTokens(
         `Your plan:\n${input.todos.map((t) => `- [${t.done ? "x" : " "}] ${t.text}`).join("\n")}`,
-        budget.plan,
+        Math.floor(budget.plan / 2),
       )
     : "";
+  const notes = input.summary
+    ? truncateToTokens(input.summary, Math.floor(budget.history * 0.3))
+    : "";
+  const taskBlock = TASK_STATE.render({ task, plan, notes });
   blocks.memory = estimateTokens(memory);
-  blocks.plan = estimateTokens(plan);
+  blocks.notes = notes ? estimateTokens(notes) : 0;
+  blocks.plan = estimateTokens(taskBlock) - blocks.notes;
 
   const system: LLMMessage = {
     role: "system",
-    content: [platform, identity, memory, plan].filter(Boolean).join("\n\n"),
+    content: [platform, identity, memory, taskBlock].filter(Boolean).join("\n\n"),
   };
 
   // Volatile: the thread (newest kept, oldest dropped), then this run's steps.
   const history: LLMMessage[] = [];
   let historyTokens = 0;
+  const historyBudget = budget.history - blocks.notes;
   for (let i = input.history.length - 1; i >= 0; i -= 1) {
     const raw = input.history[i];
     const message = raw ? historyMessage(raw, input.agent.id) : null;
     if (!message) continue;
     const cost = estimateMessages([message]);
     // Always keep the latest message: it is usually what the run is about.
-    if (history.length > 0 && historyTokens + cost > budget.history) break;
+    if (history.length > 0 && historyTokens + cost > historyBudget) break;
     history.unshift(
-      historyTokens + cost > budget.history
-        ? { ...message, content: truncateToTokens(message.content, budget.history) }
+      historyTokens + cost > historyBudget
+        ? { ...message, content: truncateToTokens(message.content, historyBudget) }
         : message,
     );
     historyTokens += cost;
   }
   blocks.history = historyTokens;
 
-  const summary: LLMMessage[] = input.summary
-    ? [{ role: "user", content: `[Summary of your earlier steps in this task]\n${input.summary}` }]
-    : [];
   const turns = turnMessages(input.turns);
-  blocks.steps = estimateMessages([...summary, ...turns]);
+  blocks.steps = estimateMessages(turns);
 
-  const messages = [system, ...history, ...summary, ...turns];
+  const messages = [system, ...history, ...turns];
   const total = estimateMessages(messages) + toolTokens;
   const inputBudget = budget.window - budget.output;
 
@@ -207,7 +217,9 @@ export function assembleContext(input: ContextInput, budget: ContextBudget): Ass
     messages,
     tools,
     maxOutputTokens: budget.output,
-    promptVersion: [PLATFORM_RULES, AGENT_IDENTITY, AGENT_VOICE].map(promptRef).join("+"),
+    promptVersion: [PLATFORM_RULES, AGENT_IDENTITY, AGENT_VOICE, TASK_STATE]
+      .map(promptRef)
+      .join("+"),
     tokens: { total, blocks },
     needsCompaction: total > inputBudget * 0.7 && input.turns.length > 2,
   };

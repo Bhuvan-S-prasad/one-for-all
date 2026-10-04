@@ -20,6 +20,7 @@ import {
   defineTool,
   htmlToText,
   isPrivateAddress,
+  READ_CHUNK_CHARS,
   safeFetch,
   toDescriptor,
   ToolSchemaError,
@@ -358,6 +359,29 @@ describe("built-in tools", () => {
       { title: "A", url: "https://a.example", snippet: "first" },
       { title: "B", url: "https://b.example", snippet: "" },
     ]);
+  });
+
+  it("reads long pages a chunk at a time and says how to read on", async () => {
+    const body = `${"a".repeat(READ_CHUNK_CHARS)}${"b".repeat(100)}`;
+    const reader = createToolRegistry(
+      builtinTools({
+        memory,
+        search: null,
+        fetcher: async (url) => ({
+          url,
+          status: 200,
+          contentType: "text/plain",
+          body,
+          truncated: false,
+        }),
+      }),
+    ).get("web.read_url")!;
+    const first = await reader.run({ url: "https://a.example/long", from: 0 }, runCtx);
+    expect(first.content).toMatch(/from: 6000 to read more/);
+    expect(String(first.content)).not.toContain("b");
+    const rest = await reader.run({ url: "https://a.example/long", from: 6_000 }, runCtx);
+    expect(String(rest.content)).toContain("b".repeat(100));
+    expect(rest.content).not.toMatch(/read more/);
   });
 });
 
