@@ -12,3 +12,4 @@ export * from "./memory";
 export * from "./secrets";
 export * from "./audit";
 export * from "./artifacts";
+export * from "./approvals";

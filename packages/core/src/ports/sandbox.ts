@@ -50,6 +50,12 @@ export interface AgentBrowser {
   ): Promise<PageSnapshot>;
   press(key: string): Promise<PageSnapshot>;
   back(): Promise<PageSnapshot>;
+  /** The current page, and an element on it, without changing anything (for approval cards). */
+  describe(ref?: number): Promise<{
+    readonly url: string;
+    readonly title: string;
+    readonly element?: { readonly role: string; readonly name: string };
+  }>;
 }
 
 /**

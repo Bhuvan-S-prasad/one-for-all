@@ -27,6 +27,7 @@ export const TENANT_TABLES = [
   "secret",
   "audit_log",
   "artifact",
+  "approval",
 ] as const;
 
 /**

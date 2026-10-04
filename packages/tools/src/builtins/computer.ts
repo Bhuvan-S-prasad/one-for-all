@@ -96,6 +96,36 @@ export function pageText(page: PageSnapshot, from = 0): string {
   return `Page: ${page.title || "(untitled)"}\nURL: ${page.url}\n\n${chunk || "(nothing more on this page)"}${more}`;
 }
 
+// ── Approval cards: what a call would do, in a person's words ────────────────
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host || url;
+  } catch {
+    return url || "a blank page";
+  }
+}
+
+function clip(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+/** `the button “Pay now” on shop.example`, from the agent's browser as it is now. */
+async function target(
+  sandbox: SandboxProvider | null,
+  ctx: ToolRunContext,
+  element?: number,
+): Promise<string> {
+  const page = await (await browserOf(sandbox, ctx)).describe(element);
+  const site = hostOf(page.url);
+  if (element === undefined) return site;
+  const what = page.element
+    ? `the ${page.element.role || "element"}${page.element.name ? ` “${clip(page.element.name, 80)}”` : ""}`
+    : `element [${element}]`;
+  return `${what} on ${site}`;
+}
+
 const ref = z
   .number()
   .int()
@@ -141,6 +171,9 @@ export function browserTools(sandbox: SandboxProvider | null) {
       async run(args, ctx) {
         return page(await (await browserOf(sandbox, ctx)).click(args.ref));
       },
+      async describe(args, ctx) {
+        return `Click ${await target(sandbox, ctx, args.ref)}`;
+      },
     }),
     defineTool({
       name: "browser.type",
@@ -156,6 +189,9 @@ export function browserTools(sandbox: SandboxProvider | null) {
       async run({ ref: element, text, clear, submit }, ctx) {
         return page(await (await browserOf(sandbox, ctx)).type(element, text, { clear, submit }));
       },
+      async describe({ ref: element, text, submit }, ctx) {
+        return `Type “${clip(text, 300)}” into ${await target(sandbox, ctx, element)}${submit ? ", then press Enter" : ""}`;
+      },
     }),
     defineTool({
       name: "browser.press",
@@ -164,6 +200,9 @@ export function browserTools(sandbox: SandboxProvider | null) {
       annotations: { outbound: true },
       async run({ key }, ctx) {
         return page(await (await browserOf(sandbox, ctx)).press(key));
+      },
+      async describe({ key }, ctx) {
+        return `Press ${key} on ${await target(sandbox, ctx)}`;
       },
     }),
     defineTool({
@@ -197,6 +236,9 @@ export function useSavedLoginTool(sandbox: SandboxProvider | null) {
       submit: z.boolean().default(true).describe("Press Enter after the password"),
     }),
     annotations: { outbound: true },
+    async describe(_args, ctx) {
+      return `Sign in on ${await target(sandbox, ctx)} with the login saved for it`;
+    },
     async run({ username_ref, password_ref, submit }, ctx) {
       const browser = await browserOf(sandbox, ctx);
       const page = await browser.snapshot();
@@ -257,6 +299,10 @@ export function shellTool(sandbox: SandboxProvider | null) {
       timeout_seconds: z.number().int().min(1).max(600).default(60),
     }),
     annotations: { outbound: true },
+    async describe({ command, cwd }) {
+      const shown = command.length > 600 ? `${command.slice(0, 599)}…` : command;
+      return `Run a command on its computer${cwd ? ` in ${cwd}` : ""}:\n${shown}`;
+    },
     async run({ command, cwd, timeout_seconds }, ctx) {
       const handle = await computer(sandbox, ctx);
       const result = await handle.exec(ctx.agentId, command, {

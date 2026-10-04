@@ -65,6 +65,12 @@ export interface ToolDefinition<Input = unknown> {
    * Sent folder). Return the result if it did, null if it did not (ADR-0015).
    */
   verify?(args: Input, ctx: ToolRunContext): Promise<ToolRunResult | null>;
+  /**
+   * What this call would do, in plain words, for a person deciding whether to
+   * allow it (e.g. `Click the button “Pay now” on shop.example`). Must not
+   * change anything. Without it, the card shows the tool and its arguments.
+   */
+  describe?(args: Input, ctx: ToolRunContext): Promise<string>;
 }
 
 /** Keeps the input type flowing from the schema into `run`. */

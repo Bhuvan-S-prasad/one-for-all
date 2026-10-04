@@ -14,6 +14,8 @@ export const INNGEST_EVENTS = {
   runCancelled: "agent/run.cancelled",
   /** A run answered; the agent may learn from the exchange, off its own turn. */
   runSucceeded: "agent/run.succeeded",
+  /** A person answered an approval request; the waiting run carries on. */
+  approvalDecided: "approval/decided",
 } as const;
 
 export const messageReceivedEventSchema = z.object({
@@ -38,3 +40,11 @@ export const runSucceededEventSchema = z.object({
   messageId: idSchema,
 });
 export type RunSucceededEvent = z.infer<typeof runSucceededEventSchema>;
+
+export const approvalDecidedEventSchema = z.object({
+  ...tenant,
+  approvalId: idSchema,
+  runId: idSchema,
+  decision: z.enum(["approved", "rejected"]),
+});
+export type ApprovalDecidedEvent = z.infer<typeof approvalDecidedEventSchema>;

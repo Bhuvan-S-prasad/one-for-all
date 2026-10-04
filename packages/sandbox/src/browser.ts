@@ -230,6 +230,42 @@ export function createCdpBrowser(endpoint: () => Promise<string>): AgentBrowser 
         return snapshotOf(page);
       }),
 
+    describe: (ref) =>
+      withPage(async ({ cdp, session }) => {
+        const history = await cdp.send<{
+          currentIndex: number;
+          entries: { url: string; title: string }[];
+        }>("Page.getNavigationHistory", {}, session);
+        const current = history.entries[history.currentIndex];
+        let element: { role: string; name: string } | undefined;
+        if (ref !== undefined) {
+          try {
+            const { nodes } = await cdp.send<{ nodes: AXNode[] }>(
+              "Accessibility.getPartialAXTree",
+              { backendNodeId: ref, fetchRelatives: false },
+              session,
+            );
+            const node = nodes[0];
+            if (node) {
+              element = {
+                role: String(node.role?.value ?? ""),
+                name: String(node.name?.value ?? "")
+                  .replace(/\s+/g, " ")
+                  .trim()
+                  .slice(0, 200),
+              };
+            }
+          } catch {
+            // A stale number: the call itself will say so.
+          }
+        }
+        return {
+          url: current?.url ?? "",
+          title: current?.title ?? "",
+          ...(element ? { element } : {}),
+        };
+      }),
+
     back: () =>
       withPage(async (page) => {
         const history = await page.cdp.send<{ currentIndex: number; entries: { id: number }[] }>(

@@ -61,6 +61,28 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+/** Arguments shown on an approval card when a tool cannot say it better. */
+function argsText(args: unknown): string {
+  const text = JSON.stringify(args ?? {});
+  return text.length > 400 ? `${text.slice(0, 399)}…` : text;
+}
+
+/** The tool's own words for a call, or its name and arguments; never fails. */
+async function describe(
+  tool: { name: string; describe?: (args: unknown, ctx: ToolRunContext) => Promise<string> },
+  args: unknown,
+  ctx: ToolRunContext,
+): Promise<string> {
+  const plain = `${tool.name} ${argsText(args)}`;
+  if (!tool.describe) return plain;
+  try {
+    const text = (await withTimeout(tool.describe(args, ctx), 10_000)).trim();
+    return text ? text.slice(0, 1_000) : plain;
+  } catch {
+    return plain;
+  }
+}
+
 export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
   const { registry, policy, calls } = options;
   const telemetry = options.telemetry ?? noopTelemetry;
@@ -123,17 +145,6 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
             message: decision.reasons[0] ?? "Not allowed",
           };
         }
-        if (decision.verdict !== "auto") {
-          // Approval cards arrive in M4; until then, anything that needs a
-          // person does not run.
-          return {
-            status: "blocked",
-            verdict: decision.verdict,
-            reasons: decision.reasons,
-            message: `${request.name} needs a person's approval first, and approvals are not available yet.`,
-          };
-        }
-
         const agent = await options.agents.get(ctx, ctx.agentId);
         const runCtx: ToolRunContext = {
           ...ctx,
@@ -160,6 +171,19 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
               }
             : {}),
         };
+
+        if (decision.verdict !== "auto" && !request.approved) {
+          // A person must agree first (§6.2): nothing runs; the harness asks
+          // them, showing what the call would do, and calls again if they agree.
+          return {
+            status: "blocked",
+            verdict: decision.verdict,
+            reasons: decision.reasons,
+            message: `${request.name} needs a person's approval first.`,
+            summary: await redact(ctx, await describe(tool, parsed.value, runCtx)),
+          };
+        }
+
         const idempotent = !!(tool.annotations.readOnly || tool.annotations.idempotent);
         const begun = await calls.begin(ctx, {
           idempotencyKey: request.idempotencyKey,
