@@ -56,6 +56,9 @@ const TOOL_GROUPS: [string, (tool: string) => boolean][] = [
   ["Web", (t) => t.startsWith("web.")],
   ["Memory", (t) => t === "remember" || t === "recall"],
   ["Checklist", (t) => t === "todo.write"],
+  ["Browser", (t) => t.startsWith("browser.")],
+  ["Shell", (t) => t === "shell.run"],
+  ["Files", (t) => t.startsWith("files.")],
 ];
 
 function toolWords(agent: Agent): string[] {

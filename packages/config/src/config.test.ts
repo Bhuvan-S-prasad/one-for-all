@@ -30,6 +30,18 @@ describe("loadConfig", () => {
     });
   });
 
+  it("finds the dev sandbox in development, and needs both settings elsewhere", () => {
+    expect(loadConfig({ ...valid, NODE_ENV: "development" }).sandbox).toEqual({
+      url: "http://127.0.0.1:7070",
+      token: "ofa-sandbox-dev-token",
+    });
+    expect(loadConfig({ ...valid, NODE_ENV: "production" }).sandbox).toBeNull();
+    expect(() =>
+      loadConfig({ ...valid, NODE_ENV: "production", SANDBOX_URL: "http://egress:7070" }),
+    ).toThrow("SANDBOX_TOKEN");
+    expect(() => loadConfig({ ...valid, SANDBOX_TOKEN: "short" })).toThrow(ConfigError);
+  });
+
   it("rejects a malformed provider ID", () => {
     expect(() => loadConfig({ ...valid, LLM_PROVIDER: "Open Router" })).toThrow(ConfigError);
   });

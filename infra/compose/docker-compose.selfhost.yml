@@ -6,9 +6,11 @@
 #   open http://localhost:3000
 #
 # Only the app is published, and only on 127.0.0.1 (ADR-0017). Postgres and
-# Inngest are reachable only on the internal Compose network.
+# Inngest are reachable only on the internal Compose network. The agents'
+# computer (sandbox) sits on its own network with no route out except the
+# egress proxy (ADR-0025).
 #
-# Later milestones add the sandbox (M3) and optional Phoenix and Ollama profiles.
+# Later milestones add optional Phoenix and Ollama profiles.
 
 name: one-for-all
 
@@ -42,6 +44,9 @@ services:
       INNGEST_DEV: "0"
       INNGEST_BASE_URL: http://inngest:8288
       SEARXNG_URL: http://searxng:8080
+      # The agents' computer, reached through the egress container.
+      SANDBOX_URL: http://egress:7070
+      SANDBOX_TOKEN: ${SANDBOX_TOKEN:?add SANDBOX_TOKEN to infra/compose/.env (see infra/scripts/init-env.sh)}
       INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY:?run infra/scripts/init-env.sh first}
       INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:?run infra/scripts/init-env.sh first}
       # Model provider (ADR-0022). Keys are saved per workspace in Settings.
@@ -98,5 +103,70 @@ services:
       - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
     mem_limit: 256m
 
+  # The agents' computer (M3, ADR-0025): Chromium per agent, a shell and
+  # files, each agent as its own user. Hardened here, where it is enforced.
+  sandbox:
+    image: ${OFA_SANDBOX_IMAGE:-one-for-all-sandbox:local}
+    build: ../docker/sandbox
+    restart: unless-stopped
+    environment:
+      SANDBOX_TOKEN: ${SANDBOX_TOKEN:?add SANDBOX_TOKEN to infra/compose/.env (see infra/scripts/init-env.sh)}
+      SANDBOX_PROXY: http://egress:3128
+    networks: [sandbox]
+    volumes:
+      - sandbox-home:/home/agents
+      - sandbox-workspace:/workspace
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=512m
+      - /run
+    shm_size: 512m
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, KILL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1536m
+    cpus: 1.5
+    # Threads count too: a browser uses ~60.
+    pids_limit: 2048
+
+  # The sandbox's only way out (M3.02): allowlisted HTTP(S), never private
+  # addresses. Also forwards :7070 so the app reaches the sandbox service
+  # without joining the sandbox network.
+  egress:
+    image: ${OFA_SANDBOX_IMAGE:-one-for-all-sandbox:local}
+    build: ../docker/sandbox
+    restart: unless-stopped
+    command: ["node", "/opt/sandbox/egress.mjs"]
+    user: "1000:1000"
+    environment:
+      # Domains the sandbox may reach (each covers its subdomains), or * for any
+      # public site. Private addresses are refused whatever this says.
+      EGRESS_ALLOW: ${SANDBOX_EGRESS_ALLOW:-*}
+      EGRESS_FORWARD: 7070:sandbox:7070
+    networks: [sandbox, default]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 128m
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('net').connect(3128,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+networks:
+  default: {}
+  # No route out: the sandbox reaches only the egress proxy.
+  sandbox:
+    internal: true
+
 volumes:
   postgres-data:
+  sandbox-home:
+  sandbox-workspace:

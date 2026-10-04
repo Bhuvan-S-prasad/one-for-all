@@ -87,13 +87,52 @@ export const TIER_INFO = {
 } as const;
 
 /**
- * Built-in tools an agent can be granted in M2. Labels are written for people;
- * the server checks every call against the grant (hard rule 5).
+ * Built-in tools an agent can be granted. Labels are written for people; the
+ * server checks every call against the grant (hard rule 5). `starter` tools
+ * are on for a new agent; the computer is opt-in (M3).
  */
 export const BUILTIN_TOOLS = [
-  { name: "web.search", label: "Search the web", hint: "Find pages about a topic." },
-  { name: "web.read_url", label: "Read web pages", hint: "Open a page and read it." },
-  { name: "remember", label: "Remember facts", hint: "Save preferences and facts for next time." },
-  { name: "recall", label: "Recall memories", hint: "Look up what it saved before." },
-  { name: "todo.write", label: "Keep a checklist", hint: "Plan longer tasks step by step." },
+  { name: "web.search", label: "Search the web", hint: "Find pages about a topic.", starter: true },
+  {
+    name: "web.read_url",
+    label: "Read web pages",
+    hint: "Open a page and read it.",
+    starter: true,
+  },
+  {
+    name: "remember",
+    label: "Remember facts",
+    hint: "Save preferences and facts for next time.",
+    starter: true,
+  },
+  {
+    name: "recall",
+    label: "Recall memories",
+    hint: "Look up what it saved before.",
+    starter: true,
+  },
+  {
+    name: "todo.write",
+    label: "Keep a checklist",
+    hint: "Plan longer tasks step by step.",
+    starter: true,
+  },
+  {
+    name: "browser.*",
+    label: "Use a browser",
+    hint: "Open sites, click and fill in forms in its own browser, with its own logins.",
+    starter: false,
+  },
+  {
+    name: "shell.run",
+    label: "Run commands",
+    hint: "A Linux shell on its computer, with Python and git.",
+    starter: false,
+  },
+  {
+    name: "files.*",
+    label: "Work with files",
+    hint: "Read and write files on its computer, shared with your other agents.",
+    starter: false,
+  },
 ] as const;

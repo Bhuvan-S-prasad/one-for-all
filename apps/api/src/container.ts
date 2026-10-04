@@ -10,6 +10,7 @@ import type {
   LLMGateway,
   MemoryStore,
   RunStore,
+  SandboxProvider,
   TenantContext,
   ThreadStore,
 } from "@ofa/core";
@@ -40,6 +41,7 @@ import {
   type RunDispatcher,
 } from "@ofa/orchestrator";
 import { createPolicyEngine } from "@ofa/policy";
+import { createDockerSandbox } from "@ofa/sandbox";
 import { createTelemetry, type TelemetryHandle } from "@ofa/telemetry";
 import {
   builtinTools,
@@ -84,6 +86,8 @@ export interface Container {
   readonly agents: AgentDirectory;
   readonly threads: ThreadStore;
   readonly memory: MemoryStore;
+  /** The agents' computer (M3); null when this server has none. */
+  readonly sandbox: SandboxProvider | null;
   readonly dispatcher: RunDispatcher;
   readonly inngest: Inngest;
   readonly functions: ReturnType<typeof createFunctions>;
@@ -154,6 +158,8 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
   const threads = createThreadStore(db, { publish });
   const agents = createAgentDirectory(db);
   const memory = createPgMemoryStore(db);
+  // The agents' computer: the Docker sandbox in self-host (ADR-0025).
+  const sandbox = config.sandbox ? createDockerSandbox(config.sandbox) : null;
 
   const tools = createToolExecutor({
     registry: createToolRegistry(
@@ -162,6 +168,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
         search: config.search.searxngUrl
           ? createSearxngProvider({ baseUrl: config.search.searxngUrl })
           : null,
+        sandbox,
       }),
     ),
     policy: createPolicyEngine({ agents }),
@@ -202,6 +209,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     agents,
     threads,
     memory,
+    sandbox,
     dispatcher: overrides.dispatcher ?? createRunDispatcher(inngest),
     inngest,
     functions,

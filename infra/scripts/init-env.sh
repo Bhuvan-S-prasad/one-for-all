@@ -43,6 +43,12 @@ INNGEST_SIGNING_KEY=$(hex 32)
 
 SEARXNG_SECRET=$(hex 32)
 
+# The app and the agents' computer share this; agents never see it.
+SANDBOX_TOKEN=$(hex 32)
+# Sites the agents' computer may reach, comma-separated (each covers its
+# subdomains), or * for any public site. Private addresses are always refused.
+SANDBOX_EGRESS_ALLOW=*
+
 LOG_LEVEL=info
 EOF
 

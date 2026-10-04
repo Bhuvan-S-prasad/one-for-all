@@ -9,6 +9,16 @@ const TOOL_LABELS: Record<string, [doing: string, done: string]> = {
   remember: ["Saving to memory", "Saved to memory"],
   recall: ["Checking memory", "Checked memory"],
   "todo.write": ["Planning", "Updated the plan"],
+  "browser.open": ["Opening a page", "Opened a page"],
+  "browser.snapshot": ["Looking at the page", "Looked at the page"],
+  "browser.click": ["Clicking", "Clicked"],
+  "browser.type": ["Typing", "Typed"],
+  "browser.press": ["Pressing a key", "Pressed a key"],
+  "browser.back": ["Going back", "Went back"],
+  "shell.run": ["Running a command", "Ran a command"],
+  "files.read": ["Reading a file", "Read a file"],
+  "files.write": ["Writing a file", "Wrote a file"],
+  "files.list": ["Looking in a folder", "Looked in a folder"],
 };
 
 export interface RunStep {
@@ -30,6 +40,17 @@ function detailFor(tool: string, args: unknown): string | null {
   }
   if (tool === "remember" && typeof a.fact === "string") return a.fact;
   if (tool === "recall" && typeof a.query === "string") return a.query;
+  if (tool === "browser.open" && typeof a.url === "string") {
+    try {
+      return new URL(a.url).hostname;
+    } catch {
+      return null;
+    }
+  }
+  if (tool === "browser.type" && typeof a.text === "string") return `“${a.text.slice(0, 40)}”`;
+  if (tool === "browser.press" && typeof a.key === "string") return a.key;
+  if (tool === "shell.run" && typeof a.command === "string") return a.command.slice(0, 80);
+  if (tool.startsWith("files.") && typeof a.path === "string") return a.path;
   return null;
 }
 
@@ -217,6 +238,16 @@ const DOING: Record<string, string> = {
   remember: "Saving to memory",
   recall: "Checking its memory",
   "todo.write": "Planning",
+  "browser.open": "Opening",
+  "browser.snapshot": "Looking at the page",
+  "browser.click": "Clicking on the page",
+  "browser.type": "Typing on the page",
+  "browser.press": "Pressing a key",
+  "browser.back": "Going back a page",
+  "shell.run": "Running",
+  "files.read": "Reading",
+  "files.write": "Writing",
+  "files.list": "Looking in",
 };
 
 /** The live phase of an active run, from its latest events. */

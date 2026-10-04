@@ -20,7 +20,7 @@ function HatchPage() {
     job: "",
     description: "",
     tier: "standard",
-    tools: BUILTIN_TOOLS.map((t) => t.name),
+    tools: BUILTIN_TOOLS.filter((t) => t.starter).map((t) => t.name),
   }));
 
   return (

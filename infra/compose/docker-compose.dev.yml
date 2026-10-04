@@ -57,5 +57,72 @@ services:
       - "127.0.0.1:${SEARXNG_PORT:-8888}:8080"
     mem_limit: 256m
 
+  # The agents' computer (M3, ADR-0025). Only on the internal `sandbox`
+  # network: its one way out is the egress proxy below. Hardened here, where
+  # it is enforced: read-only root, minimal capabilities, no new privileges,
+  # limits, and no host mounts or Docker socket.
+  sandbox:
+    image: one-for-all-sandbox:local
+    build: ../docker/sandbox
+    restart: unless-stopped
+    environment:
+      SANDBOX_TOKEN: ${SANDBOX_TOKEN:-ofa-sandbox-dev-token}
+      SANDBOX_PROXY: http://egress:3128
+    networks: [sandbox]
+    volumes:
+      - sandbox-home:/home/agents
+      - sandbox-workspace:/workspace
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=512m
+      - /run
+    shm_size: 512m
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, KILL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1536m
+    cpus: 1.5
+    # Threads count too: a browser uses ~60.
+    pids_limit: 2048
+
+  # The sandbox's exit (M3.02): an allowlisting HTTP(S) proxy that never
+  # reaches private addresses. It also forwards :7070 to the sandbox service,
+  # so the app (on the host here) can reach it.
+  egress:
+    image: one-for-all-sandbox:local
+    build: ../docker/sandbox
+    restart: unless-stopped
+    command: ["node", "/opt/sandbox/egress.mjs"]
+    user: "1000:1000"
+    environment:
+      EGRESS_ALLOW: ${SANDBOX_EGRESS_ALLOW:-*}
+      EGRESS_FORWARD: 7070:sandbox:7070
+    networks: [sandbox, default]
+    ports:
+      - "127.0.0.1:${SANDBOX_PORT:-7070}:7070"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 128m
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('net').connect(3128,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+networks:
+  default: {}
+  # No route out: the sandbox reaches only the egress proxy.
+  sandbox:
+    internal: true
+
 volumes:
   postgres-data:
+  sandbox-home:
+  sandbox-workspace:

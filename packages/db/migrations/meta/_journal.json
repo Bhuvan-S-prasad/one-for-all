@@ -50,6 +50,13 @@
       "when": 1790931867124,
       "tag": "0006_memory_full_text",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791114025760,
+      "tag": "0007_m3_artifacts",
+      "breakpoints": true
     }
   ]
 }

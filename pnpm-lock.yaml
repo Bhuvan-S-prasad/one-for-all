@@ -172,6 +172,9 @@ importers:
       '@ofa/policy':
         specifier: workspace:*
         version: link:../../packages/policy
+      '@ofa/sandbox':
+        specifier: workspace:*
+        version: link:../../packages/sandbox
       '@ofa/telemetry':
         specifier: workspace:*
         version: link:../../packages/telemetry
@@ -432,6 +435,12 @@ importers:
         version: 4.21.0(@opentelemetry/core@2.11.0(@opentelemetry/api@1.9.1))(hono@4.13.11)(react@19.3.0)(typescript@6.0.3)(zod@4.6.5)
 
   packages/policy:
+    dependencies:
+      '@ofa/core':
+        specifier: workspace:*
+        version: link:../core
+
+  packages/sandbox:
     dependencies:
       '@ofa/core':
         specifier: workspace:*
