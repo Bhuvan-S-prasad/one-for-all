@@ -2,6 +2,8 @@ import {
   asId,
   LEARN_EVENT_PREFIX,
   type AgentDirectory,
+  type ApprovalRecord,
+  type ApprovalStore,
   type AgentProfile,
   type ConversationMessage,
   type LLMGateway,
@@ -17,6 +19,7 @@ import {
   type StepRunner,
   type ThreadStore,
   type ToolDescriptor,
+  type ToolExecutionRequest,
   type ToolExecutor,
   type ToolOutcome,
 } from "@ofa/core";
@@ -24,16 +27,41 @@ import {
 // In-memory implementations of the runtime ports, for unit tests and evals.
 // No database, no Inngest, no network.
 
-/** Runs each step once and replays stored results, like Inngest's memoization. */
-export function createMemoStepRunner(): StepRunner & {
+type WaitOptions = Parameters<NonNullable<StepRunner["waitForEvent"]>>[1];
+
+/**
+ * Runs each step once and replays stored results, like Inngest's memoization.
+ * With `onWait`, runs can also wait for events: it answers each wait (an
+ * event's data, or null for a timeout), once, like a memoized step.
+ */
+export function createMemoStepRunner(
+  options: {
+    onWait?: (
+      id: string,
+      wait: WaitOptions,
+    ) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null;
+  } = {},
+): StepRunner & {
   readonly ran: string[];
   readonly memo: Map<string, unknown>;
 } {
   const memo = new Map<string, unknown>();
   const ran: string[] = [];
+  const { onWait } = options;
   return {
     memo,
     ran,
+    ...(onWait
+      ? {
+          async waitForEvent(id: string, wait: WaitOptions) {
+            if (memo.has(id)) return memo.get(id) as Record<string, unknown> | null;
+            ran.push(id);
+            const result = (await onWait(id, wait)) ?? null;
+            memo.set(id, result);
+            return result;
+          },
+        }
+      : {}),
     async run<T>(id: string, fn: () => Promise<T>): Promise<T> {
       if (memo.has(id)) return memo.get(id) as T;
       ran.push(id);
@@ -197,7 +225,7 @@ export function createScriptedLLM(
 
 export interface FakeTool {
   readonly descriptor: ToolDescriptor;
-  run(args: unknown): Promise<ToolOutcome> | ToolOutcome;
+  run(args: unknown, request: ToolExecutionRequest): Promise<ToolOutcome> | ToolOutcome;
 }
 
 /** A tool executor over plain functions, without policy. */
@@ -215,11 +243,62 @@ export function createFakeToolExecutor(
       const tool = tools.find((t) => t.descriptor.name === request.name);
       if (!tool)
         return { status: "error", code: "unknown_tool", message: request.name, durationMs: 0 };
-      return tool.run(request.args);
+      return tool.run(request.args, request);
     },
   };
 }
 
 export function okOutcome(content: string, untrusted = false): ToolOutcome {
   return { status: "ok", content, untrusted, verdict: "auto", reasons: [], durationMs: 1 };
+}
+
+/** Approvals in memory, settled like the Postgres store: only while pending. */
+export function createMemoryApprovals(): ApprovalStore & { readonly records: ApprovalRecord[] } {
+  const records: ApprovalRecord[] = [];
+  let ids = 0;
+  const replace = (next: ApprovalRecord) => {
+    records[records.findIndex((r) => r.id === next.id)] = next;
+    return next;
+  };
+  return {
+    records,
+    async request(ctx, input) {
+      const found = records.find((r) => r.runId === ctx.runId && r.toolCallId === input.toolCallId);
+      if (found) return found;
+      const record: ApprovalRecord = {
+        ...input,
+        id: `approval_${++ids}`,
+        runId: ctx.runId,
+        agentId: ctx.agentId,
+        threadId: null,
+        status: "pending",
+        decidedBy: null,
+        createdAt: new Date(),
+        decidedAt: null,
+      };
+      records.push(record);
+      return record;
+    },
+    async get(_ctx, id) {
+      return records.find((r) => r.id === id) ?? null;
+    },
+    async decide(_ctx, id, input) {
+      const found = records.find((r) => r.id === id);
+      if (!found || found.status !== "pending") return null;
+      return replace({ ...found, ...input, decidedAt: new Date() });
+    },
+    async listPending(_ctx, filter = {}) {
+      return records.filter(
+        (r) =>
+          r.status === "pending" &&
+          (!filter.agentId || r.agentId === filter.agentId) &&
+          (!filter.runId || r.runId === filter.runId),
+      );
+    },
+    async expireForRun(_ctx, runId) {
+      const open = records.filter((r) => r.runId === runId && r.status === "pending");
+      for (const r of open) replace({ ...r, status: "expired", decidedAt: new Date() });
+      return open.length;
+    },
+  };
 }

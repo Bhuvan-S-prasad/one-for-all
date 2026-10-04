@@ -1,7 +1,9 @@
 import {
+  approvalDecidedEventSchema,
   INNGEST_EVENTS,
   messageReceivedEventSchema,
   runCancelledEventSchema,
+  type ApprovalDecidedEvent,
   type MessageReceivedEvent,
   type RunCancelledEvent,
 } from "@ofa/contracts";
@@ -27,6 +29,8 @@ export function createInngestClient(options: InngestClientOptions): Inngest {
 export interface RunDispatcher {
   messageReceived(event: MessageReceivedEvent): Promise<void>;
   cancelRun(event: RunCancelledEvent): Promise<void>;
+  /** Wake a run waiting on this approval. */
+  approvalDecided(event: ApprovalDecidedEvent): Promise<void>;
 }
 
 export function createRunDispatcher(inngest: Inngest): RunDispatcher {
@@ -44,6 +48,13 @@ export function createRunDispatcher(inngest: Inngest): RunDispatcher {
         name: INNGEST_EVENTS.runCancelled,
         data: runCancelledEventSchema.parse(event),
         id: `run-cancelled-${event.runId}`,
+      });
+    },
+    async approvalDecided(event) {
+      await inngest.send({
+        name: INNGEST_EVENTS.approvalDecided,
+        data: approvalDecidedEventSchema.parse(event),
+        id: `approval-decided-${event.approvalId}`,
       });
     },
   };

@@ -35,6 +35,11 @@ function fakeSandbox(overrides: Partial<SandboxHandle> = {}) {
     type: async (ref, text, options) => (calls.push(["type", ref, text, options]), page("typed")),
     press: async (key) => (calls.push(["press", key]), page("pressed")),
     back: async () => page("back"),
+    describe: async (ref) => ({
+      url: "https://a.example/cart",
+      title: "Cart",
+      ...(ref === 9 ? { element: { role: "button", name: "Pay   now" } } : {}),
+    }),
   };
   const handle: SandboxHandle = {
     id: "fake",
@@ -119,6 +124,24 @@ describe("computer tools", () => {
     expect(calls).toContainEqual(["type", 7, "hi", { clear: true, submit: true }]);
   });
 
+  it("say in plain words what a held call would do, for the approval card", async () => {
+    const { provider, calls } = fakeSandbox();
+    const tools = browserTools(provider);
+    const describe = (name: string, args: unknown) => byName(tools, name).describe!(args as never, ctx);
+    expect(await describe("browser.click", { ref: 9 })).toBe(
+      "Click the button “Pay now” on a.example",
+    );
+    expect(await describe("browser.type", { ref: 4, text: "Sam", submit: true })).toBe(
+      "Type “Sam” into element [4] on a.example, then press Enter",
+    );
+    expect(await describe("browser.press", { key: "Enter" })).toBe("Press Enter on a.example");
+    expect(
+      await shellTool(provider).describe!({ command: "rm -rf build", timeout_seconds: 60 }, ctx),
+    ).toBe("Run a command on its computer:\nrm -rf build");
+    // Describing changes nothing.
+    expect(calls).toEqual([]);
+  });
+
   it("page long snapshots like web.read_url", () => {
     const text = pageText(page("x".repeat(7_000)));
     expect(text).toContain("call browser.snapshot with from: 6000");
@@ -187,6 +210,7 @@ describe("use_saved_login", () => {
         },
         press: async () => ({ url, title: "", outline: "" }),
         back: async () => ({ url, title: "", outline: "" }),
+        describe: async () => ({ url, title: "Sign in" }),
       }),
     });
     const lookups: string[] = [];

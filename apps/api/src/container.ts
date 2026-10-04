@@ -6,6 +6,7 @@ import type { Config } from "@ofa/config";
 import { loginSecretNames } from "@ofa/core";
 import type {
   AgentDirectory,
+  ApprovalStore,
   ArtifactStore,
   CredentialVault,
   EventBus,
@@ -18,6 +19,7 @@ import type {
 } from "@ofa/core";
 import {
   createAgentDirectory,
+  createApprovalStore,
   createArtifactStore,
   createDatabase,
   createRunStore,
@@ -92,6 +94,7 @@ export interface Container {
   /** The agents' computer (M3); null when this server has none. */
   readonly sandbox: SandboxProvider | null;
   readonly artifacts: ArtifactStore;
+  readonly approvals: ApprovalStore;
   readonly dispatcher: RunDispatcher;
   readonly inngest: Inngest;
   readonly functions: ReturnType<typeof createFunctions>;
@@ -165,6 +168,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
   // The agents' computer: the Docker sandbox in self-host (ADR-0025).
   const sandbox = config.sandbox ? createDockerSandbox(config.sandbox) : null;
   const artifacts = createArtifactStore(db);
+  const approvals = createApprovalStore(db);
 
   const tools = createToolExecutor({
     registry: createToolRegistry(
@@ -202,6 +206,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     agents,
     threads,
     memory,
+    approvals,
     middleware: [createTelemetryMiddleware(telemetry)],
   };
 
@@ -210,7 +215,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     baseUrl: config.inngest.baseUrl,
     eventKey: config.inngest.eventKey,
   });
-  const functions = createFunctions(inngest, { harness, runs });
+  const functions = createFunctions(inngest, { harness, runs, approvals });
 
   return {
     config,
@@ -228,6 +233,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     memory,
     sandbox,
     artifacts,
+    approvals,
     dispatcher: overrides.dispatcher ?? createRunDispatcher(inngest),
     inngest,
     functions,

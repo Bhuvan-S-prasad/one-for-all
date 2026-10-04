@@ -11,6 +11,7 @@ import { hostCheck, originCheck } from "./middleware/perimeter";
 import { requestContext } from "./middleware/request-context";
 import { requireSession, requireTenant } from "./middleware/session";
 import { agentRoutes } from "./routes/agents";
+import { approvalRoutes } from "./routes/approvals";
 import { artifactRoutes } from "./routes/artifacts";
 import { healthRoutes } from "./routes/health";
 import { loginRoutes } from "./routes/logins";
@@ -90,6 +91,7 @@ export function createApp(container: Container): App {
   app.route("/api/agents", agentRoutes(container));
   app.route("/api/threads", threadRoutes(container));
   app.route("/api/runs", runRoutes(container));
+  app.route("/api/approvals", approvalRoutes(container));
   app.route("/api/memories", memoryRoutes(container));
   app.route("/api/artifacts", artifactRoutes(container));
   app.route("/api/logins", loginRoutes(container));

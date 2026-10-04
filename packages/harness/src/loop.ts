@@ -1,20 +1,23 @@
-import type { RunStopReason } from "@ofa/contracts";
-import type {
-  AgentDirectory,
-  AgentProfile,
-  LLMGateway,
-  LLMRequest,
-  MemoryStore,
-  RunContext,
-  RunEventWrite,
-  RunStore,
-  RunUsageTotals,
-  StepRunner,
-  ThreadId,
-  ThreadStore,
-  ToolDescriptor,
-  ToolExecutor,
-  ToolOutcome,
+import { INNGEST_EVENTS, type RunStopReason } from "@ofa/contracts";
+import {
+  APPROVAL_TIMEOUT_MS,
+  type AgentDirectory,
+  type AgentProfile,
+  type ApprovalStore,
+  type LLMGateway,
+  type LLMRequest,
+  type MemoryStore,
+  type RunContext,
+  type RunEventWrite,
+  type RunStore,
+  type RunUsageTotals,
+  type StepRunner,
+  type ThreadId,
+  type ThreadStore,
+  type ToolDescriptor,
+  type ToolExecutor,
+  type ToolOutcome,
+  type Verdict,
 } from "@ofa/core";
 import { compactTurns } from "./compaction";
 import {
@@ -44,6 +47,8 @@ export interface HarnessOptions {
   readonly extractMemories?: boolean;
   /** Same tool with the same arguments this many times ends the run. Default 3. */
   readonly loopRepeatLimit?: number;
+  /** How long a run waits for a person to answer an approval. Default 24 hours. */
+  readonly approvalTimeoutMs?: number;
 }
 
 export interface HarnessDeps {
@@ -53,6 +58,11 @@ export interface HarnessDeps {
   readonly agents: AgentDirectory;
   readonly threads: ThreadStore;
   readonly memory?: MemoryStore;
+  /**
+   * Where approval requests are kept. Without it, or a step runner that can
+   * wait, calls that need a person are refused.
+   */
+  readonly approvals?: ApprovalStore;
   readonly middleware?: readonly HarnessMiddleware[];
   readonly options?: HarnessOptions;
 }
@@ -127,7 +137,26 @@ interface ToolStepResult {
   readonly untrusted: boolean;
   readonly ok: boolean;
   readonly taintedNow: boolean;
+  /** Policy wants a person to agree first; nothing ran yet. */
+  readonly approval?: {
+    readonly verdict: Verdict;
+    readonly reasons: readonly string[];
+    readonly summary: string;
+  };
 }
+
+/**
+ * The first wait for an answer is short, then the row is checked: a decision
+ * made before the wait started (which the wait cannot see) is picked up there.
+ */
+const FIRST_WAIT_MS = 60_000;
+
+const DECLINED: Record<"rejected" | "expired", string> = {
+  rejected:
+    "Not done: the person said no to this. Do not try it another way; tell them what you would have done, or ask what they want instead.",
+  expired:
+    "Not done: nobody answered the approval request in time. Tell the person what is still waiting for them.",
+};
 
 export async function runAgent(
   input: RunInput,
@@ -370,9 +399,18 @@ export async function runAgent(
 
       for (const [j, call] of step.toolCalls.entries()) {
         const toolCallId = `tool-${i}-${j}`;
-        const result: ToolStepResult = await steps.run(toolCallId, () =>
+        let result: ToolStepResult = await steps.run(toolCallId, () =>
           runTool(toolCallId, call, tainted),
         );
+        if (result.approval) {
+          const decision = await askPerson(toolCallId, call, result.approval);
+          result =
+            decision === "approved"
+              ? await steps.run(`${toolCallId}-approved`, () =>
+                  runTool(toolCallId, call, tainted, true),
+                )
+              : { content: DECLINED[decision], untrusted: false, ok: false, taintedNow: false };
+        }
         usage = addUsage(usage, { inputTokens: 0, outputTokens: 0, costUsd: 0 }, { tool: 1 });
         if (result.taintedNow) tainted = true;
         if (result.ok && call.name === "todo.write") {
@@ -416,10 +454,90 @@ export async function runAgent(
     throw error;
   }
 
+  /**
+   * Ask a person about one call and wait for the answer (§6.2). The wait
+   * holds no process. The approval row is the truth: the API settles it, then
+   * sends the event that ends the wait early.
+   */
+  async function askPerson(
+    toolCallId: string,
+    call: ToolCallTurn,
+    approval: NonNullable<ToolStepResult["approval"]>,
+  ): Promise<"approved" | "rejected" | "expired"> {
+    const approvals = deps.approvals as ApprovalStore;
+    const waitFor = (id: string, timeoutMs: number) =>
+      steps.waitForEvent!(id, {
+        event: INNGEST_EVENTS.approvalDecided,
+        field: "approvalId",
+        value: asked.id,
+        timeoutMs,
+      });
+    const timeoutMs = options.approvalTimeoutMs ?? APPROVAL_TIMEOUT_MS;
+
+    const asked = await steps.run(`${toolCallId}-ask`, async () => {
+      const record = await approvals.request(ctx, {
+        toolCallId,
+        tool: call.name,
+        args: call.args,
+        summary: approval.summary,
+        reasons: approval.reasons,
+        verdict: approval.verdict,
+        expiresAt: new Date(Date.now() + timeoutMs),
+      });
+      await log([
+        runEvent(`${toolCallId}-ask`, "approval.requested", {
+          approvalId: record.id,
+          toolCallId,
+          tool: call.name,
+        }),
+        runEvent(`${toolCallId}-waiting`, "run.waiting", {
+          reason: "approval",
+          until: record.expiresAt.toISOString(),
+        }),
+      ]);
+      await deps.runs.update(ctx, ctx.runId, { status: "waiting", onlyIfActive: true });
+      return { id: record.id as string, status: record.status };
+    });
+
+    if (asked.status === "pending") {
+      const early = await waitFor(`${toolCallId}-wait`, Math.min(FIRST_WAIT_MS, timeoutMs));
+      if (!early && timeoutMs > FIRST_WAIT_MS) {
+        const now = await steps.run(
+          `${toolCallId}-check`,
+          async () => (await approvals.get(ctx, asked.id))?.status ?? "expired",
+        );
+        if (now === "pending") await waitFor(`${toolCallId}-wait-more`, timeoutMs - FIRST_WAIT_MS);
+      }
+    }
+
+    return steps.run(`${toolCallId}-decided`, async () => {
+      let record = await approvals.get(ctx, asked.id);
+      if (record?.status === "pending") {
+        // No answer in time. If someone answers this very moment, theirs wins.
+        record =
+          (await approvals.decide(ctx, asked.id, { status: "expired", decidedBy: null })) ??
+          (await approvals.get(ctx, asked.id));
+      }
+      const status: "approved" | "rejected" | "expired" =
+        record && record.status !== "pending" ? record.status : "expired";
+      await log([
+        runEvent(`${toolCallId}-decided`, "approval.decided", {
+          approvalId: asked.id,
+          decision: status,
+          decidedBy: record?.decidedBy ?? null,
+        }),
+        runEvent(`${toolCallId}-resumed`, "run.resumed", {}),
+      ]);
+      await deps.runs.update(ctx, ctx.runId, { status: "running", onlyIfStatus: "waiting" });
+      return status;
+    });
+  }
+
   async function runTool(
     toolCallId: string,
     call: ToolCallTurn & { readonly invalid?: string },
     taintedBefore: boolean,
+    approved = false,
   ): Promise<ToolStepResult> {
     if (call.invalid) {
       await log([
@@ -439,6 +557,7 @@ export async function runAgent(
       toolCallId,
       idempotencyKey: `${ctx.runId}:${toolCallId}`,
       tainted: taintedBefore,
+      ...(approved ? { approved: true } : {}),
     };
     const execute = chain.tool(hook as RunHookContext, (r) => deps.tools.execute(r, ctx));
     let outcome: ToolOutcome;
@@ -454,7 +573,8 @@ export async function runAgent(
     }
 
     const events: RunEventWrite[] = [];
-    if (outcome.status !== "error" || outcome.verdict) {
+    // An approved call's verdict was logged when it was held.
+    if (!approved && (outcome.status !== "error" || outcome.verdict)) {
       const verdict = outcome.status === "error" ? outcome.verdict! : outcome.verdict;
       const reasons = outcome.status === "error" ? (outcome.reasons ?? []) : outcome.reasons;
       events.push(
@@ -506,11 +626,31 @@ export async function runAgent(
     await log(events);
     if (taintedNow) await deps.runs.update(ctx, ctx.runId, { tainted: true });
 
+    const needsPerson =
+      outcome.status === "blocked" &&
+      (outcome.verdict === "approve" || outcome.verdict === "human");
+    if (outcome.status === "blocked" && needsPerson && deps.approvals && steps.waitForEvent) {
+      return {
+        content: `Waiting: ${outcome.message}`,
+        untrusted: false,
+        ok: false,
+        taintedNow,
+        approval: {
+          verdict: outcome.verdict,
+          reasons: outcome.reasons,
+          summary:
+            outcome.summary ?? `${call.name} ${JSON.stringify(call.args ?? {}).slice(0, 400)}`,
+        },
+      };
+    }
+
     const content =
       outcome.status === "ok"
         ? outcome.content
         : outcome.status === "blocked"
-          ? `Not done: ${outcome.message}`
+          ? needsPerson
+            ? `Not done: ${outcome.message} Nobody can approve it from here, so do not try again; tell the person what you would have done.`
+            : `Not done: ${outcome.message}`
           : `Error (${outcome.code}): ${outcome.message}`;
     return {
       content,
