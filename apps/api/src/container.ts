@@ -54,7 +54,15 @@ import {
   createToolExecutor,
   createToolRegistry,
 } from "@ofa/tools";
-import { createUnconfiguredVault, createVault } from "@ofa/vault";
+import {
+  createOsKeychain,
+  createUnconfiguredVault,
+  createVault,
+  resolveVaultKeys,
+  rotateInstall,
+  type InstallRotation,
+  type VaultKeys,
+} from "@ofa/vault";
 import type { Inngest } from "inngest";
 import { createAuth, type Auth } from "./auth/auth";
 import { createLogger, type Logger } from "./lib/logger";
@@ -75,12 +83,23 @@ export function llmKeySecretName(providerId: string): string {
   return `llm.${providerId}.api_key`;
 }
 
+/** Finishing a vault key rotation at start (M4.02); see vault-rotation.ts. */
+export interface VaultRotation {
+  readonly keys: VaultKeys;
+  /** Re-wrap every workspace's values with the current key; `ownerDb` is the owner connection. */
+  run(ownerDb: Database): Promise<InstallRotation>;
+  /** Remove the replaced key from the OS keychain, once nothing needs it. */
+  forgetPrevious(): void;
+}
+
 export interface Container {
   readonly config: Config;
   readonly logger: Logger;
   readonly db: Database;
   readonly auth: Auth;
   readonly vault: CredentialVault;
+  /** Null when no vault key is configured. */
+  readonly vaultRotation: VaultRotation | null;
   /** Used by the agent runtime; the API never calls models itself (hard rule 1). */
   readonly llm: LLMGateway;
   readonly llmProvider: ModelProvider;
@@ -147,9 +166,23 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
   const database = createDatabase(config.database.url);
   const { db } = database;
   const auth = createAuth(db, config);
-  const vault = config.vault.key
-    ? createVault({ db, key: config.vault.key })
-    : createUnconfiguredVault();
+  // The vault key comes from the environment or the OS keychain (M4.02).
+  const keychain = () => createOsKeychain();
+  const vaultKeys = resolveVaultKeys(config.vault, keychain);
+  const fullVault = vaultKeys
+    ? createVault({ db, key: vaultKeys.key, previousKeys: vaultKeys.previousKeys })
+    : null;
+  const vault = fullVault ?? createUnconfiguredVault();
+  const vaultRotation: VaultRotation | null =
+    fullVault && vaultKeys
+      ? {
+          keys: vaultKeys,
+          run: (ownerDb) => rotateInstall(fullVault, ownerDb),
+          forgetPrevious: () => {
+            if (vaultKeys.source === "keychain") keychain().remove("vault-key.previous");
+          },
+        }
+      : null;
   const { llm, provider, tiers } = createLlm(config, vault);
   const telemetry: TelemetryHandle = createTelemetry({
     serviceName: "one-for-all",
@@ -223,6 +256,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     db,
     auth,
     vault,
+    vaultRotation,
     llm,
     llmProvider: provider,
     tiers,

@@ -25,7 +25,11 @@ export interface Config {
     readonly migrationsDir: string | undefined;
   };
   readonly auth: { readonly secret: string };
-  readonly vault: { readonly key: string | undefined };
+  readonly vault: {
+    readonly source: "env" | "keychain";
+    readonly key: string | undefined;
+    readonly previousKeys: readonly string[];
+  };
   readonly llm: {
     readonly provider: string;
     readonly apiKey: string | undefined;
@@ -121,7 +125,11 @@ export function loadConfig(source: Record<string, string | undefined> = process.
       migrationsDir: env.MIGRATIONS_DIR,
     },
     auth: { secret: env.AUTH_SECRET },
-    vault: { key: env.VAULT_KEY },
+    vault: {
+      source: env.VAULT_KEY_SOURCE,
+      key: env.VAULT_KEY,
+      previousKeys: env.VAULT_PREVIOUS_KEYS ?? [],
+    },
     llm: {
       provider: env.LLM_PROVIDER,
       apiKey: env.LLM_API_KEY,

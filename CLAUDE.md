@@ -104,6 +104,7 @@ Run from the repo root unless noted. Node 24, pnpm 12.3.4, Docker.
 | `pnpm --filter @ofa/db db:migrate` | Apply migrations to the dev database |
 | `pnpm --filter @ofa/api db:seed` | Dev owner, workspace and sample agents (development only) |
 | `pnpm eval` | Eval cases (golden and red-team) against live models on fixtures; `--list`, `--case`, `--k`, `--model` (needs `LLM_API_KEY`; uses real quota) |
+| `pnpm vault status` / `keychain:store` / `keychain:rotate` | Which vault key wraps how many values; copy `VAULT_KEY` into the OS keychain; rotate a key kept there (the app finishes the rotation at its next start). Prints fingerprints, never keys |
 | `pnpm --filter @ofa/llm spike` | Tool-calling check of free models for the tiers (needs `LLM_API_KEY` in `.env`; uses real quota) |
 | `sh infra/scripts/init-env.sh` | Create `infra/compose/.env` with random secrets for the self-host bundle |
 | `docker compose -f infra/compose/docker-compose.selfhost.yml up -d --build` | Build and run the self-host bundle on http://localhost:3000 |

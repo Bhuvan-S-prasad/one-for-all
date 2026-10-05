@@ -15,6 +15,7 @@
     "test": "turbo run test",
     "test:integration": "turbo run test:integration",
     "eval": "pnpm --filter @ofa/evals eval",
+    "vault": "pnpm --filter @ofa/vault vault",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "infra:up": "docker compose -f infra/compose/docker-compose.dev.yml up -d --wait",

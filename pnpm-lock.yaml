@@ -478,6 +478,9 @@ importers:
 
   packages/vault:
     dependencies:
+      '@ofa/config':
+        specifier: workspace:*
+        version: link:../config
       '@ofa/core':
         specifier: workspace:*
         version: link:../core
@@ -485,6 +488,9 @@ importers:
         specifier: workspace:*
         version: link:../db
     devDependencies:
+      drizzle-orm:
+        specifier: 0.45.3
+        version: 0.45.3(@opentelemetry/api@1.9.1)(@types/pg@8.15.6)(kysely@0.29.6)(postgres@3.4.9)
       tsx:
         specifier: 4.23.15
         version: 4.23.15

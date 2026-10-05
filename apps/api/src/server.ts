@@ -4,6 +4,7 @@ import { ConfigError, loadConfig } from "@ofa/config";
 import { loadRootEnv, runMigrations } from "@ofa/db";
 import { createApp } from "./app";
 import { createContainer } from "./container";
+import { finishVaultRotation } from "./services/vault-rotation";
 
 // In the repo (pnpm dev), read the root .env. In the Docker image there is no
 // repo root and the environment comes from Compose.
@@ -27,6 +28,8 @@ if (config.database.migrateOnStart) {
   logger.info("applying migrations");
   await runMigrations(config.database.migrationUrl, config.database.migrationsDir);
 }
+
+if (container.vaultRotation) void finishVaultRotation(container.vaultRotation, config, logger);
 
 const app = createApp(container);
 const server = serve(

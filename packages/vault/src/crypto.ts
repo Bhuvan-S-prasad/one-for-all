@@ -80,15 +80,67 @@ export function encryptEnvelope(vaultKey: Buffer, value: string, aad: string): E
   }
 }
 
-export function decryptEnvelope(vaultKey: Buffer, envelope: Envelope, aad: string): string {
-  if (envelope.keyId !== keyFingerprint(vaultKey)) {
+/**
+ * The vault keys in use (M4.02): the current one wraps every new data key;
+ * previous ones are kept only to read what they wrapped until rotation has
+ * re-wrapped it with the current key.
+ */
+export interface VaultKeyring {
+  readonly current: Buffer;
+  readonly currentId: string;
+  /** The key with this fingerprint, current or previous. */
+  get(id: string): Buffer | undefined;
+  /** Fingerprints of the previous keys. */
+  readonly previousIds: readonly string[];
+}
+
+export function createKeyring(current: Buffer, previous: readonly Buffer[] = []): VaultKeyring {
+  const currentId = keyFingerprint(current);
+  const keys = new Map<string, Buffer>([[currentId, current]]);
+  for (const key of previous) {
+    const id = keyFingerprint(key);
+    if (!keys.has(id)) keys.set(id, key);
+  }
+  return {
+    current,
+    currentId,
+    get: (id) => keys.get(id),
+    previousIds: [...keys.keys()].filter((id) => id !== currentId),
+  };
+}
+
+function wrappingKey(keys: VaultKeyring, envelope: Envelope): Buffer {
+  const key = keys.get(envelope.keyId);
+  if (!key) {
     throw new VaultKeyError(
-      "This secret was stored with a different VAULT_KEY. Restore the original key, or save the secret again.",
+      "This secret was stored with a VAULT_KEY that is no longer configured. Restore that key (as VAULT_KEY, or in VAULT_PREVIOUS_KEYS while rotating), or save the secret again.",
     );
   }
-  const dataKey = open(vaultKey, envelope.keyCiphertext, `${aad}#key`);
+  return key;
+}
+
+export function decryptEnvelope(keys: VaultKeyring, envelope: Envelope, aad: string): string {
+  const dataKey = open(wrappingKey(keys, envelope), envelope.keyCiphertext, `${aad}#key`);
   try {
     return open(dataKey, envelope.valueCiphertext, aad).toString("utf8");
+  } finally {
+    dataKey.fill(0);
+  }
+}
+
+/**
+ * Wrap the envelope's data key with the current vault key. The value's own
+ * ciphertext is unchanged: rotating a key re-seals 32 bytes per secret.
+ */
+export function rewrapEnvelope(keys: VaultKeyring, envelope: Envelope, aad: string): Envelope {
+  if (envelope.keyId === keys.currentId) return envelope;
+  const dataKey = open(wrappingKey(keys, envelope), envelope.keyCiphertext, `${aad}#key`);
+  try {
+    return {
+      valueCiphertext: envelope.valueCiphertext,
+      keyCiphertext: seal(keys.current, dataKey, `${aad}#key`),
+      keyId: keys.currentId,
+    };
   } finally {
     dataKey.fill(0);
   }

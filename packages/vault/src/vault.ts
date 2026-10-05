@@ -11,22 +11,63 @@ import {
   deleteSecret,
   findSecretById,
   findSecretByName,
+  listEnvelopes,
   listSecrets,
   markSecretUsed,
+  rewrapStoredEnvelope,
   upsertSecret,
   type Database,
   type SecretRecord,
+  type StoredEnvelope,
 } from "@ofa/db";
-import { decryptEnvelope, encryptEnvelope, parseVaultKey } from "./crypto";
+import {
+  createKeyring,
+  decryptEnvelope,
+  encryptEnvelope,
+  parseVaultKey,
+  rewrapEnvelope,
+  type Envelope,
+} from "./crypto";
 import { createRedactor, MIN_SECRET_LENGTH, type Redactor } from "./redact";
 
 export interface VaultOptions {
   readonly db: Database;
-  /** `VAULT_KEY`: 32 random bytes, base64. */
+  /** The current vault key: 32 random bytes, base64 (`VAULT_KEY` or the OS keychain). */
   readonly key: string;
+  /** Earlier keys, kept to read what they wrapped until rotation is done (`VAULT_PREVIOUS_KEYS`). */
+  readonly previousKeys?: readonly string[];
   /** How long decrypted values are kept for redaction. Default 60 s. */
   readonly redactorTtlMs?: number;
   readonly now?: () => number;
+}
+
+/**
+ * A record whose encrypted column is not a named secret: a connection's
+ * tokens, or an MCP server's OAuth client. The ciphertext is bound to the
+ * table, workspace and row, so it cannot be moved to another row.
+ */
+export interface RecordScope {
+  readonly table: "connection" | "mcp_server";
+  readonly id: string;
+}
+
+export interface RotationResult {
+  /** Re-wrapped with the current key. */
+  readonly rewrapped: number;
+  /** Already on the current key. */
+  readonly current: number;
+  /** Wrapped by a key that is not configured; left as it was. */
+  readonly unreadable: number;
+}
+
+/** `CredentialVault`, plus what connections need and key rotation (M4.02). */
+export interface Vault extends CredentialVault {
+  /** Encrypt a record's value, e.g. a connection's tokens as JSON. */
+  seal(ctx: TenantContext, scope: RecordScope, value: string): Envelope;
+  /** Decrypt a record's value. Only the tool executor and the MCP client call this (hard rule 4). */
+  open(ctx: TenantContext, scope: RecordScope, envelope: Envelope): string;
+  /** Re-wrap every value in the workspace that a previous key wrapped. */
+  rotate(ctx: TenantContext): Promise<RotationResult>;
 }
 
 /** Lower case, digits, `.`, `_` and `-`: `llm.openrouter.api_key`. */
@@ -35,9 +76,54 @@ const SECRET_NAME = /^[a-z0-9][a-z0-9._-]{0,99}$/;
 /** `last_used_at` is a hint for Settings, so it is written at most this often. */
 const TOUCH_INTERVAL_MS = 60 * 60 * 1000;
 
+/**
+ * Fields of a record's JSON value that are secret and must be redacted. The
+ * rest (token type, scopes, expiry, client name) is ordinary text.
+ */
+const SECRET_FIELDS = new Set([
+  "access_token",
+  "refresh_token",
+  "id_token",
+  "client_secret",
+  "registration_access_token",
+  "code_verifier",
+]);
+
 /** Bind each ciphertext to its workspace and name, so it cannot be moved to another row. */
 function aadFor(workspaceId: WorkspaceId, name: string): string {
   return `ofa:secret:${workspaceId}:${name}`;
+}
+
+function recordAad(workspaceId: WorkspaceId, scope: RecordScope): string {
+  return `ofa:${scope.table}:${workspaceId}:${scope.id}`;
+}
+
+function storedAad(workspaceId: WorkspaceId, stored: StoredEnvelope): string {
+  return stored.table === "secret"
+    ? aadFor(workspaceId, stored.name ?? "")
+    : recordAad(workspaceId, { table: stored.table, id: stored.id });
+}
+
+/** The values to redact from a record's plaintext: its secret fields, or all of it if it isn't JSON. */
+export function secretsInRecord(value: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return [value];
+  }
+  const found: string[] = [];
+  const walk = (node: unknown) => {
+    if (Array.isArray(node)) node.forEach(walk);
+    else if (node !== null && typeof node === "object") {
+      for (const [key, item] of Object.entries(node)) {
+        if (SECRET_FIELDS.has(key) && typeof item === "string") found.push(item);
+        else walk(item);
+      }
+    }
+  };
+  walk(parsed);
+  return found;
 }
 
 function hintFor(value: string): string | null {
@@ -54,10 +140,13 @@ function toInfo(record: SecretRecord): SecretInfo {
   };
 }
 
-/** `CredentialVault` backed by Postgres, encrypted with a key from the environment. */
-export function createVault(options: VaultOptions): CredentialVault {
+/** `CredentialVault` backed by Postgres, encrypted with keys from the environment or the OS keychain. */
+export function createVault(options: VaultOptions): Vault {
   const { db } = options;
-  const key = parseVaultKey(options.key);
+  const keys = createKeyring(
+    parseVaultKey(options.key),
+    (options.previousKeys ?? []).map(parseVaultKey),
+  );
   const ttl = options.redactorTtlMs ?? 60_000;
   const now = options.now ?? Date.now;
   // Decrypted values per workspace, for redaction. A replaced or deleted value
@@ -65,7 +154,7 @@ export function createVault(options: VaultOptions): CredentialVault {
   const known = new Map<WorkspaceId, { values: Set<string>; redact: Redactor; expires: number }>();
 
   function decrypt(ctx: TenantContext, record: SecretRecord): string {
-    return decryptEnvelope(key, record, aadFor(ctx.workspaceId, record.name));
+    return decryptEnvelope(keys, record, aadFor(ctx.workspaceId, record.name));
   }
 
   function remember(workspaceId: WorkspaceId, values: Set<string>, expires: number): Redactor {
@@ -74,11 +163,24 @@ export function createVault(options: VaultOptions): CredentialVault {
     return redact;
   }
 
+  /** Redact these values from now on, without waiting for the cache to expire. */
+  function learn(workspaceId: WorkspaceId, values: readonly string[]): void {
+    const cached = known.get(workspaceId);
+    if (cached) remember(workspaceId, new Set([...cached.values, ...values]), cached.expires);
+  }
+
   async function redactorFor(ctx: TenantContext): Promise<Redactor> {
     const cached = known.get(ctx.workspaceId);
     if (cached && cached.expires > now()) return cached.redact;
-    const records = await listSecrets(db, ctx);
-    const values = new Set(records.map((record) => decrypt(ctx, record)));
+    const values = new Set<string>();
+    for (const stored of await listEnvelopes(db, ctx)) {
+      // A value no configured key can open can't be revealed either, so it
+      // can't reach output: skip it rather than fail every redaction.
+      if (!keys.get(stored.keyId)) continue;
+      const plain = decryptEnvelope(keys, stored, storedAad(ctx.workspaceId, stored));
+      if (stored.table === "secret") values.add(plain);
+      else for (const value of secretsInRecord(plain)) values.add(value);
+    }
     return remember(ctx.workspaceId, values, now() + ttl);
   }
 
@@ -94,11 +196,9 @@ export function createVault(options: VaultOptions): CredentialVault {
           `Secrets must be at least ${MIN_SECRET_LENGTH} characters`,
         );
       }
-      const envelope = encryptEnvelope(key, value, aadFor(ctx.workspaceId, name));
+      const envelope = encryptEnvelope(keys.current, value, aadFor(ctx.workspaceId, name));
       const record = await upsertSecret(db, ctx, { name, ...envelope, hint: hintFor(value) });
-      // Redact the new value from now on, without waiting for the cache to expire.
-      const cached = known.get(ctx.workspaceId);
-      if (cached) remember(ctx.workspaceId, new Set([...cached.values, value]), cached.expires);
+      learn(ctx.workspaceId, [value]);
       return { id: record.id, name: record.name };
     },
 
@@ -128,13 +228,42 @@ export function createVault(options: VaultOptions): CredentialVault {
     async redact(ctx, text) {
       return (await redactorFor(ctx))(text);
     },
+
+    seal(ctx, scope, value) {
+      const envelope = encryptEnvelope(keys.current, value, recordAad(ctx.workspaceId, scope));
+      learn(ctx.workspaceId, secretsInRecord(value));
+      return envelope;
+    },
+
+    open(ctx, scope, envelope) {
+      return decryptEnvelope(keys, envelope, recordAad(ctx.workspaceId, scope));
+    },
+
+    async rotate(ctx) {
+      let rewrapped = 0;
+      let current = 0;
+      let unreadable = 0;
+      for (const stored of await listEnvelopes(db, ctx)) {
+        if (stored.keyId === keys.currentId) {
+          current += 1;
+        } else if (!keys.get(stored.keyId)) {
+          unreadable += 1;
+        } else {
+          const next = rewrapEnvelope(keys, stored, storedAad(ctx.workspaceId, stored));
+          // False when the value was saved again meanwhile, so it is on the current key.
+          if (await rewrapStoredEnvelope(db, ctx, stored, stored.keyId, next)) rewrapped += 1;
+          else current += 1;
+        }
+      }
+      return { rewrapped, current, unreadable };
+    },
   };
 }
 
 /**
- * Stand-in when `VAULT_KEY` is not set: nothing can be stored or revealed,
- * and with nothing stored there is nothing to redact. The app still starts,
- * so first-run setup and login work before a key exists.
+ * Stand-in when no vault key is configured: nothing can be stored or
+ * revealed, and with nothing stored there is nothing to redact. The app still
+ * starts, so first-run setup and login work before a key exists.
  */
 export function createUnconfiguredVault(): CredentialVault {
   const refuse = async (): Promise<never> => {

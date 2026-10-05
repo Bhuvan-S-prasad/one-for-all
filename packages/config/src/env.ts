@@ -44,6 +44,19 @@ export const envSchema = z
 
     AUTH_SECRET: z.string().min(32, "must be at least 32 characters"),
     VAULT_KEY: base64Key32.optional(),
+    /** Where the vault key comes from: `env` (VAULT_KEY) or `keychain` (the OS keychain, M4.02). */
+    VAULT_KEY_SOURCE: z.enum(["env", "keychain"]).default("env"),
+    /** Earlier vault keys, comma-separated, kept while a rotation re-wraps what they encrypted. */
+    VAULT_PREVIOUS_KEYS: z
+      .string()
+      .transform((value) =>
+        value
+          .split(",")
+          .map((key) => key.trim())
+          .filter(Boolean),
+      )
+      .pipe(z.array(base64Key32))
+      .optional(),
 
     /**
      * Which model provider serves agents (ADR-0022). Switching is this one

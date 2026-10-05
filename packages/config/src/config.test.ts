@@ -99,4 +99,20 @@ describe("loadConfig", () => {
     expect(loadConfig({ ...valid, VAULT_KEY: key }).vault.key).toBe(key);
     expect(() => loadConfig({ ...valid, VAULT_KEY: "dG9vLXNob3J0" })).toThrow(ConfigError);
   });
+
+  it("reads the key source and previous keys for rotation", () => {
+    const a = Buffer.alloc(32, 1).toString("base64");
+    const b = Buffer.alloc(32, 2).toString("base64");
+    expect(loadConfig(valid).vault).toEqual({ source: "env", key: undefined, previousKeys: [] });
+    const rotating = loadConfig({
+      ...valid,
+      VAULT_KEY_SOURCE: "keychain",
+      VAULT_PREVIOUS_KEYS: ` ${a}, ${b},`,
+    });
+    expect(rotating.vault).toMatchObject({ source: "keychain", previousKeys: [a, b] });
+    expect(() => loadConfig({ ...valid, VAULT_PREVIOUS_KEYS: `${a},dG9vLXNob3J0` })).toThrow(
+      ConfigError,
+    );
+    expect(() => loadConfig({ ...valid, VAULT_KEY_SOURCE: "file" })).toThrow(ConfigError);
+  });
 });

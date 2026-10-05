@@ -68,6 +68,13 @@ export {
   type SecretWrite,
 } from "./repos/secrets";
 export {
+  listEnvelopes,
+  listWorkspaceOwners,
+  rewrapStoredEnvelope,
+  type EnvelopeTable,
+  type StoredEnvelope,
+} from "./repos/envelopes";
+export {
   bootstrapOwner,
   findInstallOwner,
   isSetupComplete,

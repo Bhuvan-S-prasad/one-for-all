@@ -1,8 +1,16 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { asId, type TenantContext, type UserId, type WorkspaceId } from "@ofa/core";
-import { createDatabase, findSecretByName, loadRootEnv, schema, withDatabaseName } from "@ofa/db";
+import {
+  createDatabase,
+  findSecretByName,
+  loadRootEnv,
+  schema,
+  withDatabaseName,
+  withTenant,
+} from "@ofa/db";
+import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createVault, REDACTED } from "./index";
+import { createVault, REDACTED, rotateInstall } from "./index";
 
 // Runs against `oneforall_test_vault`, created by `pnpm test:integration`.
 loadRootEnv();
@@ -80,5 +88,139 @@ describe.skipIf(!appUrl || !ownerUrl)("vault (integration)", () => {
     if (!ref) throw new Error("missing secret");
     await vault.delete(a, ref);
     expect(await vault.find(a, "llm.test.api_key")).toBeNull();
+  });
+
+  describe("rotation and connection records (M4.02)", () => {
+    const newKey = randomBytes(32).toString("base64");
+    const rotating = createVault({ db: app.db, key: newKey, previousKeys: [key] });
+    const rotated = createVault({ db: app.db, key: newKey });
+    let serverId = "";
+    let connectionId = "";
+
+    beforeAll(async () => {
+      await vault.put(a, "rotation.test", "rotation-value-0001");
+      await vault.put(b, "rotation.test", "rotation-value-0002");
+      const [server] = await withTenant(app.db, a, (tx) =>
+        tx
+          .insert(schema.mcpServer)
+          .values({
+            workspaceId: a.workspaceId,
+            slug: "notion",
+            name: "Notion",
+            url: "https://mcp.notion.example/mcp",
+          })
+          .returning({ id: schema.mcpServer.id }),
+      );
+      serverId = server?.id ?? "";
+      const client = vault.seal(
+        a,
+        { table: "mcp_server", id: serverId },
+        JSON.stringify({ client_id: "public-client-id", client_secret: "client-secret-5555" }),
+      );
+      await withTenant(app.db, a, (tx) =>
+        tx
+          .update(schema.mcpServer)
+          .set({
+            clientCiphertext: client.valueCiphertext,
+            clientKeyCiphertext: client.keyCiphertext,
+            clientKeyId: client.keyId,
+          })
+          .where(eq(schema.mcpServer.id, serverId)),
+      );
+      const [row] = await withTenant(app.db, a, (tx) =>
+        tx
+          .insert(schema.connection)
+          .values({ workspaceId: a.workspaceId, mcpServerId: serverId, userId: a.userId })
+          .returning({ id: schema.connection.id }),
+      );
+      connectionId = row?.id ?? "";
+      const tokens = vault.seal(
+        a,
+        { table: "connection", id: connectionId },
+        JSON.stringify({
+          access_token: "access-token-6666",
+          refresh_token: "refresh-token-7777",
+          token_type: "Bearer",
+        }),
+      );
+      await withTenant(app.db, a, (tx) =>
+        tx
+          .update(schema.connection)
+          .set({
+            status: "active",
+            credentialsCiphertext: tokens.valueCiphertext,
+            keyCiphertext: tokens.keyCiphertext,
+            keyId: tokens.keyId,
+          })
+          .where(eq(schema.connection.id, connectionId)),
+      );
+    });
+
+    async function storedTokens() {
+      const [row] = await withTenant(app.db, a, (tx) =>
+        tx.select().from(schema.connection).where(eq(schema.connection.id, connectionId)),
+      );
+      return {
+        valueCiphertext: row?.credentialsCiphertext ?? "",
+        keyCiphertext: row?.keyCiphertext ?? "",
+        keyId: row?.keyId ?? "",
+      };
+    }
+
+    it("redacts a connection's tokens and a server's client secret, not its ordinary fields", async () => {
+      const fresh = createVault({ db: app.db, key });
+      const text =
+        "access-token-6666 refresh-token-7777 client-secret-5555 Bearer public-client-id";
+      expect(await fresh.redact(a, text)).toBe(
+        `${REDACTED} ${REDACTED} ${REDACTED} Bearer public-client-id`,
+      );
+    });
+
+    it("a record's ciphertext opens only for its own row", async () => {
+      const tokens = await storedTokens();
+      expect(
+        JSON.parse(vault.open(a, { table: "connection", id: connectionId }, tokens)),
+      ).toMatchObject({
+        access_token: "access-token-6666",
+      });
+      expect(() => vault.open(a, { table: "connection", id: serverId }, tokens)).toThrow();
+      expect(() => vault.open(b, { table: "connection", id: connectionId }, tokens)).toThrow();
+    });
+
+    it("re-wraps every workspace's values once, keeping updated_at, after which the old key isn't needed", async () => {
+      const before = await findSecretByName(app.db, a, "rotation.test");
+      const result = await rotateInstall(rotating, owner.db);
+      expect(result).toEqual({ workspaces: 2, rewrapped: 4, current: 0, unreadable: 0 });
+      expect((await findSecretByName(app.db, a, "rotation.test"))?.updatedAt).toEqual(
+        before?.updatedAt,
+      );
+
+      const ref = await rotated.find(a, "rotation.test");
+      expect(await rotated.reveal(a, ref ?? { id: asId(""), name: "" })).toBe(
+        "rotation-value-0001",
+      );
+      const tokens = await storedTokens();
+      expect(rotated.open(a, { table: "connection", id: connectionId }, tokens)).toContain(
+        "access-token-6666",
+      );
+      expect(await rotated.redact(a, "client-secret-5555")).toBe(REDACTED);
+      // The old key alone no longer opens anything.
+      await expect(vault.reveal(a, ref ?? { id: asId(""), name: "" })).rejects.toThrow(
+        /no longer configured/,
+      );
+
+      expect(await rotateInstall(rotating, owner.db)).toEqual({
+        workspaces: 2,
+        rewrapped: 0,
+        current: 4,
+        unreadable: 0,
+      });
+    });
+
+    it("leaves values it can't read alone, and still redacts", async () => {
+      const stranger = createVault({ db: app.db, key: randomBytes(32).toString("base64") });
+      expect(await stranger.rotate(a)).toEqual({ rewrapped: 0, current: 0, unreadable: 3 });
+      expect(await stranger.redact(a, "nothing secret here")).toBe("nothing secret here");
+    });
   });
 });
