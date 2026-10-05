@@ -229,6 +229,154 @@ describe.skipIf(!appUrl || !ownerUrl)("agent tables (integration)", () => {
     expect(await findSecretByName(app.db, ctx, write.name)).toBeNull();
   });
 
+  describe("connections and policy rules (M4.01)", () => {
+    async function newServer(
+      slug: string,
+      extra: Partial<typeof schema.mcpServer.$inferInsert> = {},
+    ) {
+      const [row] = await withTenant(app.db, ctx, (tx) =>
+        tx
+          .insert(schema.mcpServer)
+          .values({
+            workspaceId: ctx.workspaceId,
+            slug,
+            name: slug,
+            url: `https://mcp.${slug}.example/mcp`,
+            ...extra,
+          })
+          .returning({ id: schema.mcpServer.id }),
+      );
+      return row?.id ?? "";
+    }
+
+    it("servers: one slug and one install of a catalog entry per workspace", async () => {
+      await newServer("notion", { catalogId: "notion" });
+      expect((await pgError(newServer("notion"))).code).toBe("23505");
+      expect((await pgError(newServer("notion2", { catalogId: "notion" }))).code).toBe("23505");
+      // Custom servers have no catalog entry, and there can be several.
+      await newServer("custom_a");
+      await newServer("custom_b");
+    });
+
+    it("servers: refuse a slug that can't prefix tool names, and a half-stored client", async () => {
+      expect((await pgError(newServer("Not-OK"))).code).toBe("23514");
+      const half = await pgError(
+        newServer("half", { clientCiphertext: "v1.a", clientKeyId: "k1" }),
+      );
+      expect(half.code).toBe("23514");
+      await newServer("whole", {
+        clientCiphertext: "v1.a",
+        clientKeyCiphertext: "v1.b",
+        clientKeyId: "k1",
+      });
+    });
+
+    it("connections: one per person per server, active only with credentials, gone with the server", async () => {
+      const mcpServerId = await newServer("linear");
+      const base = { workspaceId: ctx.workspaceId, mcpServerId, userId: ctx.userId };
+      const empty = await pgError(
+        withTenant(app.db, ctx, (tx) =>
+          tx.insert(schema.connection).values({ ...base, status: "active" }),
+        ),
+      );
+      expect(empty.code).toBe("23514");
+      await withTenant(app.db, ctx, (tx) =>
+        tx.insert(schema.connection).values({
+          ...base,
+          status: "active",
+          credentialsCiphertext: "v1.a",
+          keyCiphertext: "v1.b",
+          keyId: "k1",
+        }),
+      );
+      const second = await pgError(
+        withTenant(app.db, ctx, (tx) => tx.insert(schema.connection).values(base)),
+      );
+      expect(second.code).toBe("23505");
+
+      await withTenant(app.db, ctx, (tx) =>
+        tx.delete(schema.mcpServer).where(eq(schema.mcpServer.id, mcpServerId)),
+      );
+      const left = await withTenant(app.db, ctx, (tx) =>
+        tx.select().from(schema.connection).where(eq(schema.connection.mcpServerId, mcpServerId)),
+      );
+      expect(left).toHaveLength(0);
+    });
+
+    it("connections: can't point at another workspace's server", async () => {
+      const mcpServerId = await newServer("github");
+      const otherId = asId<WorkspaceId>(randomUUID());
+      await owner.db.insert(schema.workspace).values({ id: otherId, name: "Workspace D" });
+      await owner.db
+        .insert(schema.membership)
+        .values({ workspaceId: otherId, userId: ctx.userId, role: "owner" });
+      const other: TenantContext = { workspaceId: otherId, userId: ctx.userId };
+
+      const visible = await withTenant(app.db, other, (tx) =>
+        tx.select().from(schema.mcpServer).where(eq(schema.mcpServer.id, mcpServerId)),
+      );
+      expect(visible).toHaveLength(0);
+      const crossed = await pgError(
+        withTenant(app.db, other, (tx) =>
+          tx
+            .insert(schema.connection)
+            .values({ workspaceId: otherId, mcpServerId, userId: ctx.userId }),
+        ),
+      );
+      expect(crossed.code).toBe("23503"); // foreign key violation
+    });
+
+    it("policy rules: personal rules only tighten, and each rule exists once", async () => {
+      const rule = (extra: Partial<typeof schema.policyRule.$inferInsert>) =>
+        withTenant(app.db, ctx, (tx) =>
+          tx.insert(schema.policyRule).values({
+            workspaceId: ctx.workspaceId,
+            tool: "gmail.send",
+            effect: "ask_first",
+            ...extra,
+          }),
+        );
+      await rule({});
+      await rule({ userId: ctx.userId });
+      await rule({ tool: "web.*", effect: "allow_auto" });
+      await rule({ tool: "remember", effect: "allow_auto", agentId });
+
+      expect((await pgError(rule({ userId: ctx.userId, effect: "allow_auto" }))).code).toBe(
+        "23514",
+      );
+      // No user and no agent still counts as the same rule.
+      expect((await pgError(rule({}))).code).toBe("23505");
+      for (const tool of ["Gmail.send", "gmail.", "*.send", "gmail send"]) {
+        expect((await pgError(rule({ tool }))).code).toBe("23514");
+      }
+    });
+
+    it("policy rules: an agent's rules go with the agent", async () => {
+      const [other] = await withTenant(app.db, ctx, (tx) =>
+        tx
+          .insert(schema.agent)
+          .values({ workspaceId: ctx.workspaceId, slug: "mailer", name: "Mailer", spec: SPEC })
+          .returning({ id: schema.agent.id }),
+      );
+      const otherAgent = other?.id ?? "";
+      await withTenant(app.db, ctx, (tx) =>
+        tx.insert(schema.policyRule).values({
+          workspaceId: ctx.workspaceId,
+          agentId: otherAgent,
+          tool: "*",
+          effect: "ask_first",
+        }),
+      );
+      await withTenant(app.db, ctx, (tx) =>
+        tx.delete(schema.agent).where(eq(schema.agent.id, otherAgent)),
+      );
+      const left = await withTenant(app.db, ctx, (tx) =>
+        tx.select().from(schema.policyRule).where(eq(schema.policyRule.agentId, otherAgent)),
+      );
+      expect(left).toHaveLength(0);
+    });
+  });
+
   describe("runtime stores", () => {
     const published: unknown[] = [];
     const publish = async (_ws: string, payload: unknown) => void published.push(payload);
