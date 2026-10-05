@@ -69,10 +69,23 @@ export function createCdpBrowser(endpoint: () => Promise<string>): AgentBrowser 
       ),
     ]);
     const current = history.entries[history.currentIndex];
+    let outline = outlineFromAXTree(nodes);
+    if (!outline) {
+      // A slow site can outlast the load wait: say so, rather than "empty".
+      const { result } = await cdp.send<{ result: { value?: unknown } }>(
+        "Runtime.evaluate",
+        { expression: "document.readyState", returnByValue: true },
+        session,
+      );
+      outline =
+        result.value === "complete"
+          ? "(The page is empty.)"
+          : "(The page is still loading. Take another snapshot in a moment.)";
+    }
     return {
       url: current?.url ?? "",
       title: titleFromAXTree(nodes) || current?.title || "",
-      outline: outlineFromAXTree(nodes) || "(The page is empty.)",
+      outline,
     };
   }
 
@@ -157,7 +170,7 @@ export function createCdpBrowser(endpoint: () => Promise<string>): AgentBrowser 
           throw new SandboxError(
             "navigation_failed",
             errorText.includes("TUNNEL") || errorText.includes("PROXY")
-              ? `Couldn't open ${url}: the computer is not allowed to reach that site (${errorText}).`
+              ? `Couldn't open ${url}: your computer is not allowed to reach that site (${errorText}). Trying again, or another address on the same site, will not work; tell the person, who can add the site to the allowed list.`
               : `Couldn't open ${url} (${errorText}).`,
           );
         }

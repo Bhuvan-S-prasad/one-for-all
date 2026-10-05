@@ -8,6 +8,8 @@ import {
   loginSiteOf,
   normalizeLoginSite,
   strictest,
+  urlKey,
+  urlsIn,
   type TenantContext,
 } from "./index";
 
@@ -55,5 +57,23 @@ describe("saved login sites", () => {
     expect(hostMatchesSite("notgithub.com", "github.com")).toBe(false);
     expect(loginSiteOf(loginSecretNames("github.com").password)).toBe("github.com");
     expect(loginSiteOf("llm.openrouter.api_key")).toBeNull();
+  });
+});
+
+describe("addresses a run was given", () => {
+  it("finds addresses in text and JSON, without trailing punctuation", () => {
+    expect(
+      urlsIn(
+        'See https://a.example/x. Also {"url":"https://b.example/y?q=1"} and (https://c.example)',
+      ),
+    ).toEqual(["https://a.example/x", "https://b.example/y?q=1", "https://c.example"]);
+  });
+
+  it("treats the same address the same however it is written", () => {
+    expect(urlKey("HTTPS://WWW.Shop.example/orders/5512/#top")).toBe(
+      "https://shop.example/orders/5512",
+    );
+    expect(urlKey("https://shop.example/?q=1")).toBe("https://shop.example?q=1");
+    expect(urlKey("https://shop.example/Orders")).not.toBe(urlKey("https://shop.example/orders"));
   });
 });

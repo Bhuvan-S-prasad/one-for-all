@@ -47,7 +47,7 @@ export function inngestSteps(step: {
       ? {
           async waitForEvent(id, { event, field, value, timeoutMs }) {
             // Values are our own IDs; refuse anything that could break out of the expression.
-            if (!/^[w-]+$/.test(field) || !/^[w-]+$/.test(value)) {
+            if (!/^[\w-]+$/.test(field) || !/^[\w-]+$/.test(value)) {
               throw new Error(`Unsafe wait match: ${field}=${value}`);
             }
             const found = await waitForEvent(id, {

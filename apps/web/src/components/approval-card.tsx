@@ -12,6 +12,9 @@ import { cn } from "@/lib/utils";
 /** Why it asks, in plain words, from the policy's reasons. */
 function why(approval: Approval): string {
   const reasons = approval.reasons.join(" ");
+  if (/opens an address/.test(reasons)) {
+    return "It read outside content in this task, and this address didn't come from you or from anything it read, so it asks before opening it.";
+  }
   if (/untrusted content/.test(reasons)) {
     return "It read outside content in this task, so it asks before acting on a site or its computer.";
   }

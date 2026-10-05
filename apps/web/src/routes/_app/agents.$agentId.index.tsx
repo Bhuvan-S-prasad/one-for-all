@@ -50,6 +50,7 @@ import { runPhase } from "@/lib/run-steps";
 import { isTyping, useStoredFlag } from "@/lib/shortcuts";
 import { toast } from "@/lib/toast";
 import { useNow } from "@/lib/use-now";
+import { useWide } from "@/lib/use-wide";
 import { cn } from "@/lib/utils";
 
 // The chat (UX.05): a compact header, a thread that scrolls on its own, the
@@ -139,6 +140,9 @@ function Chat({ agent }: { agent: Agent }) {
   const [computerOpen, setComputerOpen] = useStoredFlag("ofa-computer-panel", false);
   const [overlay, setOverlay] = useState<null | "watch" | "control">(null);
   const hasBrowser = usesBrowser(agent);
+  // The side panel exists only on wide screens; phones use the full-screen view.
+  const wide = useWide();
+  const panelShown = hasBrowser && computerOpen && wide;
   const celebrate = useJustFinished(run);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const clearDraft = useCallback(
@@ -263,13 +267,12 @@ function Chat({ agent }: { agent: Agent }) {
         canStartNew={visible.length > 0 && !newThread.isPending}
         panelOpen={panelOpen}
         onTogglePanel={run ? () => setPanelOpen(!panelOpen) : undefined}
-        computerOpen={computerOpen}
+        computerOpen={panelShown}
         onComputer={
           hasBrowser
             ? () => {
                 // Wide screens get the side panel; phones the full-screen view.
-                if (window.matchMedia("(min-width: 1024px)").matches)
-                  setComputerOpen(!computerOpen);
+                if (wide) setComputerOpen(!computerOpen);
                 else setOverlay("watch");
               }
             : undefined
@@ -346,7 +349,7 @@ function Chat({ agent }: { agent: Agent }) {
             onResume={togglePause}
           />
         </div>
-        {hasBrowser && computerOpen ? (
+        {panelShown ? (
           <ComputerPanel
             agent={agent}
             onClose={() => setComputerOpen(false)}

@@ -36,6 +36,9 @@ const KEY_CODES: Record<string, number> = {
   Meta: 91,
 };
 
+/** Keys that type a character as well: Enter submits a form only with its "\r". */
+const KEY_TEXT: Record<string, string> = { Enter: "\r" };
+
 const MOUSE_TYPES = {
   move: "mouseMoved",
   down: "mousePressed",
@@ -128,7 +131,11 @@ export async function createScreenSession(endpoint: string): Promise<ScreenSessi
             );
             return;
           case "key": {
-            const printable = event.action === "down" && event.text && event.text.length === 1;
+            const text =
+              event.action === "down"
+                ? (KEY_TEXT[event.key] ?? (event.text?.length === 1 ? event.text : undefined))
+                : undefined;
+            const printable = text !== undefined;
             await cdp.send(
               "Input.dispatchKeyEvent",
               {
@@ -139,7 +146,7 @@ export async function createScreenSession(endpoint: string): Promise<ScreenSessi
                   KEY_CODES[event.key] ??
                   (event.key.length === 1 ? event.key.toUpperCase().charCodeAt(0) : 0),
                 modifiers: event.modifiers ?? 0,
-                ...(printable ? { text: event.text } : {}),
+                ...(printable ? { text, unmodifiedText: text } : {}),
               },
               sessionId,
             );

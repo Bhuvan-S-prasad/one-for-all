@@ -255,6 +255,31 @@ describe("runAgent", () => {
     expect(llm.requests[1]?.messages.at(-1)?.content).toMatch(/Unknown tool/);
   });
 
+  it("tells the executor which addresses the run was given", async () => {
+    const { runtime, tools, run } = setup(
+      [
+        { toolCalls: [{ name: "web.search", args: { query: "x" } }] },
+        { toolCalls: [{ name: "web.search", args: { query: "y" } }] },
+        { text: "Done." },
+      ],
+      agent,
+      { toolText: "See https://larkspur.example/notes/3.0." },
+    );
+    runtime.threads.messages.get(threadId)![0] = {
+      ...runtime.threads.messages.get(threadId)![0]!,
+      content: "Check https://www.Docs.example/start/",
+    };
+    const seen: (readonly string[] | undefined)[] = [];
+    const execute = tools.execute.bind(tools);
+    tools.execute = async (request, c) => {
+      seen.push(request.knownUrls);
+      return execute(request, c);
+    };
+    await run();
+    expect(seen[0]).toEqual(["https://docs.example/start"]);
+    expect(seen[1]).toEqual(["https://docs.example/start", "https://larkspur.example/notes/3.0"]);
+  });
+
   it("lets middleware block a tool before it runs", async () => {
     const { runtime, tools, run } = setup([
       { toolCalls: [{ name: "web.search", args: { query: "x" } }] },
