@@ -1,9 +1,4 @@
-import {
-  NEWSLETTER,
-  newsletterSite,
-  QUILLMARK_HOME,
-  quillmarkSite,
-} from "../fixtures/sites";
+import { NEWSLETTER, newsletterSite, QUILLMARK_HOME, quillmarkSite } from "../fixtures/sites";
 import {
   answered,
   askedBeforeActing,

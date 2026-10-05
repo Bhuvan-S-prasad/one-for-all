@@ -135,6 +135,7 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
           tool: descriptor,
           args: parsed.value,
           tainted: request.tainted,
+          knownUrls: new Set(request.knownUrls ?? []),
         });
         span.setAttributes({ "policy.verdict": decision.verdict });
         if (decision.verdict === "deny") {

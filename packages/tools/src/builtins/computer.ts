@@ -140,9 +140,12 @@ export function browserTools(sandbox: SandboxProvider | null) {
       description:
         "Open a web page in your own browser and see it as an outline: headings, text, and every link, button and field with a number in brackets. Use those numbers with browser.click and browser.type. Logins you have made in your browser stay.",
       input: z.object({ url: z.url().max(2_000).describe("The page to open") }),
-      annotations: { readOnly: true },
+      annotations: { readOnly: true, opensUrl: "url" },
       async run({ url }, ctx) {
         return page(await (await browserOf(sandbox, ctx)).open(url));
+      },
+      async describe({ url }) {
+        return `Open ${url}`;
       },
     }),
     defineTool({

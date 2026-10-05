@@ -15,3 +15,4 @@ export * from "./ports/telemetry";
 export * from "./ports/tools";
 export * from "./ports/vault";
 export * from "./logins";
+export * from "./urls";

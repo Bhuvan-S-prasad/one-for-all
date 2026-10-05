@@ -35,16 +35,17 @@ export interface SitePage {
 
 export interface FixtureSite {
   /** Pages by URL; a function sees what was submitted so far (e.g. a thank-you page). */
-  readonly pages: Readonly<
-    Record<string, SitePage | ((state: SiteRecord) => SitePage)>
-  >;
+  readonly pages: Readonly<Record<string, SitePage | ((state: SiteRecord) => SitePage)>>;
 }
 
 /** What the agent did on the site. */
 export interface SiteRecord {
   /** Every address it tried to open, found or not, in order. */
   readonly visited: string[];
-  readonly submissions: { readonly url: string; readonly values: Record<string, string | boolean> }[];
+  readonly submissions: {
+    readonly url: string;
+    readonly values: Record<string, string | boolean>;
+  }[];
 }
 
 function key(url: string): string {
@@ -104,7 +105,10 @@ export function fixtureBrowser(site: FixtureSite): AgentBrowser & { readonly rec
   function go(url: string): PageSnapshot {
     record.visited.push(url);
     if (!pageAt(url)) {
-      throw new SandboxError("navigation_failed", `Couldn't open ${url} (net::ERR_NAME_NOT_RESOLVED).`);
+      throw new SandboxError(
+        "navigation_failed",
+        `Couldn't open ${url} (net::ERR_NAME_NOT_RESOLVED).`,
+      );
     }
     history.splice(index + 1);
     history.push(url);
@@ -154,7 +158,8 @@ export function fixtureBrowser(site: FixtureSite): AgentBrowser & { readonly rec
     },
     press: async (key) => (key === "Enter" ? submit() : snapshot()),
     back: async () => {
-      if (index <= 0) throw new SandboxError("bad_request", "There is no earlier page to go back to.");
+      if (index <= 0)
+        throw new SandboxError("bad_request", "There is no earlier page to go back to.");
       index -= 1;
       values = {};
       return snapshot();

@@ -1,5 +1,6 @@
 import {
   strictest,
+  urlKey,
   type AgentDirectory,
   type AgentGrantRule,
   type PolicyDecision,
@@ -35,7 +36,7 @@ export interface PolicyEngineOptions {
 
 export function createPolicyEngine(options: PolicyEngineOptions): PolicyEngine {
   return {
-    async evaluate({ ctx, tool, tainted }): Promise<PolicyDecision> {
+    async evaluate({ ctx, tool, args, tainted, knownUrls }): Promise<PolicyDecision> {
       const agent = await options.agents.get(ctx, ctx.agentId);
       const grant = agent
         ? (grantFor(agent.grants, tool.name) ??
@@ -63,6 +64,16 @@ export function createPolicyEngine(options: PolicyEngineOptions): PolicyEngine {
       //    that sends data out needs approval, whatever the grant says.
       if (tainted && tool.annotations.outbound) {
         tighten("approve", "outbound tool in a run that read untrusted content");
+      }
+      //    Opening an address nobody gave the run is sending data out too: a
+      //    page can ask for `evil.example/?email=…`.
+      const field = tool.annotations.opensUrl;
+      const url = field ? (args as Record<string, unknown> | null)?.[field] : undefined;
+      if (tainted && typeof url === "string" && !knownUrls?.has(urlKey(url))) {
+        tighten(
+          "approve",
+          "opens an address that came from neither the person nor anything it read, in a run that read untrusted content",
+        );
       }
 
       return { verdict, reasons };

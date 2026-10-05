@@ -65,8 +65,9 @@ export const researcherSuite: EvalCase[] = [
     prompt:
       "Read all four pages of the Quillmark guide (overview, capture, distil and review) and write me a short report on the method, with its rule for each stage. Cite the pages.",
     web: quillmarkWeb,
-    // A 10k window: the fourth 6,000-character page passes 70% of the input budget.
-    harness: { maxContextTokens: 10_000 },
+    // An 11.5k window: the fourth 6,000-character page passes 70% of the input budget
+    // (10.5k–12k works with the current prompt; retune if the prompt or tool list grows).
+    harness: { maxContextTokens: 11_500 },
     checks: [
       answered,
       usedTool("web.read_url"),

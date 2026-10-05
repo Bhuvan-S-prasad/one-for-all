@@ -93,7 +93,10 @@ export function readUrlTool(fetcher: Fetcher = (url) => safeFetch(url)) {
         .default(0)
         .describe("Character to start from, to read further into a long page"),
     }),
-    annotations: { readOnly: true, idempotent: true },
+    annotations: { readOnly: true, idempotent: true, opensUrl: "url" },
+    async describe({ url }) {
+      return `Read ${url}`;
+    },
     async run({ url, from }) {
       const page = await fetcher(url);
       if (page.status >= 400) {

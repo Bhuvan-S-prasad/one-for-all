@@ -1,6 +1,8 @@
 import { INNGEST_EVENTS, type RunStopReason } from "@ofa/contracts";
 import {
   APPROVAL_TIMEOUT_MS,
+  urlKey,
+  urlsIn,
   type AgentDirectory,
   type AgentProfile,
   type ApprovalStore,
@@ -168,6 +170,8 @@ export async function runAgent(
   const chain = new MiddlewareChain(deps.middleware ?? []);
   const log = (events: RunEventWrite[]) => deps.runs.append(ctx, ctx.runId, events);
   let hook: RunHookContext | null = null;
+  /** Addresses the run was given, in `urlKey` form (filled in as the run goes). */
+  const knownUrls = new Set<string>();
 
   try {
     // ── Start ────────────────────────────────────────────────────────────────
@@ -240,6 +244,13 @@ export async function runAgent(
     });
     const budget = contextBudget(context.window, options.maxContextTokens ?? 32_000);
 
+    // Addresses the run was given (§10.3): in the conversation, and in what
+    // its tools return. In a tainted run, opening any other one needs a person.
+    const learnUrls = (text: string) => {
+      for (const url of urlsIn(text)) knownUrls.add(urlKey(url));
+    };
+    for (const message of context.history) learnUrls(message.content);
+
     // ── The loop ─────────────────────────────────────────────────────────────
     let usage = EMPTY_USAGE;
     let turns: Turn[] = [];
@@ -303,6 +314,7 @@ export async function runAgent(
         });
         if (compacted) {
           summary = compacted.summary;
+          learnUrls(compacted.summary);
           turns = turns.slice(compacted.replaced);
           usage = addUsage(usage, compacted, { model: 1 });
           assembled = assembleContext(
@@ -424,6 +436,7 @@ export async function runAgent(
           content: result.content,
           untrusted: result.untrusted,
         });
+        learnUrls(result.content);
       }
     }
 
@@ -557,6 +570,7 @@ export async function runAgent(
       toolCallId,
       idempotencyKey: `${ctx.runId}:${toolCallId}`,
       tainted: taintedBefore,
+      knownUrls: [...knownUrls],
       ...(approved ? { approved: true } : {}),
     };
     const execute = chain.tool(hook as RunHookContext, (r) => deps.tools.execute(r, ctx));

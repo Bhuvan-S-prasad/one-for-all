@@ -22,6 +22,11 @@ export interface PolicyInput {
   readonly args: unknown;
   /** The run has read untrusted content. */
   readonly tainted: boolean;
+  /**
+   * Addresses the run was given (`urlKey` form): in the person's messages or
+   * in tool results. Absent means none.
+   */
+  readonly knownUrls?: ReadonlySet<string>;
 }
 
 export interface PolicyDecision {

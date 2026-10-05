@@ -169,6 +169,8 @@ export interface ToolExecutionRequest {
    * `approve` or `human` verdict run; never loosens a `deny`.
    */
   readonly approved?: boolean;
+  /** Addresses the run was given so far (`urlKey` form), for the provenance check (§10.3). */
+  readonly knownUrls?: readonly string[];
 }
 
 export type ToolOutcome =

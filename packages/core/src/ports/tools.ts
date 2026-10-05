@@ -11,6 +11,12 @@ export interface ToolAnnotations {
   /** Sends data outside the system (email, post, share, HTTP to a new domain). */
   readonly outbound?: boolean;
   readonly idempotent?: boolean;
+  /**
+   * The argument holding an address this call opens (e.g. `url`). In a run
+   * that read untrusted content, an address the run was not given needs
+   * approval (§10.3): it could carry data out.
+   */
+  readonly opensUrl?: string;
 }
 
 export type ToolSourceKind = "builtin" | "mcp" | "sandbox";
