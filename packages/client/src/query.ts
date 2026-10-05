@@ -15,6 +15,7 @@ export const queryKeys = {
   memories: (filter: MemoryFilter) => ["memories", filter] as const,
   memoryLists: ["memories"] as const,
   usage: ["settings", "usage"] as const,
+  logins: ["settings", "logins"] as const,
   messages: (threadId: string) => ["threads", threadId, "messages"] as const,
   runs: (agentId?: string) => ["runs", "list", agentId ?? "all"] as const,
   runLists: ["runs", "list"] as const,
@@ -22,6 +23,9 @@ export const queryKeys = {
   runSearches: ["runs", "search"] as const,
   run: (id: string) => ["runs", id] as const,
   runEvents: (id: string) => ["runs", id, "events"] as const,
+  runArtifacts: (id: string) => ["runs", id, "artifacts"] as const,
+  approvals: (agentId?: string) => ["approvals", agentId ?? "all"] as const,
+  approvalLists: ["approvals"] as const,
   llmSettings: ["settings", "llm"] as const,
 };
 
@@ -124,6 +128,22 @@ export const runEventsQuery = (api: ApiClient, id: string) =>
     queryKey: queryKeys.runEvents(id),
     queryFn: async () => (await api.runEvents(id)).items,
   });
+
+export const runArtifactsQuery = (api: ApiClient, id: string) =>
+  queryOptions({
+    queryKey: queryKeys.runArtifacts(id),
+    queryFn: async () => (await api.runArtifacts(id)).items,
+    staleTime: Infinity,
+  });
+
+export const approvalsQuery = (api: ApiClient, agentId?: string) =>
+  queryOptions({
+    queryKey: queryKeys.approvals(agentId),
+    queryFn: async () => (await api.listApprovals(agentId ? { agentId } : {})).items,
+  });
+
+export const loginsQuery = (api: ApiClient) =>
+  queryOptions({ queryKey: queryKeys.logins, queryFn: async () => (await api.listLogins()).items });
 
 export const llmSettingsQuery = (api: ApiClient) =>
   queryOptions({ queryKey: queryKeys.llmSettings, queryFn: () => api.llmSettings() });

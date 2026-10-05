@@ -21,11 +21,12 @@ import {
   type TierOverrides,
 } from "@ofa/llm";
 import { injectionSuite } from "../redteam/injection";
+import { operatorSuite } from "../suites/operator";
 import { researcherSuite } from "../suites/researcher";
 import { runCases, type AttemptReport } from "./runner";
 import type { EvalCase } from "./types";
 
-const ALL_CASES: readonly EvalCase[] = [...researcherSuite, ...injectionSuite];
+const ALL_CASES: readonly EvalCase[] = [...researcherSuite, ...operatorSuite, ...injectionSuite];
 
 /** Providers this runner can use; mirrors the composition root (ADR-0022). */
 const MODEL_PROVIDERS: Record<string, () => ModelProvider> = {

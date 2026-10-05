@@ -16,6 +16,21 @@ import type { ToolDescriptor } from "./tools";
  */
 export interface StepRunner {
   run<T>(id: string, fn: () => Promise<T>): Promise<T>;
+  /**
+   * Wait, holding no process, for an event whose `data[field]` equals `value`
+   * (Inngest `step.waitForEvent`). Resolves with the event's data, or null
+   * after `timeoutMs`. Only events sent after the wait starts count. Absent
+   * where runs cannot wait (then nothing that needs a person can run).
+   */
+  waitForEvent?(
+    id: string,
+    options: {
+      readonly event: string;
+      readonly field: string;
+      readonly value: string;
+      readonly timeoutMs: number;
+    },
+  ): Promise<Record<string, unknown> | null>;
 }
 
 // ── Runs ─────────────────────────────────────────────────────────────────────
@@ -149,6 +164,13 @@ export interface ToolExecutionRequest {
   readonly idempotencyKey: string;
   /** The run has read untrusted content (ADR-0013). */
   readonly tainted: boolean;
+  /**
+   * A person approved this exact call (its approval was decided). Lets an
+   * `approve` or `human` verdict run; never loosens a `deny`.
+   */
+  readonly approved?: boolean;
+  /** Addresses the run was given so far (`urlKey` form), for the provenance check (§10.3). */
+  readonly knownUrls?: readonly string[];
 }
 
 export type ToolOutcome =
@@ -158,6 +180,8 @@ export type ToolOutcome =
       readonly content: string;
       /** The content came from outside the system; the run becomes tainted. */
       readonly untrusted: boolean;
+      /** Long output kept as an artifact (the content says how to reopen it), or a file kept for people. */
+      readonly artifactId?: string;
       readonly verdict: Verdict;
       readonly reasons: readonly string[];
       readonly durationMs: number;
@@ -168,6 +192,8 @@ export type ToolOutcome =
       readonly verdict: Verdict;
       readonly reasons: readonly string[];
       readonly message: string;
+      /** For `approve` and `human`: what the call would do, in plain words, for the person deciding. */
+      readonly summary?: string;
     }
   | {
       readonly status: "error";

@@ -1,5 +1,6 @@
 import {
   strictest,
+  urlKey,
   type AgentDirectory,
   type AgentGrantRule,
   type PolicyDecision,
@@ -11,6 +12,12 @@ import {
 // strictest wins; nothing later can loosen it. This is the M2 subset: grants,
 // risk annotations and taint escalation. Workspace and personal rules, the
 // always-human list and approvals arrive in M4.
+
+/**
+ * Tools of the platform itself, available to every agent without a grant:
+ * reopening its own saved output (M3.06). A grant can still block one.
+ */
+export const PLATFORM_TOOLS: ReadonlySet<string> = new Set(["artifacts.read"]);
 
 /** The grant that covers a tool: an exact name beats an app wildcard (`hubspot.*`). */
 export function grantFor(
@@ -29,9 +36,12 @@ export interface PolicyEngineOptions {
 
 export function createPolicyEngine(options: PolicyEngineOptions): PolicyEngine {
   return {
-    async evaluate({ ctx, tool, tainted }): Promise<PolicyDecision> {
+    async evaluate({ ctx, tool, args, tainted, knownUrls }): Promise<PolicyDecision> {
       const agent = await options.agents.get(ctx, ctx.agentId);
-      const grant = agent ? grantFor(agent.grants, tool.name) : undefined;
+      const grant = agent
+        ? (grantFor(agent.grants, tool.name) ??
+          (PLATFORM_TOOLS.has(tool.name) ? { tool: tool.name, mode: "auto" as const } : undefined))
+        : undefined;
 
       // 1. Not granted, or blocked by the user: nothing else matters.
       if (!grant)
@@ -54,6 +64,16 @@ export function createPolicyEngine(options: PolicyEngineOptions): PolicyEngine {
       //    that sends data out needs approval, whatever the grant says.
       if (tainted && tool.annotations.outbound) {
         tighten("approve", "outbound tool in a run that read untrusted content");
+      }
+      //    Opening an address nobody gave the run is sending data out too: a
+      //    page can ask for `evil.example/?email=…`.
+      const field = tool.annotations.opensUrl;
+      const url = field ? (args as Record<string, unknown> | null)?.[field] : undefined;
+      if (tainted && typeof url === "string" && !knownUrls?.has(urlKey(url))) {
+        tighten(
+          "approve",
+          "opens an address that came from neither the person nor anything it read, in a run that read untrusted content",
+        );
       }
 
       return { verdict, reasons };

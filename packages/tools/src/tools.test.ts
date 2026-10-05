@@ -151,7 +151,25 @@ describe("tool executor", () => {
       verdict: "deny",
     });
     const tainted = await e.execute(request("test.send", { to: "x" }, "k4", true), ctx);
-    expect(tainted).toMatchObject({ status: "blocked", verdict: "approve" });
+    expect(tainted).toMatchObject({
+      status: "blocked",
+      verdict: "approve",
+      summary: 'test.send {"to":"x"}',
+    });
+  });
+
+  it("runs a held call once a person approved it, but never a denied one", async () => {
+    const before = sent;
+    const e = executor([{ tool: "test.send", mode: "approve" }]);
+    const approved = { ...request("test.send", { to: "x" }, "k5"), approved: true };
+    expect(await e.execute(approved, ctx)).toMatchObject({ status: "ok", verdict: "approve" });
+    expect(sent).toBe(before + 1);
+    const denied = executor([{ tool: "test.send", mode: "blocked" }]);
+    expect(await denied.execute({ ...approved, idempotencyKey: "k6" }, ctx)).toMatchObject({
+      status: "blocked",
+      verdict: "deny",
+    });
+    expect(sent).toBe(before + 1);
   });
 
   it("never repeats a call that finished, and refuses to guess after a crash", async () => {

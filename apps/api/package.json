@@ -27,6 +27,7 @@
     "@ofa/memory": "workspace:*",
     "@ofa/orchestrator": "workspace:*",
     "@ofa/policy": "workspace:*",
+    "@ofa/sandbox": "workspace:*",
     "@ofa/telemetry": "workspace:*",
     "@ofa/tools": "workspace:*",
     "@ofa/vault": "workspace:*",

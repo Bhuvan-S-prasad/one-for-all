@@ -7,6 +7,7 @@ import {
 } from "@ofa/contracts";
 import {
   asId,
+  type ApprovalStore,
   type RunContext,
   type RunStore,
   type StepRunner,
@@ -22,6 +23,8 @@ import { NonRetriableError, RetryAfterError, type Inngest } from "inngest";
 export interface OrchestratorDeps {
   readonly harness: HarnessDeps;
   readonly runs: RunStore;
+  /** Open approval requests of a stopped run are expired. */
+  readonly approvals?: ApprovalStore;
 }
 
 /** Errors that waiting will not fix: a missing key, a malformed request. */
@@ -33,8 +36,29 @@ const NOT_RETRYABLE = new Set(["auth", "bad_request", "context_length"]);
  */
 export function inngestSteps(step: {
   run: (id: string, fn: () => Promise<unknown>) => Promise<unknown>;
+  waitForEvent?: (
+    id: string,
+    opts: { event: string; timeout: number; if: string },
+  ) => Promise<{ data?: unknown } | null>;
 }): StepRunner {
+  const waitForEvent = step.waitForEvent?.bind(step);
   return {
+    ...(waitForEvent
+      ? {
+          async waitForEvent(id, { event, field, value, timeoutMs }) {
+            // Values are our own IDs; refuse anything that could break out of the expression.
+            if (!/^[\w-]+$/.test(field) || !/^[\w-]+$/.test(value)) {
+              throw new Error(`Unsafe wait match: ${field}=${value}`);
+            }
+            const found = await waitForEvent(id, {
+              event,
+              timeout: Math.max(1_000, timeoutMs),
+              if: `async.data.${field} == '${value}'`,
+            });
+            return found ? ((found.data ?? {}) as Record<string, unknown>) : null;
+          },
+        }
+      : {}),
     async run<T>(id: string, fn: () => Promise<T>): Promise<T> {
       const result = await step.run(id, async () => {
         try {
@@ -92,6 +116,7 @@ export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
         await step.run("mark-failed", async () => {
           const message = (error.message || "Run failed").slice(0, 2_000);
           const run = await deps.runs.get(ctx, ctx.runId);
+          await deps.approvals?.expireForRun(ctx, ctx.runId);
           await deps.runs.update(ctx, ctx.runId, {
             status: "failed",
             error: { code: "run_failed", message },
@@ -187,6 +212,7 @@ export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
       await step.run("mark-cancelled", async () => {
         const run = await deps.runs.get(ctx, asId(data.runId));
         if (!run || ["succeeded", "failed", "cancelled"].includes(run.status)) return false;
+        await deps.approvals?.expireForRun(ctx, run.id);
         await deps.runs.update(ctx, run.id, {
           status: "cancelled",
           endedAt: new Date(),

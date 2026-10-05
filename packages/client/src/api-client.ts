@@ -2,6 +2,9 @@ import {
   agentListResponseSchema,
   agentSchema,
   agentStatsListSchema,
+  approvalListSchema,
+  approvalSchema,
+  artifactListSchema,
   errorResponseSchema,
   healthResponseSchema,
   llmSettingsSchema,
@@ -11,7 +14,10 @@ import {
   runEventListSchema,
   runPageSchema,
   runSchema,
+  savedLoginListSchema,
+  savedLoginSchema,
   sendMessageResponseSchema,
+  shareLoginResponseSchema,
   sessionResponseSchema,
   setupStatusSchema,
   threadSchema,
@@ -20,6 +26,9 @@ import {
   type Agent,
   type AgentListResponse,
   type AgentStatsList,
+  type Approval,
+  type ApprovalList,
+  type ArtifactList,
   type CreateAgentInput,
   type FirstRunSetupRequest,
   type HealthResponse,
@@ -32,6 +41,10 @@ import {
   type RunEventList,
   type RunPage,
   type RunStatus,
+  type SavedLogin,
+  type SavedLoginList,
+  type SaveLoginRequest,
+  type ShareLoginResponse,
   type SendMessageResponse,
   type SessionResponse,
   type SetupStatus,
@@ -204,6 +217,14 @@ export function createApiClient(options: ApiClientOptions = {}) {
     /** Start a new chat with an agent (an empty current chat is reused). */
     newThread: (id: string): Promise<Thread> =>
       request("POST", `/api/agents/${encodeURIComponent(id)}/threads`, threadSchema),
+    /** Copy one site's browser login from an agent to another (ADR-0010). */
+    shareLogin: (agentId: string, to: string, site: string): Promise<ShareLoginResponse> =>
+      request(
+        "POST",
+        `/api/agents/${encodeURIComponent(agentId)}/logins/share`,
+        shareLoginResponseSchema,
+        { to, site },
+      ),
     agentStats: (): Promise<AgentStatsList> =>
       request("GET", "/api/agents/stats", agentStatsListSchema),
 
@@ -248,9 +269,29 @@ export function createApiClient(options: ApiClientOptions = {}) {
       ),
     stopRun: (id: string): Promise<Run> =>
       request("POST", `/api/runs/${encodeURIComponent(id)}/stop`, runSchema),
+    /** Files and long output a run produced (M3.06). */
+    runArtifacts: (id: string): Promise<ArtifactList> =>
+      request("GET", `/api/runs/${encodeURIComponent(id)}/artifacts`, artifactListSchema),
+    /** Where an artifact's content downloads from (same origin, with the session cookie). */
+    artifactContentUrl: (id: string): string =>
+      `${baseUrl}/api/artifacts/${encodeURIComponent(id)}/content`,
     /** Ask again: the run's message, in the same chat, as a new run (UX.12). */
     retryRun: (id: string): Promise<SendMessageResponse> =>
       request("POST", `/api/runs/${encodeURIComponent(id)}/retry`, sendMessageResponseSchema),
+
+    // ── Approvals ──────────────────────────────────────────────────────────
+    /** Waiting for an answer, newest first. */
+    listApprovals: (filter: { agentId?: string; runId?: string } = {}): Promise<ApprovalList> =>
+      request("GET", `/api/approvals${query({ ...filter })}`, approvalListSchema),
+    decideApproval: (id: string, decision: "approve" | "reject"): Promise<Approval> =>
+      request("POST", `/api/approvals/${encodeURIComponent(id)}`, approvalSchema, { decision }),
+
+    // ── Saved logins (M3.08) ───────────────────────────────────────────────
+    listLogins: (): Promise<SavedLoginList> => request("GET", "/api/logins", savedLoginListSchema),
+    saveLogin: (input: SaveLoginRequest): Promise<SavedLogin> =>
+      request("PUT", "/api/logins", savedLoginSchema, input),
+    deleteLogin: (site: string): Promise<void> =>
+      request("DELETE", `/api/logins/${encodeURIComponent(site)}`, null),
 
     // ── Memory (UX.14) ─────────────────────────────────────────────────────
     listMemories: (filter: MemoryFilter = {}): Promise<MemoryList> =>

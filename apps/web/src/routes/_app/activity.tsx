@@ -1,4 +1,4 @@
-import { moodFor, useAgents, useRun, useRunSearch, useStopRun } from "@ofa/client";
+import { moodFor, useAgents, useApiClient, useRun, useRunSearch, useStopRun } from "@ofa/client";
 import type { Agent, Run, RunEvent, RunStatus } from "@ofa/contracts";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import {
@@ -726,6 +726,19 @@ function RawLog({ events }: { events: readonly RunEvent[] }) {
   );
 }
 
+/** Download the full output or file a step kept (M3.06). */
+function ArtifactLink({ id }: { id: string }) {
+  const api = useApiClient();
+  return (
+    <a
+      href={api.artifactContentUrl(id)}
+      className="mt-1 inline-flex text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+    >
+      Download what it kept
+    </a>
+  );
+}
+
 function EventLine({ event }: { event: RunEvent }) {
   const title = (text: string, tone?: "bad" | "warn" | "good") => (
     <span
@@ -794,6 +807,7 @@ function EventLine({ event }: { event: RunEvent }) {
       return (
         <div>
           {title(`${event.payload.tool} returned`)} {note(event.payload.preview)}
+          {event.payload.artifactId && <ArtifactLink id={event.payload.artifactId} />}
         </div>
       );
     case "tool.failed":

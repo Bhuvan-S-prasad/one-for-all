@@ -5,6 +5,7 @@ import type {
   LoginRequest,
   Message,
   Run,
+  SaveLoginRequest,
   SendMessageResponse,
   Thread,
   UpdateAgentRequest,
@@ -19,11 +20,14 @@ import {
   agentStatsQuery,
   agentThreadQuery,
   agentThreadsQuery,
+  approvalsQuery,
   healthQuery,
   llmSettingsQuery,
+  loginsQuery,
   memoriesQuery,
   messagesQuery,
   queryKeys,
+  runArtifactsQuery,
   runEventsQuery,
   runQuery,
   runSearchQuery,
@@ -293,6 +297,15 @@ export function useRetryRun() {
   });
 }
 
+/** What a run produced (M3.06); fetched only when asked for. */
+export function useRunArtifacts(runId: string | undefined, options: { enabled?: boolean } = {}) {
+  const api = useApiClient();
+  return useQuery({
+    ...runArtifactsQuery(api, runId ?? ""),
+    enabled: !!runId && (options.enabled ?? true),
+  });
+}
+
 /** Per agent: runs this week and the last good result (UX.12). */
 export function useAgentStats() {
   return useQuery(agentStatsQuery(useApiClient()));
@@ -323,6 +336,54 @@ export function useForgetMemory() {
 }
 
 // ── Settings ─────────────────────────────────────────────────────────────────
+
+// ── Approvals ────────────────────────────────────────────────────────────────
+
+/** Requests waiting for a person, for one agent or all. Kept fresh by run events. */
+export function useApprovals(agentId?: string) {
+  return useQuery(approvalsQuery(useApiClient(), agentId));
+}
+
+export function useDecideApproval() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, decision }: { id: string; decision: "approve" | "reject" }) =>
+      api.decideApproval(id, decision),
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: queryKeys.approvalLists }),
+  });
+}
+
+// ── Saved logins and the computer (M3.08, M3.10) ─────────────────────────────
+
+export function useSavedLogins() {
+  return useQuery(loginsQuery(useApiClient()));
+}
+
+export function useSaveLogin() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: SaveLoginRequest) => api.saveLogin(input),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.logins }),
+  });
+}
+
+export function useDeleteLogin() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (site: string) => api.deleteLogin(site),
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: queryKeys.logins }),
+  });
+}
+
+export function useShareLogin(agentId: string) {
+  const api = useApiClient();
+  return useMutation({
+    mutationFn: ({ to, site }: { to: string; site: string }) => api.shareLogin(agentId, to, site),
+  });
+}
 
 /** Model requests today against the daily free quota (UX.11). */
 export function useUsageToday() {

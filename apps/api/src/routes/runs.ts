@@ -1,6 +1,7 @@
 import {
   RUN_PREVIEW_CHARS,
   runListQuerySchema,
+  type ArtifactList,
   type RunEventList,
   type RunPage,
 } from "@ofa/contracts";
@@ -18,6 +19,7 @@ import { z } from "zod";
 import type { Container } from "../container";
 import { toRun, toRunEvent } from "../lib/mappers";
 import { startAgentTurn } from "../lib/turns";
+import { toArtifact } from "./artifacts";
 import { readQuery } from "../lib/validate";
 import { requireSession, requireTenant } from "../middleware/session";
 import type { AppEnv } from "../types";
@@ -28,13 +30,14 @@ import type { AppEnv } from "../types";
  *   GET  /api/runs/:id
  *   GET  /api/runs/:id/events   the run log in order (?after=<seq>)
  *   POST /api/runs/:id/stop     stop at the next step; finished steps stay done
+ *   GET  /api/runs/:id/artifacts what the run produced (M3.06)
  *   POST /api/runs/:id/retry    ask again: the same message in the same chat, as a new run (UX.12)
  *
  * Runs carry the start of what was asked and of the reply, so Activity can
  * tell them apart (UX.10).
  */
 export function runRoutes(
-  deps: Pick<Container, "db" | "sessions" | "bus" | "dispatcher" | "runs" | "logger">,
+  deps: Pick<Container, "db" | "sessions" | "bus" | "dispatcher" | "runs" | "logger" | "artifacts">,
 ) {
   const { db } = deps;
   const afterSchema = z.object({ after: z.coerce.number().int().min(-1).optional() });
@@ -78,6 +81,13 @@ export function runRoutes(
       const rows = await listRunEvents(db, tenant, run.id, { afterSeq: after });
       const items = rows.map(toRunEvent).filter((e): e is NonNullable<typeof e> => e !== null);
       return c.json({ items } satisfies RunEventList);
+    })
+    .get("/:id/artifacts", async (c) => {
+      const tenant = c.get("tenant");
+      const run = await getRun(db, tenant, c.req.param("id"));
+      if (!run) throw new NotFoundError("Run");
+      const items = await deps.artifacts.listForRun(tenant, run.id);
+      return c.json({ items: items.map(toArtifact) } satisfies ArtifactList);
     })
     .post("/:id/stop", async (c) => {
       const tenant = c.get("tenant");

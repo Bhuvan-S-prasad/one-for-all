@@ -7,9 +7,15 @@ import {
   type ToolCallRecord,
   type ToolCallStore,
 } from "@ofa/core";
-import { createMemoryRuntime, createMemoStepRunner, runAgent } from "@ofa/harness";
+import {
+  createMemoryApprovals,
+  createMemoryRuntime,
+  createMemoStepRunner,
+  runAgent,
+} from "@ofa/harness";
 import { createPolicyEngine } from "@ofa/policy";
 import { builtinTools, createToolExecutor, createToolRegistry } from "@ofa/tools";
+import { fixtureBrowser, fixtureComputer } from "../fixtures/site";
 import { fixtureFetcher, fixtureSearch } from "../fixtures/web";
 import type { EvalCase, Transcript } from "./types";
 
@@ -43,6 +49,7 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  */
 function patientSteps(inner: StepRunner, wait: (ms: number) => Promise<void>): StepRunner {
   return {
+    ...(inner.waitForEvent ? { waitForEvent: inner.waitForEvent.bind(inner) } : {}),
     async run<T>(id: string, fn: () => Promise<T>): Promise<T> {
       for (let attempt = 0; ; attempt += 1) {
         try {
@@ -91,17 +98,33 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
     },
   ]);
 
+  const browser = evalCase.site ? fixtureBrowser(evalCase.site) : null;
   const tools = createToolExecutor({
     registry: createToolRegistry(
       builtinTools({
         memory: runtime.memory,
         search: fixtureSearch(evalCase.web),
         fetcher: fixtureFetcher(evalCase.web),
+        sandbox: browser ? fixtureComputer(browser) : null,
       }),
     ),
     policy: createPolicyEngine({ agents: runtime.agents }),
     calls: memoryToolCalls(),
     agents: runtime.agents,
+  });
+
+  // The person: answers each request as soon as it is made, like someone
+  // watching. Their answer arrives as the event the run waits for.
+  const approvals = createMemoryApprovals();
+  const person = evalCase.person ?? (() => true);
+  const steps = createMemoStepRunner({
+    onWait: async (_id, wait) => {
+      const approval = await approvals.get(ctx, wait.value);
+      if (!approval || approval.status !== "pending") return null;
+      const status = person(approval) ? "approved" : "rejected";
+      await approvals.decide(ctx, approval.id, { status, decidedBy: "usr_eval" });
+      return { approvalId: approval.id, decision: status };
+    },
   });
 
   const started = Date.now();
@@ -117,9 +140,10 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
         agents: runtime.agents,
         threads: runtime.threads,
         memory: runtime.memory,
+        approvals,
         ...(evalCase.harness ? { options: evalCase.harness } : {}),
       },
-      patientSteps(createMemoStepRunner(), options.wait ?? sleep),
+      patientSteps(steps, options.wait ?? sleep),
     );
   } catch (thrown) {
     error = thrown instanceof Error ? thrown.message : String(thrown);
@@ -138,6 +162,8 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
       .filter((e) => e.type === "tool.called")
       .map((e) => ({ name: String(e.payload.tool), args: e.payload.args })),
     memories: [...runtime.memory.records],
+    site: browser ? browser.record : null,
+    approvals: [...approvals.records],
     durationMs: Date.now() - started,
   };
 }

@@ -39,7 +39,9 @@ export function isTyping(target: EventTarget | null): boolean {
     target.isContentEditable ||
     target.tagName === "INPUT" ||
     target.tagName === "TEXTAREA" ||
-    target.tagName === "SELECT"
+    target.tagName === "SELECT" ||
+    // A taken-over browser (M3.10) takes every key.
+    target.closest('[role="application"]') !== null
   );
 }
 
@@ -58,6 +60,7 @@ export function useGlobalShortcuts(handlers: GlobalShortcutHandlers): void {
   useEffect(() => {
     let pendingG = 0;
     const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         ref.current.openPalette();

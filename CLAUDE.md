@@ -6,7 +6,7 @@ Guidance for Claude Code when working in this repository.
 
 One-for-All: a self-hosted platform for teams of always-on AI agents (modelled on OpenAI Dots and xAI Grok Bot). Each agent has one job, a sandboxed computer, granted tools (MCP-first), memory, and routines. Users reach agents from a web app, an Expo mobile app, Telegram and Slack.
 
-**Status:** **M1 Foundation** is done: monorepo and tooling, Postgres schema with RLS, Hono API with auth and first-run setup, the web app (setup, login, app shell), the Docker image, the self-host bundle and CI. **M2 First agent** is done: the agent harness, the replaceable model gateway, durable Inngest runs, built-in web and memory tools with schema-checked calls, live web chat with Activity and Settings, familiars and voice, learning after the run, and the `evals/` scaffold. The **UX Experience pass** is done: shell and palette, chat with a live loader, Markdown with sources and charts, Activity, Home, Agents, chats and history, memory review, toasts with Undo, and a phone pass (design canvas linked in the tracker). Next: the self-host bundle check (M3.12), then **M3 The computer**.
+**Status:** **M1 Foundation** is done: monorepo and tooling, Postgres schema with RLS, Hono API with auth and first-run setup, the web app (setup, login, app shell), the Docker image, the self-host bundle and CI. **M2 First agent** is done: the agent harness, the replaceable model gateway, durable Inngest runs, built-in web and memory tools with schema-checked calls, live web chat with Activity and Settings, familiars and voice, learning after the run, and the `evals/` scaffold. The **UX Experience pass** is done: shell and palette, chat with a live loader, Markdown with sources and charts, Activity, Home, Agents, chats and history, memory review, toasts with Undo, and a phone pass (design canvas linked in the tracker). **M3 The computer** is done: our own sandbox image with one Linux user per agent and an egress proxy, `packages/sandbox`, browser, shell and files tools, artifacts, watching and takeover over CDP, saved logins, the computer panel, approve-or-deny cards (brought forward from M4) and address provenance in tainted runs (ADR-0027), checked end to end and in the self-host bundle. **M4 Integrations & policy** is next.
 
 **Source of truth:** [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md). Read the relevant section before designing or changing anything. If a change contradicts it, stop and raise it with the user rather than diverging silently.
 
@@ -26,7 +26,7 @@ The tracker records work only. Decisions go in ADRs; design goes in ARCHITECTURE
 
 ## Stack
 
-TypeScript everywhere · pnpm + Turborepo · Hono API · Vite + React SPA (TanStack Router/Query, Tailwind, shadcn/ui) · Expo (Expo Router, NativeWind) · Postgres 17 + pgvector · Drizzle · self-hosted Inngest · AI SDK + OpenRouter (user's key) + optional Ollama · MCP · local Docker sandbox (AIO) with E2B adapter · Better Auth · OpenTelemetry · zod.
+TypeScript everywhere · pnpm + Turborepo · Hono API · Vite + React SPA (TanStack Router/Query, Tailwind, shadcn/ui) · Expo (Expo Router, NativeWind) · Postgres 17 + pgvector · Drizzle · self-hosted Inngest · AI SDK + OpenRouter (user's key) + optional Ollama · MCP · local Docker sandbox (own slim image, ADR-0025) with E2B adapter · Better Auth · OpenTelemetry · zod.
 
 Do not introduce Next.js, Express, Prisma, Neon, BullMQ or Redis-only designs; each was considered and rejected (ARCHITECTURE.md §16).
 
@@ -92,7 +92,7 @@ Run from the repo root unless noted. Node 24, pnpm 12.3.4, Docker.
 | Command | What it does |
 |---|---|
 | `pnpm install` | Install dependencies (respects the release-age wait and `allowBuilds`) |
-| `pnpm infra:up` / `infra:down` / `infra:reset` | Start, stop, or stop and delete the dev Postgres and Inngest (127.0.0.1 only) |
+| `pnpm infra:up` / `infra:down` / `infra:reset` | Start, stop, or stop and delete the dev Postgres, Inngest, SearXNG and the agents' sandbox with its egress proxy (127.0.0.1 only; the first start builds the sandbox image) |
 | `pnpm dev` | API on :3000 and web app on http://localhost:5173 (Vite proxies `/api`) |
 | `pnpm build` | Bundle the API (`apps/api/dist/server.js`) and build the web app |
 | `pnpm lint` | ESLint, including the import-boundary rules |

@@ -1,5 +1,6 @@
 import {
   useAgents,
+  useApprovals,
   useAskAgent,
   useLlmSettings,
   useMemories,
@@ -13,6 +14,7 @@ import type { Agent, FamiliarMood, MemoryItem, Run } from "@ofa/contracts";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { ArrowRight, ArrowUp, KeyRound, RotateCcw, Square, X } from "lucide-react";
 import { useState, type FormEvent, type KeyboardEvent } from "react";
+import { ApprovalCard } from "@/components/approval-card";
 import { WorkingRing } from "@/components/chat/live-run";
 import { Familiar } from "@/components/familiar";
 import { FactRow, useForgetWithUndo } from "@/components/memory-review";
@@ -43,6 +45,7 @@ function HomePage() {
   const { data: runs } = useRuns();
   const { data: llm } = useLlmSettings();
   const { data: unconfirmed } = useMemories({ verified: false });
+  const { data: approvals } = useApprovals();
   const moods = useAgentMoods(agents);
   const { hidden, forget } = useForgetWithUndo();
   const now = new Date();
@@ -55,7 +58,9 @@ function HomePage() {
   });
   const facts = (unconfirmed ?? []).filter((m) => !hidden.has(m.id));
   const noKey = !!llm && !llm.key.configured;
-  const needs = (noKey ? 1 : 0) + stuck.length + (facts.length ? groupFacts(facts).size : 0);
+  const waiting = approvals ?? [];
+  const needs =
+    (noKey ? 1 : 0) + waiting.length + stuck.length + (facts.length ? groupFacts(facts).size : 0);
   const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime();
   const results = (runs ?? []).filter((r) => r.status === "succeeded" && byId.has(r.agentId));
   const recentCount = results.filter(
@@ -116,6 +121,14 @@ function HomePage() {
                     }
                   />
                 )}
+                {waiting.map((approval) => (
+                  <li key={approval.id}>
+                    <ApprovalCard
+                      approval={approval}
+                      agent={{ name: byId.get(approval.agentId)?.name ?? "An agent" }}
+                    />
+                  </li>
+                ))}
                 {stuck.map(({ agent, run }) => (
                   <StuckItem key={agent.id} agent={agent} run={run} />
                 ))}

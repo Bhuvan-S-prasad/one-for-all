@@ -9,6 +9,18 @@ const TOOL_LABELS: Record<string, [doing: string, done: string]> = {
   remember: ["Saving to memory", "Saved to memory"],
   recall: ["Checking memory", "Checked memory"],
   "todo.write": ["Planning", "Updated the plan"],
+  "browser.open": ["Opening a page", "Opened a page"],
+  "browser.snapshot": ["Looking at the page", "Looked at the page"],
+  "browser.click": ["Clicking", "Clicked"],
+  "browser.type": ["Typing", "Typed"],
+  "browser.press": ["Pressing a key", "Pressed a key"],
+  "browser.back": ["Going back", "Went back"],
+  "shell.run": ["Running a command", "Ran a command"],
+  use_saved_login: ["Signing in", "Signed in with a saved login"],
+  "artifacts.read": ["Reading saved output", "Read saved output"],
+  "files.read": ["Reading a file", "Read a file"],
+  "files.write": ["Writing a file", "Wrote a file"],
+  "files.list": ["Looking in a folder", "Looked in a folder"],
 };
 
 export interface RunStep {
@@ -30,11 +42,25 @@ function detailFor(tool: string, args: unknown): string | null {
   }
   if (tool === "remember" && typeof a.fact === "string") return a.fact;
   if (tool === "recall" && typeof a.query === "string") return a.query;
+  if (tool === "browser.open" && typeof a.url === "string") {
+    try {
+      return new URL(a.url).hostname;
+    } catch {
+      return null;
+    }
+  }
+  if (tool === "browser.type" && typeof a.text === "string") return `“${a.text.slice(0, 40)}”`;
+  if (tool === "browser.press" && typeof a.key === "string") return a.key;
+  if (tool === "shell.run" && typeof a.command === "string") return a.command.slice(0, 80);
+  if (tool.startsWith("files.") && typeof a.path === "string") return a.path;
   return null;
 }
 
 export function runSteps(events: readonly RunEvent[]): RunStep[] {
   const steps = new Map<string, RunStep>();
+  // Calls held for a person: what they would do, and their approval.
+  const asked = new Map<string, string>();
+  const approvalOf = new Map<string, string>();
   for (const event of events) {
     switch (event.type) {
       case "tool.called": {
@@ -64,14 +90,40 @@ export function runSteps(events: readonly RunEvent[]): RunStep[] {
         break;
       }
       case "policy.decided":
-        if (event.payload.verdict !== "auto") {
+        if (event.payload.verdict === "deny") {
           steps.set(event.payload.toolCallId, {
             id: event.payload.toolCallId,
             label: `Not allowed to use ${event.payload.tool}`,
             detail: event.payload.reasons[0] ?? null,
             state: "blocked",
           });
+        } else if (event.payload.verdict !== "auto") {
+          const [doing] = TOOL_LABELS[event.payload.tool] ?? [`Using ${event.payload.tool}`];
+          asked.set(event.payload.toolCallId, doing);
+          steps.set(event.payload.toolCallId, {
+            id: event.payload.toolCallId,
+            label: "Waiting for your answer",
+            detail: doing,
+            state: "active",
+          });
         }
+        break;
+      case "approval.decided": {
+        // Approved: the call that follows takes the step over.
+        const id = event.payload.approvalId;
+        const call = [...asked.keys()].find((k) => approvalOf.get(k) === id);
+        if (call && event.payload.decision !== "approved") {
+          steps.set(call, {
+            id: call,
+            label: event.payload.decision === "rejected" ? "You said no" : "No answer in time",
+            detail: asked.get(call) ?? null,
+            state: "blocked",
+          });
+        }
+        break;
+      }
+      case "approval.requested":
+        approvalOf.set(event.payload.toolCallId, event.payload.approvalId);
         break;
     }
   }
@@ -184,8 +236,11 @@ export function runSummary(events: readonly RunEvent[]): RunSummary {
     pagesRead: sources.filter((s) => s.state === "read").length,
     failed: events.filter((e) => e.type === "tool.failed").length,
     compacted: events.some((e) => e.type === "run.compacted"),
-    blocked: events.filter((e) => e.type === "policy.decided" && e.payload.verdict !== "auto")
-      .length,
+    blocked: events.filter(
+      (e) =>
+        (e.type === "policy.decided" && e.payload.verdict === "deny") ||
+        (e.type === "approval.decided" && e.payload.decision !== "approved"),
+    ).length,
   };
 }
 
@@ -209,6 +264,8 @@ export interface RunPhase {
   readonly kind: "queued" | "thinking" | "working" | "waiting";
   /** For waiting: when it expects to carry on. */
   readonly until: string | null;
+  /** For waiting: on a person's answer, or on the model's capacity. */
+  readonly waitingFor?: "you" | "model";
 }
 
 const DOING: Record<string, string> = {
@@ -217,6 +274,18 @@ const DOING: Record<string, string> = {
   remember: "Saving to memory",
   recall: "Checking its memory",
   "todo.write": "Planning",
+  "browser.open": "Opening",
+  "browser.snapshot": "Looking at the page",
+  "browser.click": "Clicking on the page",
+  "browser.type": "Typing on the page",
+  "browser.press": "Pressing a key",
+  "browser.back": "Going back a page",
+  "shell.run": "Running",
+  use_saved_login: "Signing in",
+  "artifacts.read": "Reading saved output",
+  "files.read": "Reading",
+  "files.write": "Writing",
+  "files.list": "Looking in",
 };
 
 /** The live phase of an active run, from its latest events. */
@@ -226,8 +295,18 @@ export function runPhase(status: string, events: readonly RunEvent[]): RunPhase 
     return { label: "Getting ready", detail: null, kind: "queued", until: null };
   }
   if (status === "waiting" || last.type === "run.waiting") {
-    const until = last.type === "run.waiting" ? (last.payload.until ?? null) : null;
-    return { label: "Waiting for the model", detail: null, kind: "waiting", until };
+    const wait = events.findLast((e) => e.type === "run.waiting");
+    const until = wait?.type === "run.waiting" ? (wait.payload.until ?? null) : null;
+    if (wait?.type === "run.waiting" && wait.payload.reason === "approval") {
+      return { label: "Waiting for you", detail: null, kind: "waiting", until, waitingFor: "you" };
+    }
+    return {
+      label: "Waiting for the model",
+      detail: null,
+      kind: "waiting",
+      until,
+      waitingFor: "model",
+    };
   }
   // The newest tool call that has not finished yet is what it is doing.
   const open = new Map<string, Extract<RunEvent, { type: "tool.called" }>>();

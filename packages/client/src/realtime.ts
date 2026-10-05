@@ -38,6 +38,14 @@ export function applyRealtime(queryClient: QueryClient, message: RealtimeMessage
           (a, b) => a.seq - b.seq,
         ),
       );
+      // A file or long output was kept (M3.06).
+      if (event.type === "tool.completed" && event.payload.artifactId) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.runArtifacts(event.runId) });
+      }
+      // A request for a person, or its answer: the approval lists change.
+      if (event.type === "approval.requested" || event.type === "approval.decided") {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.approvalLists });
+      }
       // Something was learned: the review lists change (UX.14).
       if (event.type === "memory.written") {
         void queryClient.invalidateQueries({ queryKey: queryKeys.memoryLists });

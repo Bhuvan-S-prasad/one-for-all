@@ -3,18 +3,24 @@
 // runs the API, the Inngest functions (agent runs) and the event bus.
 
 import type { Config } from "@ofa/config";
+import { loginSecretNames } from "@ofa/core";
 import type {
   AgentDirectory,
+  ApprovalStore,
+  ArtifactStore,
   CredentialVault,
   EventBus,
   LLMGateway,
   MemoryStore,
   RunStore,
+  SandboxProvider,
   TenantContext,
   ThreadStore,
 } from "@ofa/core";
 import {
   createAgentDirectory,
+  createApprovalStore,
+  createArtifactStore,
   createDatabase,
   createRunStore,
   createThreadStore,
@@ -40,6 +46,7 @@ import {
   type RunDispatcher,
 } from "@ofa/orchestrator";
 import { createPolicyEngine } from "@ofa/policy";
+import { createDockerSandbox } from "@ofa/sandbox";
 import { createTelemetry, type TelemetryHandle } from "@ofa/telemetry";
 import {
   builtinTools,
@@ -84,6 +91,10 @@ export interface Container {
   readonly agents: AgentDirectory;
   readonly threads: ThreadStore;
   readonly memory: MemoryStore;
+  /** The agents' computer (M3); null when this server has none. */
+  readonly sandbox: SandboxProvider | null;
+  readonly artifacts: ArtifactStore;
+  readonly approvals: ApprovalStore;
   readonly dispatcher: RunDispatcher;
   readonly inngest: Inngest;
   readonly functions: ReturnType<typeof createFunctions>;
@@ -154,6 +165,10 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
   const threads = createThreadStore(db, { publish });
   const agents = createAgentDirectory(db);
   const memory = createPgMemoryStore(db);
+  // The agents' computer: the Docker sandbox in self-host (ADR-0025).
+  const sandbox = config.sandbox ? createDockerSandbox(config.sandbox) : null;
+  const artifacts = createArtifactStore(db);
+  const approvals = createApprovalStore(db);
 
   const tools = createToolExecutor({
     registry: createToolRegistry(
@@ -162,12 +177,25 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
         search: config.search.searxngUrl
           ? createSearxngProvider({ baseUrl: config.search.searxngUrl })
           : null,
+        sandbox,
       }),
     ),
     policy: createPolicyEngine({ agents }),
     calls: createToolCallStore(db),
     agents,
     redact: (ctx, text) => vault.redact(ctx, text),
+    artifacts,
+    // Saved logins, decrypted only here, when use_saved_login asks (ADR-0012).
+    async logins(ctx, site) {
+      const names = loginSecretNames(site);
+      const [userRef, passwordRef] = await Promise.all([
+        vault.find(ctx, names.username),
+        vault.find(ctx, names.password),
+      ]);
+      if (!userRef || !passwordRef) return null;
+      const { username } = JSON.parse(await vault.reveal(ctx, userRef)) as { username: string };
+      return { username, password: await vault.reveal(ctx, passwordRef) };
+    },
     telemetry,
   });
 
@@ -178,6 +206,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     agents,
     threads,
     memory,
+    approvals,
     middleware: [createTelemetryMiddleware(telemetry)],
   };
 
@@ -186,7 +215,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     baseUrl: config.inngest.baseUrl,
     eventKey: config.inngest.eventKey,
   });
-  const functions = createFunctions(inngest, { harness, runs });
+  const functions = createFunctions(inngest, { harness, runs, approvals });
 
   return {
     config,
@@ -202,6 +231,9 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     agents,
     threads,
     memory,
+    sandbox,
+    artifacts,
+    approvals,
     dispatcher: overrides.dispatcher ?? createRunDispatcher(inngest),
     inngest,
     functions,

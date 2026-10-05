@@ -38,6 +38,7 @@ export { createTelemetryMiddleware } from "./telemetry-middleware";
 export { estimateMessages, estimateTokens, truncateToTokens } from "./tokens";
 export {
   createFakeToolExecutor,
+  createMemoryApprovals,
   createMemoryRuntime,
   createMemoStepRunner,
   createScriptedLLM,

@@ -64,6 +64,10 @@ export const envSchema = z
 
     /** Self-hosted SearXNG for web.search. Unset: web search reports it is not set up. */
     SEARXNG_URL: z.url().optional(),
+    /** The agents' computer (M3): its service, reached through the egress container. Unset: no computer tools. */
+    SANDBOX_URL: z.url().optional(),
+    /** Shared secret with the sandbox service. Never reaches agents. */
+    SANDBOX_TOKEN: z.string().min(16, "SANDBOX_TOKEN must be at least 16 characters").optional(),
     /** OTLP/HTTP endpoint for traces (e.g. a local Phoenix). Unset: traces are off (ADR-0019). */
     OTEL_EXPORTER_OTLP_ENDPOINT: z.url().optional(),
 

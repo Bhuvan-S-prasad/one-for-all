@@ -1,4 +1,4 @@
-import { useAgents, useHealth } from "@ofa/client";
+import { useAgents, useApprovals, useHealth } from "@ofa/client";
 import type { Agent, FamiliarMood, SessionResponse } from "@ofa/contracts";
 import { Link, useMatches, useNavigate } from "@tanstack/react-router";
 import {
@@ -54,16 +54,17 @@ const NAV: readonly NavItem[] = [
   { to: "/", label: "Home", icon: House, exact: true, keys: "G H" },
   { to: "/agents", label: "Agents", icon: Ghost, keys: "G A" },
   { to: "/activity", label: "Activity", icon: Activity, keys: "G R" },
-  { to: "/approvals", label: "Approvals", icon: ShieldCheck, soon: true },
+  { to: "/approvals", label: "Approvals", icon: ShieldCheck },
   { to: "/connections", label: "Connections", icon: Plug, soon: true },
   { to: "/settings", label: "Settings", icon: SlidersHorizontal, keys: "G S" },
 ];
 
-/** Agents that need someone: stuck now. Approvals join this in M4. */
+/** What needs someone: agents stuck now, and requests waiting for an answer. */
 function useAttention(agents: readonly Agent[] | undefined) {
   const moods = useAgentMoods(agents);
   const stuck = (agents ?? []).filter((a) => moods.get(a.id)?.mood === "error").length;
-  return { moods, stuck };
+  const { data: approvals } = useApprovals();
+  return { moods, stuck, waiting: approvals?.length ?? 0 };
 }
 
 export function AppShell({ session, children }: { session: SessionResponse; children: ReactNode }) {
@@ -79,7 +80,7 @@ export function AppShell({ session, children }: { session: SessionResponse; chil
     setPaletteOpen(true);
   };
   const { data: agents } = useAgents();
-  const { moods, stuck } = useAttention(agents);
+  const { moods, stuck, waiting } = useAttention(agents);
 
   useGlobalShortcuts({
     openPalette: () => openPalette(),
@@ -103,8 +104,9 @@ export function AppShell({ session, children }: { session: SessionResponse; chil
 
   // The tab title counts what needs someone, so it shows from another tab too.
   useEffect(() => {
-    document.title = `${stuck ? `(${stuck}) ` : ""}${title ? `${title} · ` : ""}One-for-All`;
-  }, [stuck, title]);
+    const needs = stuck + waiting;
+    document.title = `${needs ? `(${needs}) ` : ""}${title ? `${title} · ` : ""}One-for-All`;
+  }, [stuck, waiting, title]);
 
   return (
     <div className="flex h-dvh overflow-hidden">
@@ -116,6 +118,7 @@ export function AppShell({ session, children }: { session: SessionResponse; chil
         agents={agents ?? []}
         moods={moods}
         stuck={stuck}
+        waiting={waiting}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -200,6 +203,7 @@ function Sidebar(props: {
   agents: readonly Agent[];
   moods: ReturnType<typeof useAgentMoods>;
   stuck: number;
+  waiting: number;
 }) {
   const { collapsed } = props;
   const ToggleIcon = collapsed ? PanelLeftOpen : PanelLeftClose;
@@ -265,7 +269,12 @@ function Sidebar(props: {
       <nav aria-label="Main" className="flex flex-col gap-0.5">
         {NAV.map((item) => {
           const Icon = item.icon;
-          const badge = item.to === "/agents" && props.stuck > 0 ? props.stuck : null;
+          const badge =
+            item.to === "/agents" && props.stuck > 0
+              ? { n: props.stuck, label: "stuck", tone: "bg-destructive text-background" }
+              : item.to === "/approvals" && props.waiting > 0
+                ? { n: props.waiting, label: "waiting", tone: "bg-primary text-primary-foreground" }
+                : null;
           return (
             <Link
               key={item.to}
@@ -285,13 +294,14 @@ function Sidebar(props: {
               )}
               {badge !== null && (
                 <span
-                  aria-label={`${badge} stuck`}
+                  aria-label={`${badge.n} ${badge.label}`}
                   className={cn(
-                    "flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-destructive px-1 font-mono text-[10.5px] font-semibold text-background",
+                    "flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-[10.5px] font-semibold",
+                    badge.tone,
                     collapsed && "absolute -top-0.5 -right-0.5",
                   )}
                 >
-                  {badge}
+                  {badge.n}
                 </span>
               )}
               {collapsed && (

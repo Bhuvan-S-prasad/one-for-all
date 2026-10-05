@@ -2,6 +2,7 @@ import {
   MOOD_LABELS,
   moodFor,
   useAgent,
+  useApprovals,
   useChatThread,
   useNewThread,
   useRun,
@@ -18,6 +19,7 @@ import {
   ArrowLeft,
   ArrowUp,
   History,
+  Monitor,
   PanelRight,
   Pause,
   Play,
@@ -39,6 +41,7 @@ import { AgentTabs } from "@/components/agent-tabs";
 import { LiveRun, WorkingRing } from "@/components/chat/live-run";
 import { Reply } from "@/components/chat/reply";
 import { RunPanel } from "@/components/chat/run-panel";
+import { ComputerOverlay, ComputerPanel, usesBrowser } from "@/components/computer/computer-panel";
 import { Familiar } from "@/components/familiar";
 import { ErrorAlert } from "@/components/ui/alert";
 import { starters } from "@/lib/agents";
@@ -47,6 +50,7 @@ import { runPhase } from "@/lib/run-steps";
 import { isTyping, useStoredFlag } from "@/lib/shortcuts";
 import { toast } from "@/lib/toast";
 import { useNow } from "@/lib/use-now";
+import { useWide } from "@/lib/use-wide";
 import { cn } from "@/lib/utils";
 
 // The chat (UX.05): a compact header, a thread that scrolls on its own, the
@@ -116,6 +120,8 @@ function Chat({ agent }: { agent: Agent }) {
   const { run: liveRun, events } = useRun(threadRun?.id);
   const run: Run | undefined = liveRun.data ?? threadRun;
   const active = !!run && ACTIVE.has(run.status);
+  const { data: approvals } = useApprovals(agent.id);
+  const waitingOnYou = approvals?.filter((a) => a.runId === run?.id) ?? [];
   const busyElsewhere = !!latest && latest.id !== run?.id && ACTIVE.has(latest.status);
   const now = useNow(active);
   const lastEvent = events.data?.at(-1) ?? null;
@@ -130,6 +136,13 @@ function Chat({ agent }: { agent: Agent }) {
   const update = useUpdateAgent(agent.id);
   const newThread = useNewThread(agent.id);
   const [panelOpen, setPanelOpen] = useStoredFlag("ofa-run-panel", true);
+  // The agent's computer (M3.10): a side panel on wide screens, full screen on phones.
+  const [computerOpen, setComputerOpen] = useStoredFlag("ofa-computer-panel", false);
+  const [overlay, setOverlay] = useState<null | "watch" | "control">(null);
+  const hasBrowser = usesBrowser(agent);
+  // The side panel exists only on wide screens; phones use the full-screen view.
+  const wide = useWide();
+  const panelShown = hasBrowser && computerOpen && wide;
   const celebrate = useJustFinished(run);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const clearDraft = useCallback(
@@ -254,6 +267,16 @@ function Chat({ agent }: { agent: Agent }) {
         canStartNew={visible.length > 0 && !newThread.isPending}
         panelOpen={panelOpen}
         onTogglePanel={run ? () => setPanelOpen(!panelOpen) : undefined}
+        computerOpen={panelShown}
+        onComputer={
+          hasBrowser
+            ? () => {
+                // Wide screens get the side panel; phones the full-screen view.
+                if (wide) setComputerOpen(!computerOpen);
+                else setOverlay("watch");
+              }
+            : undefined
+        }
       />
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
@@ -288,6 +311,7 @@ function Chat({ agent }: { agent: Agent }) {
                     now={now}
                     stopping={stop.isPending}
                     onStop={stopRun}
+                    approvals={waitingOnYou}
                   />
                 )}
                 {failedUnanswered && run && (
@@ -325,8 +349,30 @@ function Chat({ agent }: { agent: Agent }) {
             onResume={togglePause}
           />
         </div>
-        {showPanel && run && (
-          <RunPanel agent={agent} run={run} events={events.data ?? []} active={active} now={now} />
+        {panelShown ? (
+          <ComputerPanel
+            agent={agent}
+            onClose={() => setComputerOpen(false)}
+            onTakeOver={() => setOverlay("control")}
+          />
+        ) : (
+          showPanel &&
+          run && (
+            <RunPanel
+              agent={agent}
+              run={run}
+              events={events.data ?? []}
+              active={active}
+              now={now}
+            />
+          )
+        )}
+        {overlay && (
+          <ComputerOverlay
+            agent={agent}
+            initialControl={overlay === "control"}
+            onClose={() => setOverlay(null)}
+          />
         )}
       </div>
     </div>
@@ -381,6 +427,8 @@ function ChatHeader(props: {
   canStartNew: boolean;
   panelOpen: boolean;
   onTogglePanel?: () => void;
+  computerOpen: boolean;
+  onComputer?: () => void;
 }) {
   const { agent, mood, run, active } = props;
   const phase = active && run ? runPhase(run.status, []) : null;
@@ -483,6 +531,21 @@ function ChatHeader(props: {
             <Pause className="size-[18px]" aria-hidden />
           )}
         </button>
+        {props.onComputer && (
+          <button
+            type="button"
+            onClick={props.onComputer}
+            aria-pressed={props.computerOpen}
+            aria-label={props.computerOpen ? "Hide the computer" : "Show the computer"}
+            title="Computer: watch or take over its browser"
+            className={cn(
+              "flex size-10 items-center justify-center rounded-full outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
+              props.computerOpen ? "text-foreground" : "text-muted-foreground",
+            )}
+          >
+            <Monitor className="size-[18px]" aria-hidden />
+          </button>
+        )}
         {props.onTogglePanel && (
           <button
             type="button"

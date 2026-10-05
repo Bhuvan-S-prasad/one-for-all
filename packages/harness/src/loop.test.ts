@@ -10,6 +10,7 @@ import {
   assembleContext,
   contextBudget,
   createFakeToolExecutor,
+  createMemoryApprovals,
   createMemoryRuntime,
   createMemoStepRunner,
   createScriptedLLM,
@@ -254,6 +255,31 @@ describe("runAgent", () => {
     expect(llm.requests[1]?.messages.at(-1)?.content).toMatch(/Unknown tool/);
   });
 
+  it("tells the executor which addresses the run was given", async () => {
+    const { runtime, tools, run } = setup(
+      [
+        { toolCalls: [{ name: "web.search", args: { query: "x" } }] },
+        { toolCalls: [{ name: "web.search", args: { query: "y" } }] },
+        { text: "Done." },
+      ],
+      agent,
+      { toolText: "See https://larkspur.example/notes/3.0." },
+    );
+    runtime.threads.messages.get(threadId)![0] = {
+      ...runtime.threads.messages.get(threadId)![0]!,
+      content: "Check https://www.Docs.example/start/",
+    };
+    const seen: (readonly string[] | undefined)[] = [];
+    const execute = tools.execute.bind(tools);
+    tools.execute = async (request, c) => {
+      seen.push(request.knownUrls);
+      return execute(request, c);
+    };
+    await run();
+    expect(seen[0]).toEqual(["https://docs.example/start"]);
+    expect(seen[1]).toEqual(["https://docs.example/start", "https://larkspur.example/notes/3.0"]);
+  });
+
   it("lets middleware block a tool before it runs", async () => {
     const { runtime, tools, run } = setup([
       { toolCalls: [{ name: "web.search", args: { query: "x" } }] },
@@ -289,6 +315,171 @@ describe("runAgent", () => {
     expect((await run()).status).toBe("failed");
     expect(llm.requests).toHaveLength(0);
     expect(runtime.runs.records.get(ctx.runId)?.status).toBe("failed");
+  });
+});
+
+describe("approvals", () => {
+  const click: ToolDescriptor = {
+    name: "browser.click",
+    description: "Click",
+    inputSchema: { type: "object", properties: { ref: { type: "number" } } },
+    annotations: { outbound: true },
+    source: "builtin",
+  };
+
+  /** A run that clicks once, held for a person, and `answer` says what happens at each wait. */
+  function held(
+    answer: (
+      id: string,
+      approvals: ReturnType<typeof createMemoryApprovals>,
+    ) => Record<string, unknown> | null,
+  ) {
+    const runtime = createMemoryRuntime();
+    runtime.agents.profiles.set(agent.id, agent);
+    runtime.runs.records.set(ctx.runId, {
+      id: ctx.runId,
+      agentId: ctx.agentId,
+      threadId,
+      trigger: "message",
+      status: "queued",
+      tainted: true,
+      usage: { inputTokens: 0, outputTokens: 0, costUsd: 0, modelCalls: 0, toolCalls: 0 },
+    });
+    runtime.threads.messages.set(threadId, [
+      {
+        id: asId("m1"),
+        author: "user",
+        agentId: null,
+        content: "Submit it",
+        createdAt: new Date(),
+      },
+    ]);
+    const llm = createScriptedLLM([
+      { toolCalls: [{ name: "browser.click", args: { ref: 9 } }] },
+      { text: "Done." },
+    ]);
+    const tools = createFakeToolExecutor([
+      {
+        descriptor: click,
+        run: (_args, request) =>
+          request.approved
+            ? okOutcome("Page: Thanks", true)
+            : {
+                status: "blocked",
+                verdict: "approve",
+                reasons: ["outbound tool in a run that read untrusted content"],
+                message: "browser.click needs a person's approval first.",
+                summary: "Click the button “Submit” on a.example",
+              },
+      },
+    ]);
+    const approvals = createMemoryApprovals();
+    const waits: { id: string; timeoutMs: number }[] = [];
+    const steps = createMemoStepRunner({
+      onWait: (id, wait) => {
+        waits.push({ id, timeoutMs: wait.timeoutMs });
+        expect(wait).toMatchObject({ event: "approval/decided", field: "approvalId" });
+        return answer(id, approvals);
+      },
+    });
+    const run = () =>
+      runAgent(
+        { ctx, threadId, trigger: "message" },
+        {
+          llm,
+          tools,
+          runs: runtime.runs,
+          agents: runtime.agents,
+          threads: runtime.threads,
+          approvals,
+        },
+        steps,
+      );
+    return { runtime, llm, tools, approvals, waits, run };
+  }
+
+  const decide = (
+    approvals: ReturnType<typeof createMemoryApprovals>,
+    status: "approved" | "rejected",
+  ) => {
+    const id = approvals.records[0]!.id;
+    void approvals.decide(ctx, id, { status, decidedBy: "usr_1" });
+    return { approvalId: id };
+  };
+
+  it("waits for a person, then runs the call they approved", async () => {
+    const { runtime, tools, approvals, waits, run } = held((_id, a) => decide(a, "approved"));
+    const result = await run();
+    expect(result).toMatchObject({ status: "succeeded", stopReason: "final_answer" });
+    expect(approvals.records[0]).toMatchObject({
+      tool: "browser.click",
+      summary: "Click the button “Submit” on a.example",
+      status: "approved",
+    });
+    expect(waits.map((w) => w.id)).toEqual(["tool-0-0-wait"]);
+    expect(tools.calls).toHaveLength(2);
+    expect(types(runtime)).toEqual([
+      "run.started",
+      "model.called",
+      "policy.decided",
+      "approval.requested",
+      "run.waiting",
+      "approval.decided",
+      "run.resumed",
+      "tool.called",
+      "tool.completed",
+      "model.called",
+      "message.created",
+      "run.ended",
+    ]);
+    expect(runtime.runs.events.find((e) => e.type === "approval.decided")?.payload).toMatchObject({
+      decision: "approved",
+      decidedBy: "usr_1",
+    });
+  });
+
+  it("tells the model when the person said no, and runs nothing", async () => {
+    const { tools, llm, run } = held((_id, a) => decide(a, "rejected"));
+    await run();
+    expect(tools.calls).toHaveLength(1);
+    const last = JSON.stringify(llm.requests[1]?.messages);
+    expect(last).toContain("the person said no to this");
+  });
+
+  it("picks up an answer given before the wait began", async () => {
+    // The event came too early for the wait; the row still has the answer.
+    const { approvals, tools, waits, run } = held((id, a) => {
+      if (id === "tool-0-0-wait") decide(a, "approved");
+      return null;
+    });
+    await run();
+    expect(waits.map((w) => w.id)).toEqual(["tool-0-0-wait"]);
+    expect(approvals.records[0]?.status).toBe("approved");
+    expect(tools.calls).toHaveLength(2);
+  });
+
+  it("gives up after a day without an answer", async () => {
+    const { approvals, tools, llm, waits, run } = held(() => null);
+    await run();
+    expect(waits).toEqual([
+      { id: "tool-0-0-wait", timeoutMs: 60_000 },
+      { id: "tool-0-0-wait-more", timeoutMs: 24 * 60 * 60 * 1000 - 60_000 },
+    ]);
+    expect(approvals.records[0]?.status).toBe("expired");
+    expect(tools.calls).toHaveLength(1);
+    expect(JSON.stringify(llm.requests[1]?.messages)).toContain("nobody answered");
+  });
+
+  it("refuses calls that need a person when runs cannot wait", async () => {
+    const { runtime, tools, llm } = held(() => null);
+    const steps = createMemoStepRunner();
+    await runAgent(
+      { ctx, threadId, trigger: "message" },
+      { llm, tools, runs: runtime.runs, agents: runtime.agents, threads: runtime.threads },
+      steps,
+    );
+    expect(types(runtime)).not.toContain("approval.requested");
+    expect(JSON.stringify(llm.requests[1]?.messages)).toContain("Nobody can approve it from here");
   });
 });
 

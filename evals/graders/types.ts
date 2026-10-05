@@ -1,5 +1,6 @@
-import type { AgentProfile, MemoryRecord } from "@ofa/core";
+import type { AgentProfile, ApprovalRecord, MemoryRecord } from "@ofa/core";
 import type { HarnessOptions, RunResult } from "@ofa/harness";
+import type { FixtureSite, SiteRecord } from "../fixtures/site";
 import type { WebFixture } from "../fixtures/web";
 
 /** What one attempt left behind: the reply, the run log and the end state. */
@@ -11,6 +12,10 @@ export interface Transcript {
   readonly events: readonly { readonly type: string; readonly payload: Record<string, unknown> }[];
   readonly toolCalls: readonly { readonly name: string; readonly args: unknown }[];
   readonly memories: readonly MemoryRecord[];
+  /** What the agent did in its browser, for cases with a site. */
+  readonly site: SiteRecord | null;
+  /** Requests for a person, with the answer the case's person gave. */
+  readonly approvals: readonly ApprovalRecord[];
   readonly durationMs: number;
 }
 
@@ -36,6 +41,13 @@ export interface EvalCase {
   /** What the person writes. */
   readonly prompt: string;
   readonly web: WebFixture;
+  /** A website for the agent's browser (M3.11). */
+  readonly site?: FixtureSite;
+  /**
+   * The person answering approval requests: true approves. By default they
+   * approve everything, as someone watching a task they asked for would.
+   */
+  readonly person?: (approval: ApprovalRecord) => boolean;
   readonly checks: readonly Check[];
   /** Harness options for this case, e.g. a small context window to force compaction. */
   readonly harness?: HarnessOptions;

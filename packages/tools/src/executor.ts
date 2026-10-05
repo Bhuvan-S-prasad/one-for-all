@@ -1,6 +1,8 @@
 import {
+  artifactUri,
   noopTelemetry,
   type AgentDirectory,
+  type ArtifactStore,
   type PolicyEngine,
   type RunContext,
   type Telemetry,
@@ -8,7 +10,7 @@ import {
   type ToolExecutor,
   type ToolOutcome,
 } from "@ofa/core";
-import { grantFor } from "@ofa/policy";
+import { grantFor, PLATFORM_TOOLS } from "@ofa/policy";
 import type { ToolRegistry, ToolRunContext, ToolRunResult } from "./define";
 
 // The tool executor (ARCHITECTURE.md §9.1, "Execution"): the one place a tool
@@ -23,8 +25,17 @@ export interface ToolExecutorOptions {
   /** Replace known secret values in output (vault redaction). */
   readonly redact?: (ctx: RunContext, text: string) => Promise<string>;
   readonly telemetry?: Telemetry;
-  /** Longest output the model sees. Default 12,000 characters. */
+  /**
+   * Longest output the model sees. Default 12,000 characters. Longer output
+   * is kept as an artifact the agent can reopen, when `artifacts` is set.
+   */
   readonly maxResultChars?: number;
+  readonly artifacts?: ArtifactStore;
+  /** Saved logins, decrypted only when a tool asks for one (M3.08, ADR-0012). */
+  readonly logins?: (
+    ctx: RunContext,
+    site: string,
+  ) => Promise<{ readonly username: string; readonly password: string } | null>;
   readonly timeoutMs?: number;
   readonly now?: () => number;
 }
@@ -50,6 +61,28 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+/** Arguments shown on an approval card when a tool cannot say it better. */
+function argsText(args: unknown): string {
+  const text = JSON.stringify(args ?? {});
+  return text.length > 400 ? `${text.slice(0, 399)}…` : text;
+}
+
+/** The tool's own words for a call, or its name and arguments; never fails. */
+async function describe(
+  tool: { name: string; describe?: (args: unknown, ctx: ToolRunContext) => Promise<string> },
+  args: unknown,
+  ctx: ToolRunContext,
+): Promise<string> {
+  const plain = `${tool.name} ${argsText(args)}`;
+  if (!tool.describe) return plain;
+  try {
+    const text = (await withTimeout(tool.describe(args, ctx), 10_000)).trim();
+    return text ? text.slice(0, 1_000) : plain;
+  } catch {
+    return plain;
+  }
+}
+
 export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
   const { registry, policy, calls } = options;
   const telemetry = options.telemetry ?? noopTelemetry;
@@ -57,6 +90,7 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
   const timeoutMs = options.timeoutMs ?? 60_000;
   const now = options.now ?? Date.now;
   const redact = options.redact ?? (async (_ctx: RunContext, text: string) => text);
+  const store = options.artifacts;
 
   return {
     async listTools(ctx) {
@@ -65,7 +99,8 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
       if (!agent) return [];
       return registry.descriptors().filter((d) => {
         const grant = grantFor(agent.grants, d.name);
-        return grant !== undefined && grant.mode !== "blocked";
+        if (grant) return grant.mode !== "blocked";
+        return PLATFORM_TOOLS.has(d.name);
       });
     },
 
@@ -100,6 +135,7 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
           tool: descriptor,
           args: parsed.value,
           tainted: request.tainted,
+          knownUrls: new Set(request.knownUrls ?? []),
         });
         span.setAttributes({ "policy.verdict": decision.verdict });
         if (decision.verdict === "deny") {
@@ -110,24 +146,45 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
             message: decision.reasons[0] ?? "Not allowed",
           };
         }
-        if (decision.verdict !== "auto") {
-          // Approval cards arrive in M4; until then, anything that needs a
-          // person does not run.
-          return {
-            status: "blocked",
-            verdict: decision.verdict,
-            reasons: decision.reasons,
-            message: `${request.name} needs a person's approval first, and approvals are not available yet.`,
-          };
-        }
-
         const agent = await options.agents.get(ctx, ctx.agentId);
         const runCtx: ToolRunContext = {
           ...ctx,
           idempotencyKey: request.idempotencyKey,
           tainted: request.tainted,
           memoryScopes: agent?.memoryScopes ?? [],
+          ...(options.logins
+            ? { logins: { get: (site: string) => options.logins!(ctx, site) } }
+            : {}),
+          ...(store
+            ? {
+                artifacts: {
+                  put: (input) => store.put(ctx, input),
+                  // An agent reopens only its own artifacts.
+                  get: async (id) => {
+                    const found = await store.get(ctx, id);
+                    return found && found.agentId === ctx.agentId ? found : null;
+                  },
+                  read: async (id) => {
+                    const found = await store.get(ctx, id);
+                    return found && found.agentId === ctx.agentId ? store.read(ctx, id) : null;
+                  },
+                },
+              }
+            : {}),
         };
+
+        if (decision.verdict !== "auto" && !request.approved) {
+          // A person must agree first (§6.2): nothing runs; the harness asks
+          // them, showing what the call would do, and calls again if they agree.
+          return {
+            status: "blocked",
+            verdict: decision.verdict,
+            reasons: decision.reasons,
+            message: `${request.name} needs a person's approval first.`,
+            summary: await redact(ctx, await describe(tool, parsed.value, runCtx)),
+          };
+        }
+
         const idempotent = !!(tool.annotations.readOnly || tool.annotations.idempotent);
         const begun = await calls.begin(ctx, {
           idempotencyKey: request.idempotencyKey,
@@ -181,7 +238,23 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
           };
         }
 
-        const content = limit(await redact(ctx, asText(result.content)), maxChars);
+        const full = await redact(ctx, asText(result.content));
+        let content = limit(full, maxChars);
+        let artifactId = result.artifactId;
+        if (full.length > maxChars && store) {
+          // Too long for the context: keep it whole, show the start and the handle (§7).
+          const saved = await store.put(ctx, {
+            key: `${request.idempotencyKey}:output`,
+            kind: "output",
+            name: `${request.name} output`,
+            mimeType: "text/plain; charset=utf-8",
+            content: full,
+            untrusted: result.untrusted,
+          });
+          artifactId ??= saved.id;
+          const head = Math.max(0, maxChars - 300);
+          content = `${full.slice(0, head)}\n…[the full output, ${full.length.toLocaleString("en")} characters, is saved as ${artifactUri(saved.id)}; read on with artifacts.read and from: ${head}]`;
+        }
         await calls.complete(ctx, request.idempotencyKey, {
           result: content,
           untrusted: result.untrusted,
@@ -190,6 +263,7 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
           status: "ok",
           content,
           untrusted: result.untrusted,
+          ...(artifactId ? { artifactId } : {}),
           verdict: decision.verdict,
           reasons: decision.reasons,
           durationMs: now() - started,

@@ -38,6 +38,8 @@ export interface Config {
     };
   };
   readonly search: { readonly searxngUrl: string | undefined };
+  /** The agents' computer; null when this server has none. */
+  readonly sandbox: { readonly url: string; readonly token: string } | null;
   readonly telemetry: { readonly otlpEndpoint: string | undefined };
   readonly inngest: {
     readonly dev: boolean;
@@ -135,6 +137,7 @@ export function loadConfig(source: Record<string, string | undefined> = process.
       searxngUrl:
         env.SEARXNG_URL ?? (env.NODE_ENV === "development" ? "http://127.0.0.1:8888" : undefined),
     },
+    sandbox: sandboxConfig(env),
     telemetry: { otlpEndpoint: env.OTEL_EXPORTER_OTLP_ENDPOINT },
     inngest: {
       dev: env.INNGEST_DEV ?? env.NODE_ENV !== "production",
@@ -148,4 +151,17 @@ export function loadConfig(source: Record<string, string | undefined> = process.
     },
     version: env.APP_VERSION,
   };
+}
+
+/**
+ * `pnpm infra:up` runs the sandbox for development, reachable on
+ * 127.0.0.1:7070 with a fixed dev token; elsewhere both must be set.
+ */
+function sandboxConfig(env: Env): Config["sandbox"] {
+  const dev = env.NODE_ENV === "development";
+  const url = env.SANDBOX_URL ?? (dev ? "http://127.0.0.1:7070" : undefined);
+  const token = env.SANDBOX_TOKEN ?? (dev ? "ofa-sandbox-dev-token" : undefined);
+  if (!url) return null;
+  if (!token) throw new Error("SANDBOX_URL is set but SANDBOX_TOKEN is not");
+  return { url, token };
 }

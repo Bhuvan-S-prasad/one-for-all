@@ -35,4 +35,34 @@ describe("inngestSteps", () => {
     expect(error).not.toBeInstanceOf(NonRetriableError);
     expect((error as Error).message).toBe("db down");
   });
+
+  it("waits for an event matching one field, and refuses values that could escape the match", async () => {
+    const waits: unknown[] = [];
+    const steps = inngestSteps({
+      ...step,
+      waitForEvent: async (id, opts) => {
+        waits.push({ id, ...opts });
+        return { data: { approvalId: "4f6fb9f0-cf66-4467-bbda-cae2aa7e6fc1" } };
+      },
+    });
+    const wait = (value: string) =>
+      steps.waitForEvent!("tool-0-0-wait", {
+        event: "approval/decided",
+        field: "approvalId",
+        value,
+        timeoutMs: 60_000,
+      });
+    expect(await wait("4f6fb9f0-cf66-4467-bbda-cae2aa7e6fc1")).toEqual({
+      approvalId: "4f6fb9f0-cf66-4467-bbda-cae2aa7e6fc1",
+    });
+    expect(waits).toEqual([
+      {
+        id: "tool-0-0-wait",
+        event: "approval/decided",
+        timeout: 60_000,
+        if: "async.data.approvalId == '4f6fb9f0-cf66-4467-bbda-cae2aa7e6fc1'",
+      },
+    ]);
+    await expect(wait("x' || true || '")).rejects.toThrow(/Unsafe/);
+  });
 });

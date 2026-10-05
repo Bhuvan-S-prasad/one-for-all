@@ -5,6 +5,9 @@ import { loadConfig } from "@ofa/config";
 import {
   agentSchema,
   agentStatsListSchema,
+  approvalListSchema,
+  approvalSchema,
+  artifactListSchema,
   llmSettingsSchema,
   memoryItemSchema,
   memoryListSchema,
@@ -14,6 +17,7 @@ import {
   threadSchema,
   threadSummaryPageSchema,
   usageTodaySchema,
+  type ApprovalDecidedEvent,
   type CreateAgentInput,
   type MessageReceivedEvent,
   type RealtimeMessage,
@@ -65,9 +69,11 @@ describe.skipIf(!hasDb)("M2 API (integration)", async () => {
 
   const started: MessageReceivedEvent[] = [];
   const cancelled: RunCancelledEvent[] = [];
+  const decided: ApprovalDecidedEvent[] = [];
   const dispatcher: RunDispatcher = {
     messageReceived: async (event) => void started.push(event),
     cancelRun: async (event) => void cancelled.push(event),
+    approvalDecided: async (event) => void decided.push(event),
   };
   const bus = createMemoryEventBus();
   const container = createContainer(config, {
@@ -336,6 +342,119 @@ describe.skipIf(!hasDb)("M2 API (integration)", async () => {
     expect((await send("DELETE", `/api/memories/${kept.id}`)).status).toBe(204);
     expect((await send("DELETE", `/api/memories/${kept.id}`)).status).toBe(404);
     expect((await get("/api/memories?verified=maybe")).status).toBe(422);
+  });
+
+  it("saves logins in the vault and never sends their values back", async () => {
+    const save = await send("PUT", "/api/logins", {
+      site: "https://www.Example.com/login",
+      username: "sam",
+      password: "correct-horse-battery",
+    });
+    expect(save.status).toBe(201);
+    const listed = await (await get("/api/logins")).text();
+    expect(JSON.parse(listed).items).toEqual([
+      { site: "example.com", updatedAt: expect.any(String) },
+    ]);
+    expect(listed).not.toContain("correct-horse-battery");
+    expect(listed).not.toContain("sam");
+    expect(
+      (
+        await send("PUT", "/api/logins", {
+          site: "example.com",
+          username: "sam",
+          password: "short",
+        })
+      ).status,
+    ).toBe(422);
+    expect((await send("DELETE", "/api/logins/example.com")).status).toBe(204);
+    expect((await send("DELETE", "/api/logins/example.com")).status).toBe(404);
+  });
+
+  it("lists a run's artifacts and serves their content only as a download", async () => {
+    const runCtx = { ...tenant(), agentId: asId<AgentId>(agentId), runId: asId<RunId>(retryRunId) };
+    const kept = await container.artifacts.put(runCtx, {
+      key: "k1",
+      kind: "file",
+      name: "report <draft>.html",
+      mimeType: "text/html",
+      content: "<script>alert(1)</script>",
+      untrusted: true,
+    });
+    // The same key from a retried step finds the same artifact.
+    const again = await container.artifacts.put(runCtx, {
+      key: "k1",
+      kind: "file",
+      name: "other",
+      mimeType: "text/plain",
+      content: "x",
+      untrusted: false,
+    });
+    expect(again.id).toBe(kept.id);
+
+    const list = artifactListSchema.parse(
+      await (await get(`/api/runs/${retryRunId}/artifacts`)).json(),
+    );
+    expect(list.items).toEqual([
+      expect.objectContaining({ id: kept.id, kind: "file", size: 25, untrusted: true }),
+    ]);
+    const content = await get(`/api/artifacts/${kept.id}/content`);
+    expect(content.status).toBe(200);
+    expect(content.headers.get("content-type")).toBe("application/octet-stream");
+    expect(content.headers.get("content-disposition")).toBe(
+      'attachment; filename="report _draft_.html"',
+    );
+    expect(content.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(await content.text()).toBe("<script>alert(1)</script>");
+    expect((await get("/api/artifacts/00000000-0000-4000-8000-000000000000")).status).toBe(404);
+  });
+
+  it("lists waiting approvals, settles one once, and wakes the run", async () => {
+    const runCtx = { ...tenant(), agentId: asId<AgentId>(agentId), runId: asId<RunId>(retryRunId) };
+    const asked = await container.approvals.request(runCtx, {
+      toolCallId: "tool-2-0",
+      tool: "browser.click",
+      args: { ref: 9 },
+      summary: "Click the button “Submit” on a.example",
+      reasons: ["outbound tool in a run that read untrusted content"],
+      verdict: "approve",
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    // A retried step finds the request it made.
+    const again = await container.approvals.request(runCtx, {
+      toolCallId: "tool-2-0",
+      tool: "browser.click",
+      args: {},
+      summary: "other",
+      reasons: [],
+      verdict: "approve",
+      expiresAt: new Date(),
+    });
+    expect(again.id).toBe(asked.id);
+
+    const list = approvalListSchema.parse(
+      await (await get(`/api/approvals?agentId=${agentId}`)).json(),
+    );
+    expect(list.items).toEqual([
+      expect.objectContaining({ id: asked.id, status: "pending", threadId, tool: "browser.click" }),
+    ]);
+
+    expect((await send("POST", `/api/approvals/${asked.id}`, { decision: "maybe" })).status).toBe(
+      422,
+    );
+    const ok = await send("POST", `/api/approvals/${asked.id}`, { decision: "approve" });
+    expect(ok.status).toBe(200);
+    expect(approvalSchema.parse(await ok.json())).toMatchObject({ status: "approved" });
+    expect(decided).toEqual([
+      expect.objectContaining({ approvalId: asked.id, runId: retryRunId, decision: "approved" }),
+    ]);
+    // Answered once: a second answer is refused and wakes nothing.
+    const twice = await send("POST", `/api/approvals/${asked.id}`, { decision: "reject" });
+    expect(twice.status).toBe(409);
+    expect(decided).toHaveLength(1);
+    expect(
+      approvalListSchema.parse(await (await get(`/api/approvals?agentId=${agentId}`)).json()).items,
+    ).toEqual([]);
+    expect(await container.approvals.expireForRun(tenant(), retryRunId)).toBe(0);
   });
 
   it("counts today's model requests against the daily quota, and runs per agent", async () => {

@@ -64,4 +64,20 @@ describe("policy engine", () => {
       "approve",
     );
   });
+
+  it("in a tainted run, opens only addresses the run was given", async () => {
+    const e = engine([{ tool: "browser.*", mode: "auto" }]);
+    const open = tool("browser.open", { readOnly: true, opensUrl: "url" });
+    const knownUrls = new Set(["https://shop.example/orders/5512"]);
+    const ask = (url: string, tainted = true) =>
+      e.evaluate({ ctx, tool: open, args: { url }, tainted, knownUrls });
+    // Given (however it is written): no question.
+    expect((await ask("https://www.shop.example/orders/5512/#top")).verdict).toBe("auto");
+    // Made up, with data in it: a person decides.
+    const made = await ask("https://verify-orders.example/check?email=sam@example.com");
+    expect(made.verdict).toBe("approve");
+    expect(made.reasons.join(" ")).toMatch(/address/);
+    // Before reading anything outside, any address is fine.
+    expect((await ask("https://anything.example/", false)).verdict).toBe("auto");
+  });
 });
