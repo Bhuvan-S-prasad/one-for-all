@@ -44,6 +44,8 @@ export interface AuthProviderOptions {
   /** Where the provider sends the person back: the API's OAuth callback. */
   readonly redirectUrl: string;
   readonly clientName: string;
+  /** Extra parameters for the sign-in address (from the catalog entry). */
+  readonly authorizationParams?: Readonly<Record<string, string>>;
   readonly now?: () => number;
 }
 
@@ -177,6 +179,9 @@ export async function createDbAuthProvider(options: AuthProviderOptions): Promis
     },
 
     redirectToAuthorization(url) {
+      for (const [name, value] of Object.entries(options.authorizationParams ?? {})) {
+        url.searchParams.set(name, value);
+      }
       authorizationUrl = url;
     },
 

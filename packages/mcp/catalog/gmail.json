@@ -1,0 +1,18 @@
+{
+  "id": "gmail",
+  "name": "Gmail",
+  "description": "Search and read your email, and write drafts for you to review. Google's server can't send email.",
+  "url": "https://gmailmcp.googleapis.com/mcp/v1",
+  "authOrigin": "https://accounts.google.com",
+  "setup": "own_client",
+  "scopes": [
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.compose"
+  ],
+  "authorizationParams": {
+    "access_type": "offline",
+    "prompt": "consent"
+  },
+  "guide": "docs/guides/google-oauth-client.md",
+  "reviewed": "2026-10-06"
+}

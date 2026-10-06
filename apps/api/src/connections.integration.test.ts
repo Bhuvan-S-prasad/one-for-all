@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { loadConfig } from "@ofa/config";
 import {
+  catalogListSchema,
   mcpServerListSchema,
   mcpServerSchema,
   mcpToolListSchema,
@@ -163,6 +164,57 @@ describe.skipIf(!hasDb)("MCP connections API (integration)", async () => {
         "mcp_server.removed",
       ]),
     );
+  });
+
+  it("lists the catalog and installs entries pinned to their sign-in sites", async () => {
+    const catalog = catalogListSchema.parse(
+      await (await send("GET", "/api/mcp-servers/catalog")).json(),
+    );
+    expect(catalog.items.map((i) => i.id)).toContain("notion");
+    expect(catalog.redirectUrl).toBe(`${origin}/api/connections/callback`);
+    expect(catalog.items.find((i) => i.id === "gmail")).toMatchObject({
+      setup: "own_client",
+      guide: "docs/guides/google-oauth-client.md",
+      serverId: null,
+    });
+
+    // Installing contacts nothing: the address and sign-in site come from the catalog.
+    const notion = await send("POST", "/api/mcp-servers/catalog/notion", {});
+    expect(notion.status).toBe(201);
+    expect(mcpServerSchema.parse(await notion.json())).toMatchObject({
+      slug: "notion",
+      catalogId: "notion",
+      url: "https://mcp.notion.com/mcp",
+      authOrigin: "https://mcp.notion.com",
+    });
+    expect((await send("POST", "/api/mcp-servers/catalog/notion", {})).status).toBe(409);
+    expect((await send("POST", "/api/mcp-servers/catalog/nope", {})).status).toBe(404);
+
+    // GitHub can't register us itself: it needs the self-hoster's OAuth app.
+    expect((await send("POST", "/api/mcp-servers/catalog/github", {})).status).toBe(422);
+    const github = await send("POST", "/api/mcp-servers/catalog/github", {
+      client: { clientId: "Iv1.0123456789", clientSecret: "github-secret-0123456789" },
+    });
+    expect(github.status).toBe(201);
+    const githubId = mcpServerSchema.parse(await github.json()).id;
+    const replaced = await send("PUT", `/api/mcp-servers/${githubId}/client`, {
+      clientId: "Iv1.9876543210",
+      clientSecret: "github-secret-9876543210",
+    });
+    expect(replaced.status).toBe(204);
+    const listed = catalogListSchema.parse(
+      await (await send("GET", "/api/mcp-servers/catalog")).json(),
+    );
+    expect(listed.items.find((i) => i.id === "github")?.serverId).toBe(githubId);
+    // The secret is sealed, and the audit log keeps only the public client ID.
+    const audit = await withTenant(db.db, await tenantOf(), (tx) =>
+      tx.select().from(schema.auditLog),
+    );
+    expect(JSON.stringify(audit)).not.toContain("github-secret");
+    const [server] = (
+      await withTenant(db.db, await tenantOf(), (tx) => tx.select().from(schema.mcpServer))
+    ).filter((s) => s.id === githubId);
+    expect(server?.clientCiphertext?.startsWith("v1.")).toBe(true);
   });
 
   /** The signed-in tenant, from the session. */

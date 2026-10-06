@@ -1,6 +1,9 @@
 import {
   addMcpServerSchema,
+  installCatalogSchema,
   oauthCallbackQuerySchema,
+  ownClientSchema,
+  type CatalogList,
   type McpServer,
   type McpServerList,
   type McpToolList,
@@ -16,7 +19,7 @@ import {
   type TenantContext,
 } from "@ofa/core";
 import { recordAudit } from "@ofa/db";
-import type { McpConnections } from "@ofa/mcp";
+import { CATALOG, type McpConnections } from "@ofa/mcp";
 import { Hono, type Context } from "hono";
 import type { Container } from "../container";
 import { requestMeta } from "../lib/request";
@@ -27,6 +30,9 @@ import type { AppEnv } from "../types";
 /**
  * Apps through MCP servers (ARCHITECTURE.md §9, M4.03):
  *   GET    /api/mcp-servers                  installed servers, with your connection to each
+ *   GET    /api/mcp-servers/catalog          the reviewed apps, and the callback to register
+ *   POST   /api/mcp-servers/catalog/:entry   add one (owner or admin), with your own OAuth app if it needs one
+ *   PUT    /api/mcp-servers/:id/client       replace that OAuth app (owner or admin)
  *   POST   /api/mcp-servers                  add a custom server (owner or admin, ADR-0018)
  *   DELETE /api/mcp-servers/:id              remove one, with everyone's connections (owner or admin)
  *   POST   /api/mcp-servers/:id/connect      start signing in: { authorizationUrl } to open
@@ -68,6 +74,49 @@ export function mcpServerRoutes(
       const byServer = new Map(connections.map((x) => [x.mcpServerId, x]));
       const items = servers.map((s) => toMcpServer(s, byServer.get(s.id) ?? null));
       return c.json({ items } satisfies McpServerList);
+    })
+    .get("/catalog", async (c) => {
+      const servers = await deps.connections.listServers(c.get("tenant"));
+      const installed = new Map(servers.map((s) => [s.catalogId, s.id]));
+      const items = CATALOG.map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        description: entry.description,
+        setup: entry.setup,
+        guide: entry.guide ?? null,
+        serverId: installed.get(entry.id) ?? null,
+      }));
+      const redirectUrl = new URL("/api/connections/callback", deps.config.server.appUrl).href;
+      return c.json({ items, redirectUrl } satisfies CatalogList);
+    })
+    .post("/catalog/:entry", async (c) => {
+      const tenant = requireAdmin(c);
+      const { client: own } = await readJson(c, installCatalogSchema);
+      const server = await client().install(tenant, c.req.param("entry"), own);
+      await recordAudit(deps.db, tenant, {
+        action: "mcp_server.added",
+        targetType: "mcp_server",
+        targetId: server.id,
+        data: { slug: server.slug, catalogId: server.catalogId, ownClient: Boolean(own) },
+        ...requestMeta(c),
+      });
+      return c.json(toMcpServer(server, null), 201);
+    })
+    .put("/:id/client", async (c) => {
+      const tenant = requireAdmin(c);
+      const own = await readJson(c, ownClientSchema);
+      const server = await deps.connections.getServer(tenant, c.req.param("id"));
+      if (!server) throw new NotFoundError("Server");
+      await client().setClient(tenant, server.id, own);
+      await recordAudit(deps.db, tenant, {
+        action: "mcp_server.client_set",
+        targetType: "mcp_server",
+        targetId: server.id,
+        // The client ID is public; the secret never goes in the audit log.
+        data: { slug: server.slug, clientId: own.clientId },
+        ...requestMeta(c),
+      });
+      return c.body(null, 204);
     })
     .post("/", async (c) => {
       const tenant = requireAdmin(c);

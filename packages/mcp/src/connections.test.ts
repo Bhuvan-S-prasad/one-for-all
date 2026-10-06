@@ -9,7 +9,13 @@ import {
   type TenantContext,
 } from "@ofa/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createMcpConnections, startFakeMcpServer, type FakeMcpServer } from "./index";
+import {
+  CATALOG,
+  catalogEntry,
+  createMcpConnections,
+  startFakeMcpServer,
+  type FakeMcpServer,
+} from "./index";
 
 const alice: TenantContext = { workspaceId: asId("ws"), userId: asId("alice") };
 const bob: TenantContext = { workspaceId: asId("ws"), userId: asId("bob") };
@@ -46,6 +52,11 @@ function memoryStore(): ConnectionStore & {
     getServer: async (_ctx, id) => servers.get(id) ?? null,
     listServers: async () => [...servers.values()],
     async createServer(_ctx, input) {
+      // Like the unique indexes: one per slug, and one per catalog entry.
+      const taken = [...servers.values()].some(
+        (s) => s.slug === input.slug || (input.catalogId && s.catalogId === input.catalogId),
+      );
+      if (taken) return null;
       const record: McpServerRecord = {
         id: randomUUID(),
         slug: input.slug,
@@ -223,5 +234,85 @@ describe("MCP connections", () => {
     // Bob can't finish Alice's sign-in.
     await expect(mcp.finishSignIn(bob, back)).rejects.toMatchObject({ reason: "sign_in_unknown" });
     await expect(mcp.connect(bob, server.id)).rejects.toMatchObject({ reason: "sign_in_required" });
+  });
+});
+
+describe("the catalog", () => {
+  it("loads every entry pinned to https, one per id", () => {
+    expect(CATALOG.map((e) => e.id)).toEqual([
+      "notion",
+      "linear",
+      "github",
+      "slack",
+      "gmail",
+      "google_calendar",
+      "google_drive",
+    ]);
+    for (const entry of CATALOG) {
+      expect(entry.url.startsWith("https://")).toBe(true);
+      expect(entry.setup === "automatic" || entry.guide).toBeTruthy();
+    }
+    expect(catalogEntry("gmail")?.authorizationParams).toEqual({
+      access_type: "offline",
+      prompt: "consent",
+    });
+  });
+
+  it("installs an entry pinned to its sign-in site, and asks only for its scopes", async () => {
+    const fake = await startFakeMcpServer();
+    try {
+      const store = memoryStore();
+      const entry = {
+        ...CATALOG[0]!,
+        id: "notes",
+        url: fake.mcpUrl,
+        authOrigin: fake.url,
+        scopes: ["read"],
+        authorizationParams: { access_type: "offline" },
+      };
+      const mcp = createMcpConnections({ store, cipher, redirectUrl: REDIRECT, catalog: [entry] });
+      const server = await mcp.install(alice, "notes");
+      expect(server).toMatchObject({ slug: "notes", catalogId: "notes", authOrigin: fake.url });
+      await expect(mcp.install(alice, "notes")).rejects.toMatchObject({ code: "conflict" });
+      const start = await mcp.startSignIn(alice, server.id);
+      if (start.status !== "redirect") throw new Error("expected a sign-in address");
+      const url = new URL(start.authorizationUrl);
+      expect(url.searchParams.get("scope")).toBe("read");
+      expect(url.searchParams.get("access_type")).toBe("offline");
+    } finally {
+      await fake.close();
+    }
+  });
+
+  it("uses the self-hoster's own OAuth app where the server can't register one", async () => {
+    const fake = await startFakeMcpServer();
+    try {
+      const store = memoryStore();
+      const entry = {
+        ...CATALOG[0]!,
+        id: "mail",
+        url: fake.mcpUrl,
+        authOrigin: fake.url,
+        setup: "own_client" as const,
+        guide: "docs/guides/x.md",
+      };
+      const mcp = createMcpConnections({ store, cipher, redirectUrl: REDIRECT, catalog: [entry] });
+      await expect(mcp.install(alice, "mail")).rejects.toMatchObject({
+        code: "validation_failed",
+      });
+      const server = await mcp.install(alice, "mail", {
+        clientId: "own-client-id",
+        clientSecret: "own-client-secret-123",
+      });
+      const sealed = plain(server.client);
+      expect(sealed).toContain("own-client-secret-123");
+      expect(sealed).toContain('\\"dynamic\\":false');
+      const start = await mcp.startSignIn(alice, server.id);
+      if (start.status !== "redirect") throw new Error("expected a sign-in address");
+      expect(new URL(start.authorizationUrl).searchParams.get("client_id")).toBe("own-client-id");
+      expect(fake.counts.registered).toBe(0);
+    } finally {
+      await fake.close();
+    }
   });
 });

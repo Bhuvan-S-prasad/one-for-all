@@ -83,3 +83,33 @@ export const oauthCallbackQuerySchema = z.object({
   error: z.string().max(200).optional(),
   error_description: z.string().max(1_000).optional(),
 });
+
+/** A reviewed app in the catalog (ADR-0018). */
+export const catalogItemSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  /** `own_client`: an admin first creates an OAuth app with the provider (see `guide`). */
+  setup: z.enum(["automatic", "own_client"]),
+  guide: z.string().nullable(),
+  /** The installed server, if this workspace has added it. */
+  serverId: idSchema.nullable(),
+});
+export type CatalogItem = z.infer<typeof catalogItemSchema>;
+
+export const catalogListSchema = z.object({
+  items: z.array(catalogItemSchema),
+  /** The address to register with providers that need your own OAuth app. */
+  redirectUrl: z.url(),
+});
+export type CatalogList = z.infer<typeof catalogListSchema>;
+
+/** The OAuth app a self-hoster created, for `own_client` entries. */
+export const ownClientSchema = z.object({
+  clientId: z.string().trim().min(1).max(500),
+  clientSecret: z.string().trim().min(8).max(500).optional(),
+});
+export type OwnClientInput = z.infer<typeof ownClientSchema>;
+
+export const installCatalogSchema = z.object({ client: ownClientSchema.optional() });
+export type InstallCatalogInput = z.infer<typeof installCatalogSchema>;

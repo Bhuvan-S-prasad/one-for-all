@@ -1,5 +1,6 @@
 import { auth, createMCPClient, UnauthorizedError, type MCPClient } from "@ai-sdk/mcp";
 import {
+  AppError,
   McpError,
   NotFoundError,
   type ConnectionStore,
@@ -8,6 +9,7 @@ import {
   type RecordCipher,
   type TenantContext,
 } from "@ofa/core";
+import { CATALOG, type CatalogEntry } from "./catalog";
 import { createDbAuthProvider, type DbAuthProvider } from "./provider";
 
 // One generic client for every app with a remote MCP server (ADR-0011): sign
@@ -21,7 +23,15 @@ export interface McpConnectionsOptions {
   readonly redirectUrl: string;
   /** How we introduce ourselves when registering with a server. */
   readonly clientName?: string;
+  /** The reviewed catalog; the built-in one unless a test passes its own. */
+  readonly catalog?: readonly CatalogEntry[];
   readonly now?: () => number;
+}
+
+/** An OAuth app the self-hoster created, for catalog entries with `own_client` setup. */
+export interface OwnClient {
+  readonly clientId: string;
+  readonly clientSecret?: string;
 }
 
 /** A tool as the server describes it. */
@@ -57,6 +67,10 @@ export type SignInStart =
   | { readonly status: "connected" };
 
 export interface McpConnections {
+  /** Install a catalog entry in the workspace, with the self-hoster's OAuth app if it needs one. */
+  install(ctx: TenantContext, entryId: string, client?: OwnClient): Promise<McpServerRecord>;
+  /** Replace the OAuth app a server signs in with. */
+  setClient(ctx: TenantContext, serverId: string, client: OwnClient): Promise<void>;
   /** Begin signing the person in; they open the returned address. */
   startSignIn(ctx: TenantContext, serverId: string): Promise<SignInStart>;
   /** The provider sent the person back: exchange the code for tokens. */
@@ -95,6 +109,25 @@ function unavailable(server: McpServerRecord, error: unknown): McpError {
 export function createMcpConnections(options: McpConnectionsOptions): McpConnections {
   const { store, cipher } = options;
   const clientName = options.clientName ?? "One-for-All";
+  const catalog = options.catalog ?? CATALOG;
+  const entryOf = (server: McpServerRecord) =>
+    server.catalogId ? catalog.find((e) => e.id === server.catalogId) : undefined;
+
+  /** Seal a pre-registered client: it was not registered by us, so it is never replaced automatically. */
+  async function saveOwnClient(ctx: TenantContext, serverId: string, client: OwnClient) {
+    const value = {
+      client: {
+        client_id: client.clientId,
+        ...(client.clientSecret ? { client_secret: client.clientSecret } : {}),
+      },
+      dynamic: false,
+    };
+    await store.saveServerClient(
+      ctx,
+      serverId,
+      cipher.seal(ctx, { table: "mcp_server", id: serverId }, JSON.stringify(value)),
+    );
+  }
 
   async function serverOf(ctx: TenantContext, id: string): Promise<McpServerRecord> {
     const server = await store.getServer(ctx, id);
@@ -110,6 +143,9 @@ export function createMcpConnections(options: McpConnectionsOptions): McpConnect
       cipher,
       redirectUrl: options.redirectUrl,
       clientName,
+      ...(entryOf(server)?.authorizationParams
+        ? { authorizationParams: entryOf(server)!.authorizationParams! }
+        : {}),
       ...(options.now ? { now: options.now } : {}),
     });
 
@@ -130,12 +166,49 @@ export function createMcpConnections(options: McpConnectionsOptions): McpConnect
   }
 
   return {
+    async install(ctx, entryId, client) {
+      const entry = catalog.find((e) => e.id === entryId);
+      if (!entry) throw new NotFoundError("Catalog entry");
+      if (entry.setup === "own_client" && !client?.clientId) {
+        throw new AppError(
+          "validation_failed",
+          `${entry.name} needs your own OAuth app: enter its client ID (and secret).`,
+        );
+      }
+      const server = await store.createServer(ctx, {
+        slug: entry.id,
+        name: entry.name,
+        url: entry.url,
+        catalogId: entry.id,
+        authOrigin: entry.authOrigin,
+      });
+      if (!server) throw new AppError("conflict", `${entry.name} is already added.`);
+      if (client?.clientId) await saveOwnClient(ctx, server.id, client);
+      return (await store.getServer(ctx, server.id)) ?? server;
+    },
+
+    async setClient(ctx, serverId, client) {
+      const server = await serverOf(ctx, serverId);
+      await saveOwnClient(ctx, server.id, client);
+    },
+
     async startSignIn(ctx, serverId) {
       const server = await serverOf(ctx, serverId);
       if (server.auth === "none") return { status: "connected" };
+      const entry = entryOf(server);
+      if (entry?.setup === "own_client" && !server.client) {
+        throw new McpError(
+          "sign_in_required",
+          `An admin needs to enter ${entry.name}'s OAuth app first.`,
+        );
+      }
       const provider = await providerFor(ctx, server);
       try {
-        const result = await auth(provider, { serverUrl: server.url });
+        const result = await auth(provider, {
+          serverUrl: server.url,
+          // Only what the entry asks for, not every scope the server offers.
+          ...(entry?.scopes ? { scope: entry.scopes.join(" ") } : {}),
+        });
         if (result === "AUTHORIZED") return { status: "connected" };
       } catch (error) {
         rethrow(server, error);

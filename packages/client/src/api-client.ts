@@ -5,6 +5,11 @@ import {
   approvalListSchema,
   approvalSchema,
   artifactListSchema,
+  catalogListSchema,
+  mcpServerListSchema,
+  mcpServerSchema,
+  mcpToolListSchema,
+  signInStartSchema,
   errorResponseSchema,
   healthResponseSchema,
   llmSettingsSchema,
@@ -29,6 +34,12 @@ import {
   type Approval,
   type ApprovalList,
   type ArtifactList,
+  type CatalogList,
+  type McpServer,
+  type McpServerList,
+  type McpToolList,
+  type OwnClientInput,
+  type SignInStartResponse,
   type CreateAgentInput,
   type FirstRunSetupRequest,
   type HealthResponse,
@@ -300,6 +311,31 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request("PUT", "/api/logins", savedLoginSchema, input),
     deleteLogin: (site: string): Promise<void> =>
       request("DELETE", `/api/logins/${encodeURIComponent(site)}`, null),
+
+    // ── Connections: apps through MCP servers (M4.03, M4.04) ───────────────
+    listMcpServers: (): Promise<McpServerList> =>
+      request("GET", "/api/mcp-servers", mcpServerListSchema),
+    mcpCatalog: (): Promise<CatalogList> =>
+      request("GET", "/api/mcp-servers/catalog", catalogListSchema),
+    /** Add a catalog app; `client` is your own OAuth app, for apps that need one. */
+    installCatalogEntry: (entry: string, client?: OwnClientInput): Promise<McpServer> =>
+      request(
+        "POST",
+        `/api/mcp-servers/catalog/${encodeURIComponent(entry)}`,
+        mcpServerSchema,
+        client ? { client } : {},
+      ),
+    setMcpClient: (id: string, client: OwnClientInput): Promise<void> =>
+      request("PUT", `/api/mcp-servers/${encodeURIComponent(id)}/client`, null, client),
+    /** Start signing in: open `authorizationUrl` in this tab. */
+    connectMcpServer: (id: string): Promise<SignInStartResponse> =>
+      request("POST", `/api/mcp-servers/${encodeURIComponent(id)}/connect`, signInStartSchema),
+    disconnectMcpServer: (id: string): Promise<void> =>
+      request("DELETE", `/api/mcp-servers/${encodeURIComponent(id)}/connection`, null),
+    removeMcpServer: (id: string): Promise<void> =>
+      request("DELETE", `/api/mcp-servers/${encodeURIComponent(id)}`, null),
+    listMcpTools: (id: string): Promise<McpToolList> =>
+      request("GET", `/api/mcp-servers/${encodeURIComponent(id)}/tools`, mcpToolListSchema),
 
     // ── Memory (UX.14) ─────────────────────────────────────────────────────
     listMemories: (filter: MemoryFilter = {}): Promise<MemoryList> =>
