@@ -9,6 +9,7 @@ for (const name of [
   "oneforall_test_api",
   "oneforall_test_api_agents",
   "oneforall_test_api_redaction",
+  "oneforall_test_api_mcp",
 ]) {
   await prepareTestDatabase({
     name,

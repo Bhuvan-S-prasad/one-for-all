@@ -89,6 +89,7 @@ const SECRET_FIELDS = new Set([
   "client_secret",
   "registration_access_token",
   "code_verifier",
+  "codeVerifier",
 ]);
 
 /** Bind each ciphertext to its workspace and name, so it cannot be moved to another row. */

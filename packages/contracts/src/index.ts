@@ -4,6 +4,7 @@ export * from "./artifacts";
 export * from "./auth";
 export * from "./blocks";
 export * from "./common";
+export * from "./connections";
 export * from "./events";
 export * from "./familiar";
 export * from "./health";

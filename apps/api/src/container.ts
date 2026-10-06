@@ -8,6 +8,7 @@ import type {
   AgentDirectory,
   ApprovalStore,
   ArtifactStore,
+  ConnectionStore,
   CredentialVault,
   EventBus,
   LLMGateway,
@@ -20,6 +21,7 @@ import type {
 import {
   createAgentDirectory,
   createApprovalStore,
+  createConnectionStore,
   createPolicyRuleStore,
   createArtifactStore,
   createDatabase,
@@ -39,6 +41,7 @@ import {
   type TierMap,
   type TierOverrides,
 } from "@ofa/llm";
+import { createMcpConnections, type McpConnections } from "@ofa/mcp";
 import { createPgMemoryStore } from "@ofa/memory";
 import {
   createFunctions,
@@ -117,6 +120,10 @@ export interface Container {
   readonly sandbox: SandboxProvider | null;
   readonly artifacts: ArtifactStore;
   readonly approvals: ApprovalStore;
+  /** MCP servers and people’s connections to them. */
+  readonly connections: ConnectionStore;
+  /** The MCP client; null without a vault key, which keeps sign-ins encrypted. */
+  readonly mcp: McpConnections | null;
   readonly dispatcher: RunDispatcher;
   readonly inngest: Inngest;
   readonly functions: ReturnType<typeof createFunctions>;
@@ -258,6 +265,15 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
   const sandbox = config.sandbox ? createDockerSandbox(config.sandbox) : null;
   const artifacts = createArtifactStore(db);
   const approvals = createApprovalStore(db);
+  const connections = createConnectionStore(db);
+  // Apps through MCP (ADR-0011): sign-ins are sealed by the vault, so no vault, no connections.
+  const mcp = fullVault
+    ? createMcpConnections({
+        store: connections,
+        cipher: fullVault,
+        redirectUrl: new URL("/api/connections/callback", config.server.appUrl).href,
+      })
+    : null;
 
   const tools = createToolExecutor({
     registry: createToolRegistry(
@@ -325,6 +341,8 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     sandbox,
     artifacts,
     approvals,
+    connections,
+    mcp,
     dispatcher: overrides.dispatcher ?? createRunDispatcher(inngest),
     inngest,
     functions,

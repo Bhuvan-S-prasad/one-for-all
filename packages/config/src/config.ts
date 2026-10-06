@@ -9,6 +9,8 @@ export interface Config {
     readonly host: string;
     readonly port: number;
     readonly appUrl: string;
+    /** Where people use the web app: the Vite dev server in development, else the app itself. */
+    readonly webUrl: string;
     /** Origins allowed to call the API (ADR-0017). */
     readonly allowedOrigins: readonly string[];
     /** Host header values accepted; anything else is rejected (DNS-rebinding defence). */
@@ -114,6 +116,7 @@ export function loadConfig(source: Record<string, string | undefined> = process.
       host: env.HOST,
       port: env.PORT,
       appUrl: env.APP_URL,
+      webUrl: new URL(env.WEB_DEV_URL ?? env.APP_URL).origin,
       allowedOrigins,
       allowedHosts,
       webDistDir: env.WEB_DIST_DIR,
