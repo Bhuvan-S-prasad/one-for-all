@@ -29,6 +29,20 @@ export const catalogEntrySchema = z.object({
   scopes: z.array(z.string().min(1)).optional(),
   /** Extra sign-in parameters (Google issues refresh tokens only with `access_type=offline`). */
   authorizationParams: z.record(z.string(), z.string()).optional(),
+  /**
+   * The app's own API, for tools we write beside its server's (ADR-0029):
+   * the only origins its sign-in may be sent to directly.
+   */
+  apiOrigins: z
+    .array(
+      z
+        .url()
+        .refine(
+          (u) => u.startsWith("https://") && new URL(u).origin === u,
+          "an https origin, without a path",
+        ),
+    )
+    .optional(),
   /** How to set it up, for `own_client` entries. */
   guide: z.string().optional(),
   /** When the entry was last checked against the server's published metadata. */

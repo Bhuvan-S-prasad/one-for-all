@@ -1,4 +1,11 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import type {
+  ConnectionRecord,
+  ConnectionStore,
+  McpServerRecord,
+  RecordCipher,
+  TenantContext,
+} from "@ofa/core";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -28,6 +35,10 @@ export interface FakeMcpServer {
   revokeRefreshTokens(): void;
   /** Advertise a different authorization server (a server that moved its sign-in). */
   advertiseAuthorizationServer(url: string): void;
+  /** A Gmail draft for the fake Gmail API at `/gmail/v1` (M4.05). */
+  addDraft(id: string, draft: { to: string; subject: string; body: string }): void;
+  /** Drafts sent through the fake Gmail API, in order. */
+  readonly sentDrafts: string[];
   close(): Promise<void>;
 }
 
@@ -77,6 +88,12 @@ export async function startFakeMcpServer(
   let refuseRefresh = false;
   let base = "";
   let advertised = "";
+  const drafts = new Map<string, { to: string; subject: string; body: string }>();
+  const sentDrafts: string[] = [];
+  const signedIn = (req: IncomingMessage) => {
+    const bearer = /^Bearer (.+)$/.exec(req.headers.authorization ?? "")?.[1];
+    return bearer !== undefined && accessTokens.has(bearer);
+  };
 
   function issue(res: ServerResponse): void {
     const access = token();
@@ -206,6 +223,31 @@ export async function startFakeMcpServer(
         }
         return json(res, 400, { error: "unsupported_grant_type" });
       }
+      if (path.startsWith("/gmail/v1/users/me/drafts")) {
+        // Just enough of the Gmail API for gmail.send_draft.
+        if (!signedIn(req)) return json(res, 401, { error: { code: 401 } });
+        if (path === "/gmail/v1/users/me/drafts/send" && req.method === "POST") {
+          const { id } = JSON.parse(await body(req)) as { id: string };
+          if (!drafts.delete(id)) return json(res, 404, { error: { code: 404 } });
+          sentDrafts.push(id);
+          return json(res, 200, { id: `msg_${id}`, threadId: `thread_${id}` });
+        }
+        const id = decodeURIComponent(path.split("/").pop() ?? "");
+        const draft = drafts.get(id);
+        if (!draft) return json(res, 404, { error: { code: 404 } });
+        return json(res, 200, {
+          id,
+          message: {
+            snippet: draft.body.slice(0, 100),
+            payload: {
+              headers: [
+                { name: "To", value: draft.to },
+                { name: "Subject", value: draft.subject },
+              ],
+            },
+          },
+        });
+      }
       if (path === "/mcp") {
         if (req.method !== "POST") {
           res.writeHead(405);
@@ -247,10 +289,114 @@ export async function startFakeMcpServer(
     expireAccessTokens: () => accessTokens.clear(),
     revokeRefreshTokens: () => void (refuseRefresh = true),
     advertiseAuthorizationServer: (url) => void (advertised = url),
+    addDraft: (id, draft) => void drafts.set(id, draft),
+    sentDrafts,
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections();
         server.close(() => resolve());
       }),
+  };
+}
+
+// In-memory stand-ins for unit tests: no database, no vault.
+
+/** Seals visibly, and refuses to open a value under another row's scope (like the vault). */
+export const testCipher: RecordCipher = {
+  seal: (_ctx, scope, value) => ({
+    valueCiphertext: Buffer.from(JSON.stringify({ scope, value })).toString("base64"),
+    keyCiphertext: "k",
+    keyId: "test",
+  }),
+  open: (_ctx, scope, sealed) => {
+    const { scope: bound, value } = JSON.parse(
+      Buffer.from(sealed.valueCiphertext, "base64").toString("utf8"),
+    ) as { scope: typeof scope; value: string };
+    if (bound.table !== scope.table || bound.id !== scope.id) throw new Error("wrong row");
+    return value;
+  },
+};
+export const plainOf = (sealed: { valueCiphertext: string } | null) =>
+  sealed ? Buffer.from(sealed.valueCiphertext, "base64").toString("utf8") : "";
+
+export function createMemoryConnectionStore(): ConnectionStore & {
+  servers: Map<string, McpServerRecord>;
+  connections: Map<string, ConnectionRecord>;
+} {
+  const servers = new Map<string, McpServerRecord>();
+  const connections = new Map<string, ConnectionRecord>();
+  const key = (ctx: TenantContext, serverId: string) => `${serverId}:${ctx.userId}`;
+  return {
+    servers,
+    connections,
+    getServer: async (_ctx, id) => servers.get(id) ?? null,
+    listServers: async () => [...servers.values()],
+    async createServer(_ctx, input) {
+      // Like the unique indexes: one per slug, and one per catalog entry.
+      const taken = [...servers.values()].some(
+        (s) => s.slug === input.slug || (input.catalogId && s.catalogId === input.catalogId),
+      );
+      if (taken) return null;
+      const record: McpServerRecord = {
+        id: randomUUID(),
+        slug: input.slug,
+        name: input.name,
+        url: input.url,
+        catalogId: input.catalogId ?? null,
+        auth: input.auth ?? "oauth",
+        authOrigin: input.authOrigin ?? null,
+        client: null,
+        enabled: true,
+        tools: null,
+        toolsFetchedAt: null,
+        createdAt: new Date(),
+      };
+      servers.set(record.id, record);
+      return record;
+    },
+    deleteServer: async (_ctx, id) => servers.delete(id),
+    async saveServerTools(_ctx, id, tools) {
+      servers.set(id, { ...servers.get(id)!, tools, toolsFetchedAt: new Date() });
+    },
+    async saveServerClient(_ctx, id, client) {
+      servers.set(id, { ...servers.get(id)!, client });
+    },
+    async pinAuthOrigin(_ctx, id, origin) {
+      const server = servers.get(id)!;
+      if (!server.authOrigin) servers.set(id, { ...server, authOrigin: origin });
+      return servers.get(id)!.authOrigin!;
+    },
+    getConnection: async (ctx, serverId) => connections.get(key(ctx, serverId)) ?? null,
+    findConnectionByState: async (ctx, state) =>
+      [...connections.values()].find((c) => c.oauthState === state && c.userId === ctx.userId) ??
+      null,
+    listConnections: async (ctx) =>
+      [...connections.values()].filter((c) => c.userId === ctx.userId),
+    async saveConnection(ctx, serverId, patch) {
+      const existing = connections.get(key(ctx, serverId));
+      const defined = Object.fromEntries(
+        Object.entries(patch).filter(([, v]) => v !== undefined),
+      ) as Partial<ConnectionRecord>;
+      const next: ConnectionRecord = {
+        id: existing?.id ?? randomUUID(),
+        mcpServerId: serverId,
+        userId: ctx.userId,
+        status: "pending",
+        account: null,
+        scopes: [],
+        credentials: null,
+        oauthState: null,
+        expiresAt: null,
+        refreshedAt: null,
+        lastUsedAt: null,
+        lastError: null,
+        ...existing,
+        ...defined,
+        updatedAt: new Date(),
+      };
+      connections.set(key(ctx, serverId), next);
+      return next;
+    },
+    deleteConnection: async (ctx, serverId) => connections.delete(key(ctx, serverId)),
   };
 }

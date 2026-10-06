@@ -25,6 +25,9 @@ export const mcpServerSchema = z.object({
   /** Where sign-in happens, once known. */
   authOrigin: z.string().nullable(),
   enabled: z.boolean(),
+  /** Tools from the server's last tool list; null before anyone signed in. */
+  toolCount: z.number().int().nullable(),
+  toolsFetchedAt: timestampSchema.nullable(),
   /** The signed-in person's connection; null when they never started one. */
   connection: connectionSchema.nullable(),
   createdAt: timestampSchema,
@@ -73,6 +76,9 @@ export const mcpToolSchema = z.object({
   }),
 });
 export const mcpToolListSchema = z.object({ items: z.array(mcpToolSchema) });
+
+export const toolRefreshSchema = z.object({ count: z.number().int() });
+export type ToolRefreshResponse = z.infer<typeof toolRefreshSchema>;
 export type McpToolList = z.infer<typeof mcpToolListSchema>;
 
 /** What the provider sends back to the OAuth callback. */

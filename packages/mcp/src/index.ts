@@ -5,9 +5,17 @@ export {
   type McpConnections,
   type McpConnectionsOptions,
   type McpSession,
-  type McpToolInfo,
   type OwnClient,
   type SignInStart,
 } from "./connections";
 export { createDbAuthProvider, type AuthProviderOptions, type DbAuthProvider } from "./provider";
-export { startFakeMcpServer, type FakeMcpServer, type FakeTool } from "./testing";
+export {
+  createMemoryConnectionStore,
+  plainOf,
+  startFakeMcpServer,
+  testCipher,
+  type FakeMcpServer,
+  type FakeTool,
+} from "./testing";
+export type { McpToolInfo } from "@ofa/core";
+export { annotationsFor, createMcpToolkits, toolNameFor, type McpToolkits } from "./toolkits";

@@ -41,7 +41,12 @@ import {
   type TierMap,
   type TierOverrides,
 } from "@ofa/llm";
-import { createMcpConnections, type McpConnections } from "@ofa/mcp";
+import {
+  createMcpConnections,
+  createMcpToolkits,
+  type McpConnections,
+  type McpToolkits,
+} from "@ofa/mcp";
 import { createPgMemoryStore } from "@ofa/memory";
 import {
   createFunctions,
@@ -124,6 +129,8 @@ export interface Container {
   readonly connections: ConnectionStore;
   /** The MCP client; null without a vault key, which keeps sign-ins encrypted. */
   readonly mcp: McpConnections | null;
+  /** Connected apps as toolkits for agents (M4.05); null without the MCP client. */
+  readonly toolkits: McpToolkits | null;
   readonly dispatcher: RunDispatcher;
   readonly inngest: Inngest;
   readonly functions: ReturnType<typeof createFunctions>;
@@ -274,6 +281,18 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
         redirectUrl: new URL("/api/connections/callback", config.server.appUrl).href,
       })
     : null;
+  const toolkits = mcp
+    ? createMcpToolkits({
+        connections,
+        mcp,
+        onSkippedTool: (server, tool, reason) =>
+          logger.warn("mcp: left out a tool whose input can’t be checked", {
+            server,
+            tool,
+            reason,
+          }),
+      })
+    : null;
 
   const tools = createToolExecutor({
     registry: createToolRegistry(
@@ -288,6 +307,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     policy: createPolicyEngine({ agents, rules: createPolicyRuleStore(db) }),
     calls: createToolCallStore(db),
     agents,
+    ...(toolkits ? { toolkits } : {}),
     redact: (ctx, text) => vault.redact(ctx, text),
     artifacts,
     // Saved logins, decrypted only here, when use_saved_login asks (ADR-0012).
@@ -343,6 +363,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     approvals,
     connections,
     mcp,
+    toolkits,
     dispatcher: overrides.dispatcher ?? createRunDispatcher(inngest),
     inngest,
     functions,

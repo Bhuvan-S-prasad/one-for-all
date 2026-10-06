@@ -27,9 +27,10 @@ import {
 
 /**
  * Tools of the platform itself, available to every agent without a grant:
- * reopening its own saved output (M3.06). A grant can still block one.
+ * reopening its own saved output (M3.06), loading an app's tools it was
+ * granted (M4.05). A grant can still block one.
  */
-export const PLATFORM_TOOLS: ReadonlySet<string> = new Set(["artifacts.read"]);
+export const PLATFORM_TOOLS: ReadonlySet<string> = new Set(["artifacts.read", "load_toolkit"]);
 
 /** The grant that covers a tool: an exact name beats an app wildcard (`hubspot.*`). */
 export function grantFor(
@@ -172,11 +173,20 @@ export function createPolicyEngine(options: PolicyEngineOptions): PolicyEngine {
 
       // 7. The grant's mode; an allow-auto rule replaces it only when nothing
       //    above fired.
-      const mode: Verdict = grant.mode;
+      //    An app granted whole (`notion.*`) takes each MCP tool's default
+      //    from its annotations (§9.1): reading runs, anything else asks.
+      //    Naming the tool in a grant is the person's own choice and wins.
+      const byWildcard = grant.tool !== tool.name && tool.source === "mcp";
+      const mode: Verdict =
+        byWildcard && grant.mode === "auto" && !tool.annotations.readOnly ? "approve" : grant.mode;
+      const modeReason =
+        mode === grant.mode
+          ? `granted as ${mode}`
+          : `granted as part of ${grant.tool}; tools that change things ask first`;
       const base = (fired: readonly Hold[]): { verdict: Verdict; reason: string } =>
         fired.length === 0 && allowAuto
           ? { verdict: "auto", reason: ruleReason(allowAuto, "runs without asking") }
-          : { verdict: mode, reason: `granted as ${mode}` };
+          : { verdict: mode, reason: modeReason };
 
       const start = base(holds);
       const verdict = holds.reduce<Verdict>((v, h) => strictest(v, h.verdict), start.verdict);

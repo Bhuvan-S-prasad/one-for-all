@@ -44,7 +44,24 @@ export interface McpServerRecord {
   /** The OAuth client registration, sealed. */
   readonly client: SealedValue | null;
   readonly enabled: boolean;
+  /** The server's tools as `tools/list` last returned them (M4.05). */
+  readonly tools: readonly McpToolInfo[] | null;
+  readonly toolsFetchedAt: Date | null;
   readonly createdAt: Date;
+}
+
+/** A tool as an MCP server describes it. */
+export interface McpToolInfo {
+  readonly name: string;
+  readonly title?: string;
+  readonly description: string;
+  readonly inputSchema: Record<string, unknown>;
+  readonly annotations: {
+    readonly readOnlyHint?: boolean;
+    readonly destructiveHint?: boolean;
+    readonly idempotentHint?: boolean;
+    readonly openWorldHint?: boolean;
+  };
 }
 
 export const CONNECTION_STATUSES = ["pending", "active", "needs_reauth"] as const;
@@ -102,6 +119,8 @@ export interface ConnectionStore {
   createServer(ctx: TenantContext, input: McpServerInput): Promise<McpServerRecord | null>;
   deleteServer(ctx: TenantContext, id: string): Promise<boolean>;
   saveServerClient(ctx: TenantContext, id: string, client: SealedValue | null): Promise<void>;
+  /** Keep the server's tool list, as one person's sign-in saw it. */
+  saveServerTools(ctx: TenantContext, id: string, tools: readonly McpToolInfo[]): Promise<void>;
   /** Pin where sign-in happens, if nothing is pinned yet; returns the pinned origin. */
   pinAuthOrigin(ctx: TenantContext, id: string, origin: string): Promise<string>;
 

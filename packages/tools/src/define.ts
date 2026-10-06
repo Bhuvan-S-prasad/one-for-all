@@ -29,12 +29,42 @@ export interface ToolRunContext extends RunContext {
   readonly logins?: {
     get(site: string): Promise<{ readonly username: string; readonly password: string } | null>;
   };
+  /** The apps whose tools this agent may load (M4.05), for `load_toolkit`. */
+  readonly toolkits?: {
+    list(): Promise<readonly ToolkitSummary[]>;
+  };
   /** This run's artifacts (M3.06); absent when the server keeps none. Reads see only this agent's. */
   readonly artifacts?: {
     put(input: ArtifactInput): Promise<ArtifactRecord>;
     get(id: string): Promise<ArtifactRecord | null>;
     read(id: string): Promise<Uint8Array | null>;
   };
+}
+
+/**
+ * One connected app's tools (M4.05): an MCP server's tools, plus any we wrote
+ * for it (ADR-0029). `app` is the slug that starts every tool name.
+ */
+export interface Toolkit {
+  readonly app: string;
+  readonly name: string;
+  readonly description: string;
+  readonly tools: readonly ToolDefinition<unknown>[];
+}
+
+/** What an agent can see of a toolkit before loading it. */
+export interface ToolkitSummary {
+  readonly app: string;
+  readonly name: string;
+  readonly description: string;
+  /** Tools this agent may use, by name. */
+  readonly tools: readonly { readonly name: string; readonly description: string }[];
+  readonly loaded: boolean;
+}
+
+/** The toolkits a workspace has (its connected apps). */
+export interface ToolkitSource {
+  toolkits(ctx: RunContext): Promise<readonly Toolkit[]>;
 }
 
 export interface ToolRunResult {
@@ -146,6 +176,8 @@ export interface ToolRegistry {
   descriptors(): readonly ToolDescriptor[];
   /** Check arguments against the tool's schema; the message is written for the model. */
   validate(name: string, args: unknown): Validation;
+  /** This registry plus more tools (a workspace's toolkits); later duplicates are dropped. */
+  extend(tools: readonly ToolDefinition<unknown>[]): ToolRegistry;
 }
 
 export function createToolRegistry(tools: readonly ToolDefinition<never>[]): ToolRegistry {
@@ -156,6 +188,11 @@ export function createToolRegistry(tools: readonly ToolDefinition<never>[]): Too
   }
   const descriptors = tools.map(toDescriptor);
   return {
+    extend(more) {
+      const extra = more.filter((tool) => !byName.has(tool.name));
+      const unique = [...new Map(extra.map((tool) => [tool.name, tool])).values()];
+      return createToolRegistry([...tools, ...(unique as unknown as ToolDefinition<never>[])]);
+    },
     get: (name) => byName.get(name),
     descriptors: () => descriptors,
     validate(name, args) {

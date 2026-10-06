@@ -15,7 +15,10 @@
   "dependencies": {
     "@ai-sdk/mcp": "2.0.63",
     "@ofa/core": "workspace:*",
+    "@ofa/tools": "workspace:*",
     "zod": "4.6.5"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@ofa/policy": "workspace:*"
+  }
 }

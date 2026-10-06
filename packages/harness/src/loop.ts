@@ -277,13 +277,17 @@ export async function runAgent(
     const seen = new Map<string, number>();
     let finalText: string | null = null;
     let stopReason: RunStopReason = "step_budget";
+    // Apps behind load_toolkit join the tool list once loaded (M4.05); both
+    // rebuild on replay from the memoized tool steps.
+    let tools = context.tools;
+    const loadedToolkits = new Set<string>();
 
     for (let i = 0; i < agent.budgets.steps; i += 1) {
       let assembled = assembleContext(
         {
           today: start.today,
           agent,
-          tools: context.tools,
+          tools,
           memories: context.memories,
           todos,
           history: context.history,
@@ -301,7 +305,7 @@ export async function runAgent(
               {
                 today: start.today,
                 agent,
-                tools: context.tools,
+                tools,
                 memories: context.memories,
                 todos,
                 history: context.history,
@@ -339,7 +343,7 @@ export async function runAgent(
             {
               today: start.today,
               agent,
-              tools: context.tools,
+              tools,
               memories: context.memories,
               todos,
               history: context.history,
@@ -452,6 +456,17 @@ export async function runAgent(
         if (result.ok && call.name === "todo.write") {
           const items = (call.args as { items?: { text: string; done: boolean }[] }).items;
           if (Array.isArray(items)) todos = items;
+        }
+        if (result.ok && call.name === "load_toolkit") {
+          const app = String((call.args as { app?: unknown }).app ?? "")
+            .trim()
+            .toLowerCase();
+          if (app && !loadedToolkits.has(app)) {
+            loadedToolkits.add(app);
+            tools = await steps.run(`${toolCallId}-toolkit`, () =>
+              deps.tools.listTools(ctx, { toolkits: [...loadedToolkits] }),
+            );
+          }
         }
         turns.push({
           kind: "tool",

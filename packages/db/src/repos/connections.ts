@@ -5,6 +5,7 @@ import type {
   ConnectionStore,
   McpAuthKind,
   McpServerRecord,
+  McpToolInfo,
   SealedValue,
   TenantContext,
 } from "@ofa/core";
@@ -42,6 +43,8 @@ function toServer(row: ServerRow): McpServerRecord {
     authOrigin: row.authOrigin,
     client: sealed(row.clientCiphertext, row.clientKeyCiphertext, row.clientKeyId),
     enabled: row.enabled,
+    tools: (row.tools as McpToolInfo[] | null) ?? null,
+    toolsFetchedAt: row.toolsFetchedAt,
     createdAt: row.createdAt,
   };
 }
@@ -151,6 +154,15 @@ export function createConnectionStore(db: Database): ConnectionStore {
             clientKeyCiphertext: client?.keyCiphertext ?? null,
             clientKeyId: client?.keyId ?? null,
           })
+          .where(eq(mcpServer.id, id)),
+      );
+    },
+
+    async saveServerTools(ctx, id, tools) {
+      await withTenant(db, ctx, (tx) =>
+        tx
+          .update(mcpServer)
+          .set({ tools: [...tools], toolsFetchedAt: new Date() })
           .where(eq(mcpServer.id, id)),
       );
     },

@@ -6,6 +6,7 @@ import {
   type ConnectionStore,
   type JsonSchema,
   type McpServerRecord,
+  type McpToolInfo,
   type RecordCipher,
   type TenantContext,
 } from "@ofa/core";
@@ -32,20 +33,6 @@ export interface McpConnectionsOptions {
 export interface OwnClient {
   readonly clientId: string;
   readonly clientSecret?: string;
-}
-
-/** A tool as the server describes it. */
-export interface McpToolInfo {
-  readonly name: string;
-  readonly title?: string;
-  readonly description: string;
-  readonly inputSchema: JsonSchema;
-  readonly annotations: {
-    readonly readOnlyHint?: boolean;
-    readonly destructiveHint?: boolean;
-    readonly idempotentHint?: boolean;
-    readonly openWorldHint?: boolean;
-  };
 }
 
 export interface McpCallResult {
@@ -80,6 +67,13 @@ export interface McpConnections {
   ): Promise<McpServerRecord>;
   /** A session with the server as the person, for listing and calling tools. */
   connect(ctx: TenantContext, serverId: string): Promise<McpSession>;
+  /**
+   * An HTTP request with the person's sign-in to the app's own API, for the
+   * few tools we write beside a server's (ADR-0029). Only to the origins its
+   * catalog entry lists; the token never leaves this module, and an expired
+   * one is refreshed first.
+   */
+  fetchAs(ctx: TenantContext, serverId: string, url: string, init?: RequestInit): Promise<Response>;
   /** Refresh the person's tokens now (background refresh, M4.06). */
   refresh(ctx: TenantContext, serverId: string): Promise<"refreshed" | "sign_in_required">;
   disconnect(ctx: TenantContext, serverId: string): Promise<boolean>;
@@ -324,6 +318,47 @@ export function createMcpConnections(options: McpConnectionsOptions): McpConnect
       }
       await signInRequired(ctx, server);
       return "sign_in_required";
+    },
+
+    async fetchAs(ctx, serverId, url, init = {}) {
+      const server = await serverOf(ctx, serverId);
+      const origin = new URL(url).origin;
+      if (!entryOf(server)?.apiOrigins?.includes(origin)) {
+        throw new McpError("unavailable", `${server.name}'s sign-in can't be used for ${origin}.`);
+      }
+      const provider = await providerFor(ctx, server);
+      if (provider.connection?.status !== "active") throw await signInRequired(ctx, server);
+
+      const refresh = async (): Promise<void> => {
+        try {
+          if ((await auth(provider, { serverUrl: server.url })) === "AUTHORIZED") return;
+        } catch (error) {
+          rethrow(server, error);
+        }
+        throw await signInRequired(ctx, server);
+      };
+      const send = async (): Promise<Response> => {
+        const headers = new Headers(init.headers);
+        headers.set("authorization", `Bearer ${(await provider.tokens())?.access_token ?? ""}`);
+        try {
+          return await fetch(url, { ...init, headers, redirect: "error" });
+        } catch (error) {
+          return rethrow(server, error);
+        }
+      };
+
+      const expiresAt = provider.connection.expiresAt?.getTime();
+      if (expiresAt !== undefined && expiresAt < (options.now ?? Date.now)() + 60_000) {
+        await refresh();
+      }
+      let res = await send();
+      if (res.status === 401) {
+        await refresh();
+        res = await send();
+        if (res.status === 401) throw await signInRequired(ctx, server);
+      }
+      await store.saveConnection(ctx, server.id, { lastUsedAt: new Date() });
+      return res;
     },
 
     disconnect: (ctx, serverId) => store.deleteConnection(ctx, serverId),

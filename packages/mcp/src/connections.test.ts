@@ -1,120 +1,19 @@
-import { randomUUID } from "node:crypto";
-import {
-  asId,
-  McpError,
-  type ConnectionRecord,
-  type ConnectionStore,
-  type McpServerRecord,
-  type RecordCipher,
-  type TenantContext,
-} from "@ofa/core";
+import { asId, McpError, type McpServerRecord, type TenantContext } from "@ofa/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   CATALOG,
   catalogEntry,
   createMcpConnections,
+  createMemoryConnectionStore,
+  plainOf,
   startFakeMcpServer,
+  testCipher,
   type FakeMcpServer,
 } from "./index";
 
 const alice: TenantContext = { workspaceId: asId("ws"), userId: asId("alice") };
 const bob: TenantContext = { workspaceId: asId("ws"), userId: asId("bob") };
 const REDIRECT = "http://localhost:3000/api/connections/callback";
-
-/** Seals visibly, and refuses to open a value under another row's scope (like the vault). */
-const cipher: RecordCipher = {
-  seal: (_ctx, scope, value) => ({
-    valueCiphertext: Buffer.from(JSON.stringify({ scope, value })).toString("base64"),
-    keyCiphertext: "k",
-    keyId: "test",
-  }),
-  open: (_ctx, scope, sealed) => {
-    const { scope: bound, value } = JSON.parse(
-      Buffer.from(sealed.valueCiphertext, "base64").toString("utf8"),
-    ) as { scope: typeof scope; value: string };
-    if (bound.table !== scope.table || bound.id !== scope.id) throw new Error("wrong row");
-    return value;
-  },
-};
-const plain = (sealed: { valueCiphertext: string } | null) =>
-  sealed ? Buffer.from(sealed.valueCiphertext, "base64").toString("utf8") : "";
-
-function memoryStore(): ConnectionStore & {
-  servers: Map<string, McpServerRecord>;
-  connections: Map<string, ConnectionRecord>;
-} {
-  const servers = new Map<string, McpServerRecord>();
-  const connections = new Map<string, ConnectionRecord>();
-  const key = (ctx: TenantContext, serverId: string) => `${serverId}:${ctx.userId}`;
-  return {
-    servers,
-    connections,
-    getServer: async (_ctx, id) => servers.get(id) ?? null,
-    listServers: async () => [...servers.values()],
-    async createServer(_ctx, input) {
-      // Like the unique indexes: one per slug, and one per catalog entry.
-      const taken = [...servers.values()].some(
-        (s) => s.slug === input.slug || (input.catalogId && s.catalogId === input.catalogId),
-      );
-      if (taken) return null;
-      const record: McpServerRecord = {
-        id: randomUUID(),
-        slug: input.slug,
-        name: input.name,
-        url: input.url,
-        catalogId: input.catalogId ?? null,
-        auth: input.auth ?? "oauth",
-        authOrigin: input.authOrigin ?? null,
-        client: null,
-        enabled: true,
-        createdAt: new Date(),
-      };
-      servers.set(record.id, record);
-      return record;
-    },
-    deleteServer: async (_ctx, id) => servers.delete(id),
-    async saveServerClient(_ctx, id, client) {
-      servers.set(id, { ...servers.get(id)!, client });
-    },
-    async pinAuthOrigin(_ctx, id, origin) {
-      const server = servers.get(id)!;
-      if (!server.authOrigin) servers.set(id, { ...server, authOrigin: origin });
-      return servers.get(id)!.authOrigin!;
-    },
-    getConnection: async (ctx, serverId) => connections.get(key(ctx, serverId)) ?? null,
-    findConnectionByState: async (ctx, state) =>
-      [...connections.values()].find((c) => c.oauthState === state && c.userId === ctx.userId) ??
-      null,
-    listConnections: async (ctx) =>
-      [...connections.values()].filter((c) => c.userId === ctx.userId),
-    async saveConnection(ctx, serverId, patch) {
-      const existing = connections.get(key(ctx, serverId));
-      const defined = Object.fromEntries(
-        Object.entries(patch).filter(([, v]) => v !== undefined),
-      ) as Partial<ConnectionRecord>;
-      const next: ConnectionRecord = {
-        id: existing?.id ?? randomUUID(),
-        mcpServerId: serverId,
-        userId: ctx.userId,
-        status: "pending",
-        account: null,
-        scopes: [],
-        credentials: null,
-        oauthState: null,
-        expiresAt: null,
-        refreshedAt: null,
-        lastUsedAt: null,
-        lastError: null,
-        ...existing,
-        ...defined,
-        updatedAt: new Date(),
-      };
-      connections.set(key(ctx, serverId), next);
-      return next;
-    },
-    deleteConnection: async (ctx, serverId) => connections.delete(key(ctx, serverId)),
-  };
-}
 
 /** What a browser does: open the sign-in page (the fake agrees at once) and follow it back. */
 async function consent(authorizationUrl: string) {
@@ -131,14 +30,14 @@ async function consent(authorizationUrl: string) {
 
 describe("MCP connections", () => {
   let fake: FakeMcpServer;
-  let store: ReturnType<typeof memoryStore>;
+  let store: ReturnType<typeof createMemoryConnectionStore>;
   let mcp: ReturnType<typeof createMcpConnections>;
   let server: McpServerRecord;
 
   beforeEach(async () => {
     fake = await startFakeMcpServer();
-    store = memoryStore();
-    mcp = createMcpConnections({ store, cipher, redirectUrl: REDIRECT });
+    store = createMemoryConnectionStore();
+    mcp = createMcpConnections({ store, cipher: testCipher, redirectUrl: REDIRECT });
     server = (await store.createServer(alice, { slug: "notes", name: "Notes", url: fake.mcpUrl }))!;
   });
   afterEach(() => fake.close());
@@ -162,9 +61,9 @@ describe("MCP connections", () => {
     });
     expect(connection?.expiresAt?.getTime()).toBeGreaterThan(Date.now());
     // Sealed, bound to the row, and holding tokens only once signed in.
-    expect(plain(connection!.credentials)).toContain("access_token");
-    expect(plain(connection!.credentials)).not.toContain("codeVerifier");
-    expect(plain(store.servers.get(server.id)!.client)).toContain("client_id");
+    expect(plainOf(connection!.credentials)).toContain("access_token");
+    expect(plainOf(connection!.credentials)).not.toContain("codeVerifier");
+    expect(plainOf(store.servers.get(server.id)!.client)).toContain("client_id");
     // The sign-in site is pinned at the first sign-in.
     expect(store.servers.get(server.id)!.authOrigin).toBe(fake.url);
 
@@ -261,7 +160,7 @@ describe("the catalog", () => {
   it("installs an entry pinned to its sign-in site, and asks only for its scopes", async () => {
     const fake = await startFakeMcpServer();
     try {
-      const store = memoryStore();
+      const store = createMemoryConnectionStore();
       const entry = {
         ...CATALOG[0]!,
         id: "notes",
@@ -270,7 +169,12 @@ describe("the catalog", () => {
         scopes: ["read"],
         authorizationParams: { access_type: "offline" },
       };
-      const mcp = createMcpConnections({ store, cipher, redirectUrl: REDIRECT, catalog: [entry] });
+      const mcp = createMcpConnections({
+        store,
+        cipher: testCipher,
+        redirectUrl: REDIRECT,
+        catalog: [entry],
+      });
       const server = await mcp.install(alice, "notes");
       expect(server).toMatchObject({ slug: "notes", catalogId: "notes", authOrigin: fake.url });
       await expect(mcp.install(alice, "notes")).rejects.toMatchObject({ code: "conflict" });
@@ -287,7 +191,7 @@ describe("the catalog", () => {
   it("uses the self-hoster's own OAuth app where the server can't register one", async () => {
     const fake = await startFakeMcpServer();
     try {
-      const store = memoryStore();
+      const store = createMemoryConnectionStore();
       const entry = {
         ...CATALOG[0]!,
         id: "mail",
@@ -296,7 +200,12 @@ describe("the catalog", () => {
         setup: "own_client" as const,
         guide: "docs/guides/x.md",
       };
-      const mcp = createMcpConnections({ store, cipher, redirectUrl: REDIRECT, catalog: [entry] });
+      const mcp = createMcpConnections({
+        store,
+        cipher: testCipher,
+        redirectUrl: REDIRECT,
+        catalog: [entry],
+      });
       await expect(mcp.install(alice, "mail")).rejects.toMatchObject({
         code: "validation_failed",
       });
@@ -304,7 +213,7 @@ describe("the catalog", () => {
         clientId: "own-client-id",
         clientSecret: "own-client-secret-123",
       });
-      const sealed = plain(server.client);
+      const sealed = plainOf(server.client);
       expect(sealed).toContain("own-client-secret-123");
       expect(sealed).toContain('\\"dynamic\\":false');
       const start = await mcp.startSignIn(alice, server.id);

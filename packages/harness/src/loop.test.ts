@@ -280,6 +280,31 @@ describe("runAgent", () => {
     expect(seen[1]).toEqual(["https://docs.example/start", "https://larkspur.example/notes/3.0"]);
   });
 
+  it("adds an app's tools to the list once load_toolkit has loaded them", async () => {
+    const { tools, llm, run, steps } = setup([
+      { toolCalls: [{ name: "load_toolkit", args: { app: "Notes" } }] },
+      { toolCalls: [{ name: "notes.search", args: { query: "plan" } }] },
+      { text: "Found it." },
+    ]);
+    const asked: (readonly string[] | undefined)[] = [];
+    const noteSearch = { ...search, name: "notes.search" };
+    tools.listTools = async (_c, listing) => {
+      asked.push(listing?.toolkits);
+      return listing?.toolkits?.includes("notes") ? [search, noteSearch] : [search];
+    };
+    const execute = tools.execute.bind(tools);
+    tools.execute = async (request, c) =>
+      request.name === "load_toolkit" || request.name === "notes.search"
+        ? okOutcome(`${request.name} done`)
+        : execute(request, c);
+    await run();
+    const offered = llm.requests.map((r) => (r.tools ?? []).map((t) => t.name).sort());
+    expect(offered[0]).toEqual(["web.search"]);
+    expect(offered[1]).toEqual(["notes.search", "web.search"]);
+    expect(asked).toEqual([undefined, ["notes"]]);
+    expect(steps.ran).toContain("tool-0-0-toolkit");
+  });
+
   it("lets middleware block a tool before it runs", async () => {
     const { runtime, tools, run } = setup([
       { toolCalls: [{ name: "web.search", args: { query: "x" } }] },

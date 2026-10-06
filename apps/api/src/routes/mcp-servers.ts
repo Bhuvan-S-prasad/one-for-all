@@ -8,6 +8,7 @@ import {
   type McpServerList,
   type McpToolList,
   type SignInStartResponse,
+  type ToolRefreshResponse,
 } from "@ofa/contracts";
 import {
   AppError,
@@ -38,12 +39,13 @@ import type { AppEnv } from "../types";
  *   POST   /api/mcp-servers/:id/connect      start signing in: { authorizationUrl } to open
  *   DELETE /api/mcp-servers/:id/connection   sign out of it
  *   GET    /api/mcp-servers/:id/tools        what it offers, as you
+ *   POST   /api/mcp-servers/:id/tools/refresh  fetch and keep its tool list again (agents use the kept one)
  *   GET    /api/connections/callback         where the provider sends you back
  *
  * Tokens stay inside the MCP client; nothing here returns one.
  */
 export function mcpServerRoutes(
-  deps: Pick<Container, "db" | "sessions" | "connections" | "mcp" | "config">,
+  deps: Pick<Container, "db" | "sessions" | "connections" | "mcp" | "toolkits" | "config">,
 ) {
   function requireAdmin(c: Context<AppEnv>): TenantContext {
     const role = c.get("session").membership?.role;
@@ -180,6 +182,11 @@ export function mcpServerRoutes(
       }
       return c.body(null, 204);
     })
+    .post("/:id/tools/refresh", async (c) => {
+      if (!deps.toolkits) client();
+      const count = await deps.toolkits!.refresh(c.get("tenant"), c.req.param("id"));
+      return c.json({ count } satisfies ToolRefreshResponse);
+    })
     .get("/:id/tools", async (c) => {
       const session = await client().connect(c.get("tenant"), c.req.param("id"));
       try {
@@ -198,7 +205,7 @@ export function mcpServerRoutes(
  * app's Connections page, saying how it went.
  */
 export function connectionCallbackRoutes(
-  deps: Pick<Container, "db" | "sessions" | "mcp" | "config">,
+  deps: Pick<Container, "db" | "sessions" | "mcp" | "toolkits" | "config" | "logger">,
 ) {
   return new Hono<AppEnv>()
     .use(requireSession(deps.sessions), requireTenant())
@@ -231,6 +238,13 @@ export function connectionCallbackRoutes(
           targetId: server.id,
           data: { slug: server.slug },
           ...requestMeta(c),
+        });
+        // Keep its tool list for agents now; a failure here only delays that.
+        await deps.toolkits?.refresh(tenant, server.id).catch((error: unknown) => {
+          deps.logger.warn("mcp: couldn't fetch tools after sign-in", {
+            server: server.slug,
+            error: error instanceof Error ? error.message : String(error),
+          });
         });
         back.searchParams.set("connected", server.slug);
       } catch (error) {
@@ -268,6 +282,8 @@ function toMcpServer(server: McpServerRecord, connection: ConnectionRecord | nul
     auth: server.auth,
     authOrigin: server.authOrigin,
     enabled: server.enabled,
+    toolCount: server.tools?.length ?? null,
+    toolsFetchedAt: server.toolsFetchedAt?.toISOString() ?? null,
     connection: connection
       ? {
           status: connection.status,

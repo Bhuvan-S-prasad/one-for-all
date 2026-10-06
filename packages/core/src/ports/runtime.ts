@@ -210,7 +210,14 @@ export type ToolOutcome =
 
 /** Lists the tools an agent may use and runs them through policy (hard rule 5). */
 export interface ToolExecutor {
-  listTools(ctx: RunContext): Promise<ToolDescriptor[]>;
+  /**
+   * The tools the model sees. Apps with many tools stay behind
+   * `load_toolkit` until the run loads them (`toolkits`, by app slug).
+   */
+  listTools(
+    ctx: RunContext,
+    options?: { readonly toolkits?: readonly string[] },
+  ): Promise<ToolDescriptor[]>;
   execute(request: ToolExecutionRequest, ctx: RunContext): Promise<ToolOutcome>;
 }
 

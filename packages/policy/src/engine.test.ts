@@ -261,3 +261,30 @@ describe("allowing a site for the rest of the run", () => {
     expect(pay.verdict).toBe("human");
   });
 });
+
+describe("apps granted whole", () => {
+  const mcp = (name: string, annotations: ToolDescriptor["annotations"]): ToolDescriptor => ({
+    ...tool(name, annotations),
+    source: "mcp",
+  });
+
+  it("reads run, anything that changes something asks; naming a tool wins", async () => {
+    const e = engine([
+      { tool: "notion.*", mode: "auto" },
+      { tool: "notion.create_pages", mode: "auto" },
+    ]);
+    const ask = (t: ToolDescriptor) => e.evaluate({ ctx, tool: t, args: {}, tainted: false });
+    expect((await ask(mcp("notion.search", { readOnly: true }))).verdict).toBe("auto");
+    const write = await ask(mcp("notion.move_pages", { outbound: true }));
+    expect(write.verdict).toBe("approve");
+    expect(write.reasons[0]).toMatch(/granted as part of notion\.\*/);
+    // Granted by name: the person chose auto for it.
+    expect((await ask(mcp("notion.create_pages", { outbound: true }))).verdict).toBe("auto");
+    // Built-in tools keep their grant as it is.
+    const builtin = engine([{ tool: "browser.*", mode: "auto" }]);
+    const click = tool("browser.click", { outbound: true });
+    expect((await builtin.evaluate({ ctx, tool: click, args: {}, tainted: false })).verdict).toBe(
+      "auto",
+    );
+  });
+});

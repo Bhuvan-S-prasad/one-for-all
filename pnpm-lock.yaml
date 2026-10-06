@@ -417,9 +417,16 @@ importers:
       '@ofa/core':
         specifier: workspace:*
         version: link:../core
+      '@ofa/tools':
+        specifier: workspace:*
+        version: link:../tools
       zod:
         specifier: 4.6.5
         version: 4.6.5
+    devDependencies:
+      '@ofa/policy':
+        specifier: workspace:*
+        version: link:../policy
 
   packages/memory:
     dependencies:
