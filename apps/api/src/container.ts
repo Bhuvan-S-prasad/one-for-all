@@ -20,6 +20,7 @@ import type {
 import {
   createAgentDirectory,
   createApprovalStore,
+  createPolicyRuleStore,
   createArtifactStore,
   createDatabase,
   createRunStore,
@@ -268,7 +269,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
         sandbox,
       }).concat(overrides.extraTools ?? []),
     ),
-    policy: createPolicyEngine({ agents }),
+    policy: createPolicyEngine({ agents, rules: createPolicyRuleStore(db) }),
     calls: createToolCallStore(db),
     agents,
     redact: (ctx, text) => vault.redact(ctx, text),

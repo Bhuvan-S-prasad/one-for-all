@@ -348,8 +348,15 @@ export function useDecideApproval() {
   const api = useApiClient();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, decision }: { id: string; decision: "approve" | "reject" }) =>
-      api.decideApproval(id, decision),
+    mutationFn: ({
+      id,
+      decision,
+      scope,
+    }: {
+      id: string;
+      decision: "approve" | "reject";
+      scope?: "once" | "site";
+    }) => api.decideApproval(id, decision, scope),
     onSettled: () => void queryClient.invalidateQueries({ queryKey: queryKeys.approvalLists }),
   });
 }

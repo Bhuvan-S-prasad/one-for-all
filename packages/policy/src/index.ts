@@ -1,1 +1,7 @@
-export { createPolicyEngine, grantFor, PLATFORM_TOOLS, type PolicyEngineOptions } from "./engine";
+export {
+  createPolicyEngine,
+  grantFor,
+  humanOnlyKind,
+  PLATFORM_TOOLS,
+  type PolicyEngineOptions,
+} from "./engine";

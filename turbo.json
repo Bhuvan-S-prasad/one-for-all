@@ -6,9 +6,12 @@
       "dependsOn": ["^build"],
       "outputs": ["dist/**"]
     },
-    "typecheck": {},
+    "typecheck": {
+      "dependsOn": ["^typecheck"]
+    },
     "lint": {},
     "test": {
+      "dependsOn": ["^test"],
       "outputs": ["coverage/**"]
     },
     "test:integration": {

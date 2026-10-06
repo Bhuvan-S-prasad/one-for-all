@@ -2,11 +2,12 @@ import {
   asId,
   type AgentGrantRule,
   type AgentProfile,
+  type PolicyRule,
   type RunContext,
   type ToolDescriptor,
 } from "@ofa/core";
 import { describe, expect, it } from "vitest";
-import { createPolicyEngine, grantFor } from "./index";
+import { createPolicyEngine, grantFor, humanOnlyKind } from "./index";
 
 const ctx: RunContext = {
   workspaceId: asId("ws"),
@@ -15,10 +16,21 @@ const ctx: RunContext = {
   runId: asId("r"),
 };
 
-function engine(grants: AgentGrantRule[]) {
+function engine(grants: AgentGrantRule[], rules: PolicyRule[] = []) {
   const agent = { id: ctx.agentId, grants } as unknown as AgentProfile;
-  return createPolicyEngine({ agents: { get: async () => agent } });
+  return createPolicyEngine({
+    agents: { get: async () => agent },
+    rules: { listForRun: async () => rules },
+  });
 }
+
+const rule = (r: Partial<PolicyRule> & Pick<PolicyRule, "tool" | "effect">): PolicyRule => ({
+  id: r.tool,
+  scope: "workspace",
+  agentId: null,
+  description: "",
+  ...r,
+});
 
 const tool = (name: string, annotations: ToolDescriptor["annotations"] = {}): ToolDescriptor => ({
   name,
@@ -52,15 +64,15 @@ describe("policy engine", () => {
   it("escalates outbound tools in a tainted run, and destructive tools always", async () => {
     const e = engine([
       { tool: "gmail.send", mode: "auto" },
-      { tool: "files.delete", mode: "auto" },
+      { tool: "files.overwrite", mode: "auto" },
     ]);
     const send = tool("gmail.send", { outbound: true });
     expect((await e.evaluate({ ctx, tool: send, args: {}, tainted: false })).verdict).toBe("auto");
     const tainted = await e.evaluate({ ctx, tool: send, args: {}, tainted: true });
     expect(tainted.verdict).toBe("approve");
     expect(tainted.reasons.join(" ")).toMatch(/untrusted/);
-    const del = tool("files.delete", { destructive: true });
-    expect((await e.evaluate({ ctx, tool: del, args: {}, tainted: false })).verdict).toBe(
+    const overwrite = tool("files.overwrite", { destructive: true });
+    expect((await e.evaluate({ ctx, tool: overwrite, args: {}, tainted: false })).verdict).toBe(
       "approve",
     );
   });
@@ -79,5 +91,173 @@ describe("policy engine", () => {
     expect(made.reasons.join(" ")).toMatch(/address/);
     // Before reading anything outside, any address is fine.
     expect((await ask("https://anything.example/", false)).verdict).toBe("auto");
+  });
+});
+
+describe("the always-human list", () => {
+  it("classifies by annotation, or by the action's words unless read-only", () => {
+    expect(humanOnlyKind(tool("stripe.make", { humanOnly: "payment" }))).toBe("payment");
+    expect(humanOnlyKind(tool("gmail.delete_message"))).toBe("deletion");
+    expect(humanOnlyKind(tool("stripe.create_refund"))).toBe("payment");
+    expect(humanOnlyKind(tool("drive.share_file"))).toBe("sharing");
+    expect(humanOnlyKind(tool("github.update_permissions"))).toBe("permissions");
+    expect(humanOnlyKind(tool("notion.list_deleted"))).toBeNull();
+    expect(humanOnlyKind(tool("gmail.remove_label"))).toBeNull();
+    expect(humanOnlyKind(tool("github.list_roles", { readOnly: true }))).toBeNull();
+    expect(humanOnlyKind(tool("browser.click", { outbound: true }))).toBeNull();
+  });
+
+  it("needs a person whatever the grant and rules say", async () => {
+    const e = engine(
+      [{ tool: "gmail.*", mode: "auto" }],
+      [rule({ tool: "gmail.*", effect: "allow_auto" })],
+    );
+    const decision = await e.evaluate({
+      ctx,
+      tool: tool("gmail.delete_message"),
+      args: {},
+      tainted: false,
+    });
+    expect(decision.verdict).toBe("human");
+    expect(decision.reasons.join(" ")).toMatch(/deleting things always needs a person/);
+  });
+});
+
+describe("rules", () => {
+  const search = tool("web.search", { readOnly: true });
+  const send = tool("gmail.send", { outbound: true });
+
+  it("ask-first rules hold a call, workspace and personal alike", async () => {
+    const workspace = engine(
+      [{ tool: "gmail.send", mode: "auto" }],
+      [rule({ tool: "gmail.*", effect: "ask_first", description: "Mail goes to customers" })],
+    );
+    const held = await workspace.evaluate({ ctx, tool: send, args: {}, tainted: false });
+    expect(held.verdict).toBe("approve");
+    expect(held.reasons).toContain("asks first by a workspace rule: Mail goes to customers");
+
+    const personal = engine(
+      [{ tool: "web.search", mode: "auto" }],
+      [rule({ tool: "*", effect: "ask_first", scope: "personal" })],
+    );
+    const mine = await personal.evaluate({ ctx, tool: search, args: {}, tainted: false });
+    expect(mine.verdict).toBe("approve");
+  });
+
+  it("allow-auto replaces the grant's mode, only when nothing above fired", async () => {
+    const e = engine(
+      [{ tool: "gmail.send", mode: "approve" }],
+      [rule({ tool: "gmail.send", effect: "allow_auto" })],
+    );
+    const quiet = await e.evaluate({ ctx, tool: send, args: {}, tainted: false });
+    expect(quiet.verdict).toBe("auto");
+    expect(quiet.reasons[0]).toMatch(/runs without asking by a workspace rule/);
+    // Taint escalation fired: the rule does not apply.
+    const tainted = await e.evaluate({ ctx, tool: send, args: {}, tainted: true });
+    expect(tainted.verdict).toBe("approve");
+  });
+
+  it("ignores a personal allow-auto rule, and never loosens a deny", async () => {
+    const personal = engine(
+      [{ tool: "gmail.send", mode: "approve" }],
+      [rule({ tool: "gmail.send", effect: "allow_auto", scope: "personal" })],
+    );
+    const mine = await personal.evaluate({ ctx, tool: send, args: {}, tainted: false });
+    expect(mine.verdict).toBe("approve");
+    const blocked = engine(
+      [{ tool: "gmail.send", mode: "blocked" }],
+      [rule({ tool: "*", effect: "allow_auto" })],
+    );
+    const no = await blocked.evaluate({ ctx, tool: send, args: {}, tainted: false });
+    expect(no.verdict).toBe("deny");
+  });
+});
+
+describe("allowing a site for the rest of the run", () => {
+  const click = tool("browser.click", { outbound: true });
+  const open = tool("browser.open", { readOnly: true, opensUrl: "url" });
+
+  it("offers it when only taint escalation held a call on a known site", async () => {
+    const e = engine([{ tool: "browser.*", mode: "auto" }]);
+    const held = await e.evaluate({
+      ctx,
+      tool: click,
+      args: {},
+      tainted: true,
+      site: "shop.example",
+    });
+    expect(held).toMatchObject({ verdict: "approve", allowSite: "shop.example" });
+    // No site known: one-off answers only.
+    const unknown = await e.evaluate({ ctx, tool: click, args: {}, tainted: true });
+    expect(unknown.allowSite).toBeUndefined();
+  });
+
+  it("once allowed, calls on that site run, and other sites still ask", async () => {
+    const e = engine([{ tool: "browser.*", mode: "auto" }]);
+    const allowedSites = new Set(["shop.example"]);
+    const there = await e.evaluate({
+      ctx,
+      tool: click,
+      args: {},
+      tainted: true,
+      site: "shop.example",
+      allowedSites,
+    });
+    expect(there.verdict).toBe("auto");
+    expect(there.reasons).toContain("allowed on shop.example for this task");
+    const made = await e.evaluate({
+      ctx,
+      tool: open,
+      args: { url: "https://shop.example/check?email=sam@example.com" },
+      tainted: true,
+      site: "shop.example",
+      allowedSites,
+    });
+    expect(made.verdict).toBe("auto");
+    const elsewhere = await e.evaluate({
+      ctx,
+      tool: open,
+      args: { url: "https://evil.example/?email=sam@example.com" },
+      tainted: true,
+      site: "evil.example",
+      allowedSites,
+    });
+    expect(elsewhere).toMatchObject({ verdict: "approve", allowSite: "evil.example" });
+  });
+
+  it("is not offered, and does not help, when something else holds the call", async () => {
+    const approveGrant = engine([{ tool: "browser.*", mode: "approve" }]);
+    const granted = await approveGrant.evaluate({
+      ctx,
+      tool: click,
+      args: {},
+      tainted: true,
+      site: "shop.example",
+    });
+    expect(granted.allowSite).toBeUndefined();
+    const askFirst = engine(
+      [{ tool: "browser.*", mode: "auto" }],
+      [rule({ tool: "browser.click", effect: "ask_first" })],
+    );
+    const held = await askFirst.evaluate({
+      ctx,
+      tool: click,
+      args: {},
+      tainted: true,
+      site: "shop.example",
+      allowedSites: new Set(["shop.example"]),
+    });
+    expect(held.verdict).toBe("approve");
+    expect(held.allowSite).toBeUndefined();
+    const human = engine([{ tool: "shop.*", mode: "auto" }]);
+    const pay = await human.evaluate({
+      ctx,
+      tool: tool("shop.checkout", { outbound: true }),
+      args: {},
+      tainted: true,
+      site: "shop.example",
+      allowedSites: new Set(["shop.example"]),
+    });
+    expect(pay.verdict).toBe("human");
   });
 });

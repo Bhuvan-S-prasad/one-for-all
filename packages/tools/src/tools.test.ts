@@ -71,6 +71,7 @@ function memoryCalls(): ToolCallStore & { rows: Map<string, ToolCallRecord> } {
 }
 
 let sent = 0;
+let siteAsked = 0;
 const echo = defineTool({
   name: "test.echo",
   description: "Echo",
@@ -88,6 +89,10 @@ const send = defineTool({
   async run() {
     sent += 1;
     return { content: "sent", untrusted: false };
+  },
+  async site({ to }) {
+    siteAsked += 1;
+    return to.endsWith(".example") ? to : null;
   },
 });
 
@@ -155,6 +160,28 @@ describe("tool executor", () => {
       status: "blocked",
       verdict: "approve",
       summary: 'test.send {"to":"x"}',
+    });
+  });
+
+  it("in a tainted run, names the site a person can allow, and honours an allowed one", async () => {
+    const e = executor([{ tool: "test.send", mode: "auto" }]);
+    siteAsked = 0;
+    expect(await e.execute(request("test.send", { to: "shop.example" }, "s1"), ctx)).toMatchObject({
+      status: "ok",
+    });
+    expect(siteAsked).toBe(0); // Not tainted: the site does not matter.
+    expect(
+      await e.execute(request("test.send", { to: "shop.example" }, "s2", true), ctx),
+    ).toMatchObject({ status: "blocked", verdict: "approve", allowSite: "shop.example" });
+    const allowed = {
+      ...request("test.send", { to: "shop.example" }, "s3", true),
+      allowedSites: ["shop.example"],
+    };
+    expect(await e.execute(allowed, ctx)).toMatchObject({ status: "ok", verdict: "auto" });
+    const elsewhere = { ...allowed, args: { to: "evil.example" }, idempotencyKey: "s4" };
+    expect(await e.execute(elsewhere, ctx)).toMatchObject({
+      status: "blocked",
+      allowSite: "evil.example",
     });
   });
 

@@ -68,6 +68,16 @@ export {
   type SecretWrite,
 } from "./repos/secrets";
 export {
+  createPolicyRule,
+  createPolicyRuleStore,
+  deletePolicyRule,
+  findPolicyRule,
+  listPolicyRules,
+  setPolicyRuleEnabled,
+  type PolicyRuleInput,
+  type PolicyRuleRecord,
+} from "./repos/policy-rules";
+export {
   listEnvelopes,
   listWorkspaceOwners,
   rewrapStoredEnvelope,

@@ -17,7 +17,7 @@ import type { AppEnv } from "../types";
  * Approvals (ARCHITECTURE.md §6.2), pulled forward from M4 for M3.13:
  *   GET  /api/approvals       waiting for an answer (?agentId=&runId=)
  *   GET  /api/approvals/:id
- *   POST /api/approvals/:id   { decision: approve | reject }
+ *   POST /api/approvals/:id   { decision: approve | reject, scope?: once | site }
  *
  * The person who started the run answers, or an owner or admin. The row is
  * settled first (only while pending, so two answers cannot both win), then
@@ -41,7 +41,7 @@ export function approvalRoutes(
     .post("/:id", async (c) => {
       const tenant = c.get("tenant");
       const session = c.get("session");
-      const { decision } = await readJson(c, decideApprovalRequestSchema);
+      const { decision, scope } = await readJson(c, decideApprovalRequestSchema);
       const found = await deps.approvals.get(tenant, c.req.param("id"));
       if (!found) throw new NotFoundError("Approval");
       const run = await getRun(deps.db, tenant, found.runId);
@@ -51,10 +51,17 @@ export function approvalRoutes(
           "Only the person who asked, or an owner or admin, can answer this",
         );
       }
+      if (scope === "site" && (decision !== "approve" || !found.site)) {
+        throw new AppError(
+          "validation_failed",
+          "Only an approval that names a site can be approved for that site",
+        );
+      }
       const status = decision === "approve" ? "approved" : "rejected";
       const decided = await deps.approvals.decide(tenant, found.id, {
         status,
         decidedBy: tenant.userId,
+        scope,
       });
       if (!decided) {
         throw new AppError(
@@ -66,7 +73,12 @@ export function approvalRoutes(
         action: `approval.${status}`,
         targetType: "approval",
         targetId: found.id,
-        data: { tool: found.tool, runId: found.runId, agentId: found.agentId },
+        data: {
+          tool: found.tool,
+          runId: found.runId,
+          agentId: found.agentId,
+          ...(scope === "site" ? { allowedSite: found.site } : {}),
+        },
         ...requestMeta(c),
       });
       await deps.dispatcher.approvalDecided({

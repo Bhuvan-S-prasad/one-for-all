@@ -150,7 +150,15 @@ interface ToolStepResult {
     readonly verdict: Verdict;
     readonly reasons: readonly string[];
     readonly summary: string;
+    /** The site the person may allow for the rest of the run instead. */
+    readonly site?: string;
   };
+}
+
+/** A person's answer: for this call only, or for every call like it on a site (M4.07). */
+interface Decision {
+  readonly status: "approved" | "rejected" | "expired";
+  readonly site: string | null;
 }
 
 /**
@@ -180,6 +188,8 @@ export async function runAgent(
   let hook: RunHookContext | null = null;
   /** Addresses the run was given, in `urlKey` form (filled in as the run goes). */
   const knownUrls = new Set<string>();
+  /** Sites a person allowed for the rest of this run, rebuilt on replay from memoized answers. */
+  const allowedSites = new Set<string>();
 
   try {
     // ── Start ────────────────────────────────────────────────────────────────
@@ -424,12 +434,18 @@ export async function runAgent(
         );
         if (result.approval) {
           const decision = await askPerson(toolCallId, call, result.approval);
+          if (decision.status === "approved" && decision.site) allowedSites.add(decision.site);
           result =
-            decision === "approved"
+            decision.status === "approved"
               ? await steps.run(`${toolCallId}-approved`, () =>
                   runTool(toolCallId, call, tainted, true),
                 )
-              : { content: DECLINED[decision], untrusted: false, ok: false, taintedNow: false };
+              : {
+                  content: DECLINED[decision.status],
+                  untrusted: false,
+                  ok: false,
+                  taintedNow: false,
+                };
         }
         usage = addUsage(usage, { inputTokens: 0, outputTokens: 0, costUsd: 0 }, { tool: 1 });
         if (result.taintedNow) tainted = true;
@@ -485,7 +501,7 @@ export async function runAgent(
     toolCallId: string,
     call: ToolCallTurn,
     approval: NonNullable<ToolStepResult["approval"]>,
-  ): Promise<"approved" | "rejected" | "expired"> {
+  ): Promise<Decision> {
     const approvals = deps.approvals as ApprovalStore;
     const waitFor = (id: string, timeoutMs: number) =>
       steps.waitForEvent!(id, {
@@ -504,6 +520,7 @@ export async function runAgent(
         summary: await redact(ctx, approval.summary),
         reasons: approval.reasons,
         verdict: approval.verdict,
+        site: approval.site ?? null,
         expiresAt: new Date(Date.now() + timeoutMs),
       });
       await log([
@@ -540,18 +557,20 @@ export async function runAgent(
           (await approvals.decide(ctx, asked.id, { status: "expired", decidedBy: null })) ??
           (await approvals.get(ctx, asked.id));
       }
-      const status: "approved" | "rejected" | "expired" =
+      const status: Decision["status"] =
         record && record.status !== "pending" ? record.status : "expired";
+      const site = status === "approved" && record?.scope === "site" ? record.site : null;
       await log([
         runEvent(`${toolCallId}-decided`, "approval.decided", {
           approvalId: asked.id,
           decision: status,
           decidedBy: record?.decidedBy ?? null,
+          ...(site ? { allowedSite: site } : {}),
         }),
         runEvent(`${toolCallId}-resumed`, "run.resumed", {}),
       ]);
       await deps.runs.update(ctx, ctx.runId, { status: "running", onlyIfStatus: "waiting" });
-      return status;
+      return { status, site } satisfies Decision;
     });
   }
 
@@ -580,6 +599,7 @@ export async function runAgent(
       idempotencyKey: `${ctx.runId}:${toolCallId}`,
       tainted: taintedBefore,
       knownUrls: [...knownUrls],
+      allowedSites: [...allowedSites],
       ...(approved ? { approved: true } : {}),
     };
     const execute = chain.tool(hook as RunHookContext, (r) => deps.tools.execute(r, ctx));
@@ -664,6 +684,7 @@ export async function runAgent(
           reasons: outcome.reasons,
           summary:
             outcome.summary ?? `${call.name} ${JSON.stringify(call.args ?? {}).slice(0, 400)}`,
+          ...(outcome.allowSite ? { site: outcome.allowSite } : {}),
         },
       };
     }

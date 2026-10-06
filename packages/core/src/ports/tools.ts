@@ -4,6 +4,14 @@ import type { RunContext, TenantContext } from "../tenant";
 /** JSON Schema for a tool's input, as produced by zod or an MCP server. */
 export type JsonSchema = Record<string, unknown>;
 
+/**
+ * Actions that always need a person, whatever the grant or rules say
+ * (ARCHITECTURE.md §10.2): payments, deletions, permission or password
+ * changes, and sharing with people outside.
+ */
+export const HUMAN_ONLY_KINDS = ["payment", "deletion", "permissions", "sharing"] as const;
+export type HumanOnlyKind = (typeof HUMAN_ONLY_KINDS)[number];
+
 /** Risk hints. MCP annotations map onto these; built-ins declare them directly. */
 export interface ToolAnnotations {
   readonly readOnly?: boolean;
@@ -17,6 +25,11 @@ export interface ToolAnnotations {
    * approval (§10.3): it could carry data out.
    */
   readonly opensUrl?: string;
+  /**
+   * On the always-human list. Tools that don't say are classified by name
+   * (`gmail.delete_message` is a deletion) unless they are read-only.
+   */
+  readonly humanOnly?: HumanOnlyKind;
 }
 
 export type ToolSourceKind = "builtin" | "mcp" | "sandbox";

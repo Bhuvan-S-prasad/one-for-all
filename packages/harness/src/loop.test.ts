@@ -470,6 +470,59 @@ describe("approvals", () => {
     expect(JSON.stringify(llm.requests[1]?.messages)).toContain("nobody answered");
   });
 
+  it("after a person allows a site for the task, later calls there carry it", async () => {
+    const { runtime } = held(() => null);
+    const llm = createScriptedLLM([
+      { toolCalls: [{ name: "browser.click", args: { ref: 9 } }] },
+      { toolCalls: [{ name: "browser.click", args: { ref: 10 } }] },
+      { text: "Done." },
+    ]);
+    const requests: (readonly string[] | undefined)[] = [];
+    const tools = createFakeToolExecutor([
+      {
+        descriptor: click,
+        run: (_args, request) => {
+          requests.push(request.allowedSites);
+          return request.approved || request.allowedSites?.includes("a.example")
+            ? okOutcome("Page: Thanks", true)
+            : {
+                status: "blocked",
+                verdict: "approve",
+                reasons: ["outbound tool in a run that read untrusted content"],
+                message: "browser.click needs a person's approval first.",
+                summary: "Click the button “Next” on a.example",
+                allowSite: "a.example",
+              };
+        },
+      },
+    ]);
+    const approvals = createMemoryApprovals();
+    const steps = createMemoStepRunner({
+      onWait: () => {
+        const id = approvals.records[0]!.id;
+        void approvals.decide(ctx, id, { status: "approved", decidedBy: "usr_1", scope: "site" });
+        return { approvalId: id };
+      },
+    });
+    const deps = {
+      llm,
+      tools,
+      runs: runtime.runs,
+      agents: runtime.agents,
+      threads: runtime.threads,
+      approvals,
+    };
+    await runAgent({ ctx, threadId, trigger: "message" }, deps, steps);
+
+    expect(approvals.records).toHaveLength(1);
+    expect(approvals.records[0]).toMatchObject({ site: "a.example", scope: "site" });
+    // Held, run once approved, then the second click went through without asking.
+    expect(requests).toEqual([[], ["a.example"], ["a.example"]]);
+    expect(runtime.runs.events.find((e) => e.type === "approval.decided")?.payload).toMatchObject({
+      allowedSite: "a.example",
+    });
+  });
+
   it("refuses calls that need a person when runs cannot wait", async () => {
     const { runtime, tools, llm } = held(() => null);
     const steps = createMemoStepRunner();

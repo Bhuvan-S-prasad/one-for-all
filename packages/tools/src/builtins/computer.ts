@@ -126,6 +126,14 @@ async function target(
   return `${what} on ${site}`;
 }
 
+/** The site of the page in the agent's browser now, for "allow on this site for this task" (M4.07). */
+async function currentSite(
+  sandbox: SandboxProvider | null,
+  ctx: ToolRunContext,
+): Promise<string | null> {
+  return normalizeLoginSite((await (await browserOf(sandbox, ctx)).describe()).url);
+}
+
 const ref = z
   .number()
   .int()
@@ -146,6 +154,9 @@ export function browserTools(sandbox: SandboxProvider | null) {
       },
       async describe({ url }) {
         return `Open ${url}`;
+      },
+      async site({ url }) {
+        return normalizeLoginSite(url);
       },
     }),
     defineTool({
@@ -177,6 +188,7 @@ export function browserTools(sandbox: SandboxProvider | null) {
       async describe(args, ctx) {
         return `Click ${await target(sandbox, ctx, args.ref)}`;
       },
+      site: (_args, ctx) => currentSite(sandbox, ctx),
     }),
     defineTool({
       name: "browser.type",
@@ -195,6 +207,7 @@ export function browserTools(sandbox: SandboxProvider | null) {
       async describe({ ref: element, text, submit }, ctx) {
         return `Type “${clip(text, 300)}” into ${await target(sandbox, ctx, element)}${submit ? ", then press Enter" : ""}`;
       },
+      site: (_args, ctx) => currentSite(sandbox, ctx),
     }),
     defineTool({
       name: "browser.press",
@@ -207,6 +220,7 @@ export function browserTools(sandbox: SandboxProvider | null) {
       async describe({ key }, ctx) {
         return `Press ${key} on ${await target(sandbox, ctx)}`;
       },
+      site: (_args, ctx) => currentSite(sandbox, ctx),
     }),
     defineTool({
       name: "browser.back",

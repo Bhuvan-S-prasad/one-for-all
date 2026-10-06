@@ -11,6 +11,8 @@ import {
   llmSettingsSchema,
   memoryItemSchema,
   memoryListSchema,
+  policyRuleListSchema,
+  policyRuleSchema,
   realtimeMessageSchema,
   runSchema,
   sendMessageResponseSchema,
@@ -455,6 +457,80 @@ describe.skipIf(!hasDb)("M2 API (integration)", async () => {
       approvalListSchema.parse(await (await get(`/api/approvals?agentId=${agentId}`)).json()).items,
     ).toEqual([]);
     expect(await container.approvals.expireForRun(tenant(), retryRunId)).toBe(0);
+  });
+
+  it("approves for a site only when the request names one", async () => {
+    const runCtx = { ...tenant(), agentId: asId<AgentId>(agentId), runId: asId<RunId>(retryRunId) };
+    const base = {
+      tool: "browser.click",
+      args: {},
+      summary: "Click the button “Next” on shop.example",
+      reasons: ["outbound tool in a run that read untrusted content"],
+      verdict: "approve" as const,
+      expiresAt: new Date(Date.now() + 60_000),
+    };
+    const plain = await container.approvals.request(runCtx, { ...base, toolCallId: "tool-3-0" });
+    const sited = await container.approvals.request(runCtx, {
+      ...base,
+      toolCallId: "tool-4-0",
+      site: "shop.example",
+    });
+    const site = { decision: "approve", scope: "site" };
+    expect((await send("POST", `/api/approvals/${plain.id}`, site)).status).toBe(422);
+    const rejectForSite = { decision: "reject", scope: "site" };
+    expect((await send("POST", `/api/approvals/${sited.id}`, rejectForSite)).status).toBe(422);
+    const ok = await send("POST", `/api/approvals/${sited.id}`, site);
+    expect(ok.status).toBe(200);
+    expect(approvalSchema.parse(await ok.json())).toMatchObject({
+      status: "approved",
+      site: "shop.example",
+      scope: "site",
+    });
+    await send("POST", `/api/approvals/${plain.id}`, { decision: "reject" });
+  });
+
+  it("manages policy rules: workspace ones by owners, personal ones only ask first", async () => {
+    const empty = policyRuleListSchema.parse(await (await get("/api/policy-rules")).json());
+    expect(empty.items).toEqual([]);
+
+    const created = await send("POST", "/api/policy-rules", {
+      tool: "gmail.send",
+      effect: "ask_first",
+      description: "Mail goes to customers",
+    });
+    expect(created.status).toBe(201);
+    const rule = policyRuleSchema.parse(await created.json());
+    expect(rule).toMatchObject({ scope: "workspace", effect: "ask_first", enabled: true });
+
+    const again = await send("POST", "/api/policy-rules", {
+      tool: "gmail.send",
+      effect: "ask_first",
+    });
+    expect(again.status).toBe(409);
+    const looser = { tool: "web.*", effect: "allow_auto", scope: "personal" };
+    expect((await send("POST", "/api/policy-rules", looser)).status).toBe(422);
+    const badTool = { tool: "Gmail Send", effect: "ask_first" };
+    expect((await send("POST", "/api/policy-rules", badTool)).status).toBe(422);
+    const noAgent = {
+      tool: "*",
+      effect: "ask_first",
+      agentId: "00000000-0000-4000-8000-000000000000",
+    };
+    expect((await send("POST", "/api/policy-rules", noAgent)).status).toBe(422);
+    const mine = await send("POST", "/api/policy-rules", {
+      tool: "*",
+      effect: "ask_first",
+      scope: "personal",
+      agentId,
+    });
+    expect(policyRuleSchema.parse(await mine.json())).toMatchObject({ scope: "personal", agentId });
+
+    const off = await send("PATCH", `/api/policy-rules/${rule.id}`, { enabled: false });
+    expect(policyRuleSchema.parse(await off.json()).enabled).toBe(false);
+    expect((await send("DELETE", `/api/policy-rules/${rule.id}`)).status).toBe(204);
+    expect((await send("DELETE", `/api/policy-rules/${rule.id}`)).status).toBe(404);
+    const left = policyRuleListSchema.parse(await (await get("/api/policy-rules")).json());
+    expect(left.items.map((r) => r.scope)).toEqual(["personal"]);
   });
 
   it("counts today's model requests against the daily quota, and runs per agent", async () => {

@@ -1,4 +1,4 @@
-import { APPROVAL_STATUSES, VERDICTS } from "@ofa/core";
+import { APPROVAL_SCOPES, APPROVAL_STATUSES, VERDICTS } from "@ofa/core";
 import { z } from "zod";
 import { idSchema, timestampSchema } from "./common";
 
@@ -18,6 +18,9 @@ export const approvalSchema = z.object({
   summary: z.string(),
   reasons: z.array(z.string()),
   verdict: z.enum(VERDICTS),
+  /** The site the person may allow for the rest of the run; null when only a one-off answer fits. */
+  site: z.string().nullable(),
+  scope: z.enum(APPROVAL_SCOPES),
   status: z.enum(APPROVAL_STATUSES),
   decidedBy: idSchema.nullable(),
   createdAt: timestampSchema,
@@ -36,5 +39,7 @@ export const approvalListQuerySchema = z.object({
 
 export const decideApprovalRequestSchema = z.object({
   decision: z.enum(["approve", "reject"]),
+  /** `site`: approve every call like it on the approval’s site for the rest of the run. */
+  scope: z.enum(APPROVAL_SCOPES).default("once"),
 });
 export type DecideApprovalRequest = z.infer<typeof decideApprovalRequestSchema>;

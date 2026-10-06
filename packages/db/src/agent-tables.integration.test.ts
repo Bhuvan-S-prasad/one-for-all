@@ -11,17 +11,23 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadRootEnv } from "./env";
 import {
+  createApprovalStore,
   createDatabase,
+  createPolicyRule,
+  createPolicyRuleStore,
   createRunStore,
   createThreadStore,
   createToolCallStore,
   deleteSecret,
   findSecretByName,
+  listPolicyRules,
   listSecrets,
   schema,
+  setPolicyRuleEnabled,
   upsertSecret,
   withDatabaseName,
   withTenant,
+  type PolicyRuleInput,
 } from "./index";
 
 // M2 tables: grants, tool calls, memory, secrets (M2.02). Uses its own
@@ -374,6 +380,99 @@ describe.skipIf(!appUrl || !ownerUrl)("agent tables (integration)", () => {
         tx.select().from(schema.policyRule).where(eq(schema.policyRule.agentId, otherAgent)),
       );
       expect(left).toHaveLength(0);
+    });
+  });
+
+  describe("policy rules and site answers (M4.07)", () => {
+    it("a run sees enabled rules for its agent or all, the workspace's and its person's own", async () => {
+      const otherUser = asId<UserId>(randomUUID());
+      await owner.db
+        .insert(schema.user)
+        .values({ id: otherUser, name: "Dana", email: `dana-${otherUser}@example.com` });
+      const [otherAgent] = await withTenant(app.db, ctx, (tx) =>
+        tx
+          .insert(schema.agent)
+          .values({ workspaceId: ctx.workspaceId, slug: "scout", name: "Scout", spec: SPEC })
+          .returning({ id: schema.agent.id }),
+      );
+      const add = (input: Partial<PolicyRuleInput> & Pick<PolicyRuleInput, "tool">) =>
+        createPolicyRule(app.db, ctx, {
+          effect: "ask_first",
+          scope: "workspace",
+          agentId: null,
+          description: "",
+          ...input,
+        });
+      await add({ tool: "rules.everyone" });
+      await add({ tool: "rules.mine", scope: "personal" });
+      await add({ tool: "rules.this_agent", agentId });
+      await add({ tool: "rules.other_agent", agentId: otherAgent?.id ?? null });
+      const off = await add({ tool: "rules.disabled" });
+      await setPolicyRuleEnabled(app.db, ctx, off?.id ?? "", false);
+      // Someone else's personal rule, written as them.
+      await createPolicyRule(
+        app.db,
+        { ...ctx, userId: otherUser },
+        {
+          tool: "rules.theirs",
+          effect: "ask_first",
+          scope: "personal",
+          agentId: null,
+          description: "",
+        },
+      );
+      expect(await add({ tool: "rules.everyone" })).toBeNull(); // already there
+
+      const store = createPolicyRuleStore(app.db);
+      const seen = await store.listForRun({
+        ...ctx,
+        agentId: asId(agentId),
+        runId: asId(randomUUID()),
+      });
+      expect(
+        seen
+          .map((r) => r.tool)
+          .filter((t) => t.startsWith("rules."))
+          .sort(),
+      ).toEqual(["rules.everyone", "rules.mine", "rules.this_agent"]);
+      expect(seen.find((r) => r.tool === "rules.mine")?.scope).toBe("personal");
+      // The list for Settings: the workspace's and mine, never theirs.
+      const listed = (await listPolicyRules(app.db, ctx)).map((r) => r.tool);
+      expect(listed).toContain("rules.disabled");
+      expect(listed).not.toContain("rules.theirs");
+    });
+
+    it("an approval can be answered for its site only if it names one", async () => {
+      const runId = await newRun();
+      const rc: RunContext = { ...ctx, agentId: asId(agentId), runId: asId(runId) };
+      const approvals = createApprovalStore(app.db);
+      const input = {
+        tool: "browser.click",
+        args: {},
+        summary: "Click",
+        reasons: [],
+        verdict: "approve" as const,
+        expiresAt: new Date(Date.now() + 60_000),
+      };
+      const withSite = await approvals.request(rc, {
+        ...input,
+        toolCallId: "tool-0-0",
+        site: "shop.example",
+      });
+      const without = await approvals.request(rc, { ...input, toolCallId: "tool-1-0" });
+      expect(withSite).toMatchObject({ site: "shop.example", scope: "once" });
+      const decided = await approvals.decide(ctx, withSite.id, {
+        status: "approved",
+        decidedBy: ctx.userId,
+        scope: "site",
+      });
+      expect(decided?.scope).toBe("site");
+      const plain = await approvals.decide(ctx, without.id, {
+        status: "approved",
+        decidedBy: ctx.userId,
+        scope: "site",
+      });
+      expect(plain?.scope).toBe("once");
     });
   });
 

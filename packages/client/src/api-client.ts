@@ -283,8 +283,16 @@ export function createApiClient(options: ApiClientOptions = {}) {
     /** Waiting for an answer, newest first. */
     listApprovals: (filter: { agentId?: string; runId?: string } = {}): Promise<ApprovalList> =>
       request("GET", `/api/approvals${query({ ...filter })}`, approvalListSchema),
-    decideApproval: (id: string, decision: "approve" | "reject"): Promise<Approval> =>
-      request("POST", `/api/approvals/${encodeURIComponent(id)}`, approvalSchema, { decision }),
+    /** `site`: approve every call like it on the approval’s site for the rest of the run. */
+    decideApproval: (
+      id: string,
+      decision: "approve" | "reject",
+      scope: "once" | "site" = "once",
+    ): Promise<Approval> =>
+      request("POST", `/api/approvals/${encodeURIComponent(id)}`, approvalSchema, {
+        decision,
+        scope,
+      }),
 
     // ── Saved logins (M3.08) ───────────────────────────────────────────────
     listLogins: (): Promise<SavedLoginList> => request("GET", "/api/logins", savedLoginListSchema),

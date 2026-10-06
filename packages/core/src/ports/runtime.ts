@@ -171,6 +171,8 @@ export interface ToolExecutionRequest {
   readonly approved?: boolean;
   /** Addresses the run was given so far (`urlKey` form), for the provenance check (§10.3). */
   readonly knownUrls?: readonly string[];
+  /** Sites a person allowed for the rest of this run (see `PolicyInput.allowedSites`). */
+  readonly allowedSites?: readonly string[];
 }
 
 export type ToolOutcome =
@@ -194,6 +196,8 @@ export type ToolOutcome =
       readonly message: string;
       /** For `approve` and `human`: what the call would do, in plain words, for the person deciding. */
       readonly summary?: string;
+      /** The site a person may allow for the rest of the run instead (see `PolicyDecision.allowSite`). */
+      readonly allowSite?: string;
     }
   | {
       readonly status: "error";

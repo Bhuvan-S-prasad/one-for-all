@@ -31,6 +31,10 @@ export const approval = pgTable(
       .notNull()
       .default(sql`'[]'::jsonb`),
     verdict: policyVerdict("verdict").notNull(),
+    /** The site the person may allow for the rest of the run (M4.07); null when only a one-off answer fits. */
+    site: text("site"),
+    /** `site`: the answer covers every call like it on that site for the rest of the run. */
+    scope: text("scope").notNull().default("once"),
     status: text("status").notNull().default("pending"),
     decidedBy: text("decided_by").references(() => user.id, { onDelete: "set null" }),
     createdAt: createdAt(),
@@ -50,6 +54,10 @@ export const approval = pgTable(
     }).onDelete("cascade"),
     unique("approval_run_call_uq").on(t.runId, t.toolCallId),
     check("approval_status_ck", sql`${t.status} in ('pending', 'approved', 'rejected', 'expired')`),
+    check(
+      "approval_scope_ck",
+      sql`${t.scope} = 'once' or (${t.scope} = 'site' and ${t.site} is not null)`,
+    ),
     index("approval_workspace_status_idx").on(t.workspaceId, t.status, t.createdAt),
   ],
 );

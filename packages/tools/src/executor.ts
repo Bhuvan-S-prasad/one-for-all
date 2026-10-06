@@ -136,22 +136,6 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
           };
         }
 
-        const decision = await policy.evaluate({
-          ctx,
-          tool: descriptor,
-          args: parsed.value,
-          tainted: request.tainted,
-          knownUrls: new Set(request.knownUrls ?? []),
-        });
-        span.setAttributes({ "policy.verdict": decision.verdict });
-        if (decision.verdict === "deny") {
-          return {
-            status: "blocked",
-            verdict: "deny",
-            reasons: decision.reasons,
-            message: decision.reasons[0] ?? "Not allowed",
-          };
-        }
         const agent = await options.agents.get(ctx, ctx.agentId);
         const runCtx: ToolRunContext = {
           ...ctx,
@@ -179,6 +163,33 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
             : {}),
         };
 
+        // The site the call acts on: only taint escalation looks at it, so
+        // only a tainted run asks the tool.
+        const site =
+          request.tainted && tool.site
+            ? ((await withTimeout(tool.site(parsed.value, runCtx), 10_000).catch(() => null)) ??
+              undefined)
+            : undefined;
+
+        const decision = await policy.evaluate({
+          ctx,
+          tool: descriptor,
+          args: parsed.value,
+          tainted: request.tainted,
+          knownUrls: new Set(request.knownUrls ?? []),
+          ...(site ? { site } : {}),
+          allowedSites: new Set(request.allowedSites ?? []),
+        });
+        span.setAttributes({ "policy.verdict": decision.verdict });
+        if (decision.verdict === "deny") {
+          return {
+            status: "blocked",
+            verdict: "deny",
+            reasons: decision.reasons,
+            message: decision.reasons[0] ?? "Not allowed",
+          };
+        }
+
         if (decision.verdict !== "auto" && !request.approved) {
           // A person must agree first (§6.2): nothing runs; the harness asks
           // them, showing what the call would do, and calls again if they agree.
@@ -188,6 +199,7 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
             reasons: decision.reasons,
             message: `${request.name} needs a person's approval first.`,
             summary: await redact(ctx, await describe(tool, parsed.value, runCtx)),
+            ...(decision.allowSite ? { allowSite: decision.allowSite } : {}),
           };
         }
 

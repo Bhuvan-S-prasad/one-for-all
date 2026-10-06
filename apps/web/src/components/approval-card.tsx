@@ -1,6 +1,6 @@
 import { useDecideApproval } from "@ofa/client";
 import type { Agent, Approval } from "@ofa/contracts";
-import { Check, ShieldAlert, X } from "lucide-react";
+import { Check, CheckCheck, ShieldAlert, X } from "lucide-react";
 import { shortTime } from "@/lib/format";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -12,6 +12,11 @@ import { cn } from "@/lib/utils";
 /** Why it asks, in plain words, from the policy's reasons. */
 function why(approval: Approval): string {
   const reasons = approval.reasons.join(" ");
+  const always = approval.reasons.find((r) => /always needs? a person/.test(r));
+  if (always)
+    return `${always.charAt(0).toUpperCase()}${always.slice(1)}, whatever its settings say.`;
+  const rule = approval.reasons.find((r) => r.startsWith("asks first by"));
+  if (rule) return `It asks first because of ${rule.replace(/^asks first by /, "")}.`;
   if (/opens an address/.test(reasons)) {
     return "It read outside content in this task, and this address didn't come from you or from anything it read, so it asks before opening it.";
   }
@@ -39,9 +44,9 @@ export function ApprovalCard({
   className?: string;
 }) {
   const decide = useDecideApproval();
-  const answer = (decision: "approve" | "reject") =>
+  const answer = (decision: "approve" | "reject", scope: "once" | "site" = "once") =>
     decide.mutate(
-      { id: approval.id, decision },
+      { id: approval.id, decision, scope },
       { onError: (error) => toast({ message: error.message, tone: "error" }) },
     );
   const [first, ...rest] = approval.summary.split("\n");
@@ -83,6 +88,19 @@ export function ApprovalCard({
           <Check className="size-4" aria-hidden />
           Approve
         </button>
+        {approval.site && (
+          // Only offered when outside content alone made it ask (M4.07).
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => answer("approve", "site")}
+            title={`Clicking, typing and opening pages on ${approval.site} won't ask again in this task. Other sites still ask.`}
+            className="flex h-9 items-center gap-1.5 rounded-full border border-primary/50 px-4 text-[13.5px] font-semibold text-primary outline-none hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+          >
+            <CheckCheck className="size-4" aria-hidden />
+            Allow on {approval.site} for this task
+          </button>
+        )}
         <button
           type="button"
           disabled={busy}

@@ -71,6 +71,12 @@ export interface ToolDefinition<Input = unknown> {
    * change anything. Without it, the card shows the tool and its arguments.
    */
   describe?(args: Input, ctx: ToolRunContext): Promise<string>;
+  /**
+   * The site this call acts on (`shop.example`), so a person can allow it for
+   * the rest of a run that read outside content (M4.07). Must not change
+   * anything; null when there is none.
+   */
+  site?(args: Input, ctx: ToolRunContext): Promise<string | null>;
 }
 
 /** Keeps the input type flowing from the schema into `run`. */

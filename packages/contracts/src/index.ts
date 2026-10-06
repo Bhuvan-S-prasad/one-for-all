@@ -9,6 +9,7 @@ export * from "./familiar";
 export * from "./health";
 export * from "./logins";
 export * from "./memory";
+export * from "./policy";
 export * from "./realtime";
 export * from "./runs";
 export * from "./screen";
