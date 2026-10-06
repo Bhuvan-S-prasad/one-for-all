@@ -28,7 +28,7 @@ import {
   rewrapEnvelope,
   type Envelope,
 } from "./crypto";
-import { createRedactor, MIN_SECRET_LENGTH, type Redactor } from "./redact";
+import { createRedactor, MIN_SECRET_LENGTH, type Redactor, type SecretRegistry } from "./redact";
 
 export interface VaultOptions {
   readonly db: Database;
@@ -38,6 +38,8 @@ export interface VaultOptions {
   readonly previousKeys?: readonly string[];
   /** How long decrypted values are kept for redaction. Default 60 s. */
   readonly redactorTtlMs?: number;
+  /** Learns every value the vault handles in plaintext, for logs and traces (M4.11). */
+  readonly registry?: SecretRegistry;
   readonly now?: () => number;
 }
 
@@ -158,6 +160,7 @@ export function createVault(options: VaultOptions): Vault {
   }
 
   function remember(workspaceId: WorkspaceId, values: Set<string>, expires: number): Redactor {
+    options.registry?.add(values);
     const redact = createRedactor(values);
     known.set(workspaceId, { values, redact, expires });
     return redact;
@@ -199,6 +202,7 @@ export function createVault(options: VaultOptions): Vault {
       const envelope = encryptEnvelope(keys.current, value, aadFor(ctx.workspaceId, name));
       const record = await upsertSecret(db, ctx, { name, ...envelope, hint: hintFor(value) });
       learn(ctx.workspaceId, [value]);
+      options.registry?.add([value]);
       return { id: record.id, name: record.name };
     },
 
@@ -215,6 +219,7 @@ export function createVault(options: VaultOptions): Vault {
       const record = await findSecretById(db, ctx, ref.id);
       if (!record) throw new NotFoundError("Secret");
       const value = decrypt(ctx, record);
+      options.registry?.add([value]);
       if (!record.lastUsedAt || now() - record.lastUsedAt.getTime() > TOUCH_INTERVAL_MS) {
         await markSecretUsed(db, ctx, record.id);
       }
@@ -232,11 +237,14 @@ export function createVault(options: VaultOptions): Vault {
     seal(ctx, scope, value) {
       const envelope = encryptEnvelope(keys.current, value, recordAad(ctx.workspaceId, scope));
       learn(ctx.workspaceId, secretsInRecord(value));
+      options.registry?.add(secretsInRecord(value));
       return envelope;
     },
 
     open(ctx, scope, envelope) {
-      return decryptEnvelope(keys, envelope, recordAad(ctx.workspaceId, scope));
+      const value = decryptEnvelope(keys, envelope, recordAad(ctx.workspaceId, scope));
+      options.registry?.add(secretsInRecord(value));
+      return value;
     },
 
     async rotate(ctx) {

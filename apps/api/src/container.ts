@@ -47,15 +47,17 @@ import {
 } from "@ofa/orchestrator";
 import { createPolicyEngine } from "@ofa/policy";
 import { createDockerSandbox } from "@ofa/sandbox";
-import { createTelemetry, type TelemetryHandle } from "@ofa/telemetry";
+import { createTelemetry, type TelemetryHandle, type TelemetryOptions } from "@ofa/telemetry";
 import {
   builtinTools,
   createSearxngProvider,
   createToolExecutor,
   createToolRegistry,
+  type ToolDefinition,
 } from "@ofa/tools";
 import {
   createOsKeychain,
+  createSecretRegistry,
   createUnconfiguredVault,
   createVault,
   resolveVaultKeys,
@@ -117,6 +119,8 @@ export interface Container {
   readonly dispatcher: RunDispatcher;
   readonly inngest: Inngest;
   readonly functions: ReturnType<typeof createFunctions>;
+  /** What the orchestrator runs agents with. */
+  readonly harness: HarnessDeps;
   readonly setup: SetupService;
   readonly sessions: SessionService;
   /** Release connections and flush telemetry. Call once on shutdown. */
@@ -128,6 +132,14 @@ export interface ContainerOverrides {
   /** Replace the event bus (tests use the in-memory bus). */
   readonly bus?: EventBus & { close?(): Promise<void> };
   readonly dispatcher?: RunDispatcher;
+  /** Where the container's own logger writes; redaction still applies (tests). */
+  readonly logWrite?: (line: string) => void;
+  /** Captures spans, as an OTLP endpoint would receive them (tests). */
+  readonly telemetryExporter?: TelemetryOptions["exporter"];
+  /** Replaces the model gateway (tests use a scripted one). */
+  readonly llm?: LLMGateway;
+  /** Tools added to the built-ins (tests). */
+  readonly extraTools?: readonly ToolDefinition<never>[];
 }
 
 function createLlm(
@@ -161,16 +173,55 @@ function createLlm(
   return { llm, provider, tiers: resolveTiers(provider, tiers) };
 }
 
+/** The server's own secrets: each is redacted from logs and traces. */
+export function configSecrets(config: Config): (string | undefined)[] {
+  const passwordIn = (url: string) => {
+    try {
+      return decodeURIComponent(new URL(url).password) || undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  return [
+    config.auth.secret,
+    config.llm.apiKey,
+    config.sandbox?.token,
+    config.inngest.eventKey,
+    config.inngest.signingKey,
+    passwordIn(config.database.url),
+    passwordIn(config.database.migrationUrl),
+  ];
+}
+
 export function createContainer(config: Config, overrides: ContainerOverrides = {}): Container {
-  const logger = overrides.logger ?? createLogger(config.log, { service: "api" });
+  // Every secret this process holds, so logs and traces never carry one
+  // (hard rule 4): the server's own from config, and what the vault decrypts.
+  const secrets = createSecretRegistry();
+  secrets.add(configSecrets(config));
+  const logger =
+    overrides.logger ??
+    createLogger(
+      {
+        ...config.log,
+        redact: secrets.redact,
+        ...(overrides.logWrite ? { write: overrides.logWrite } : {}),
+      },
+      { service: "api" },
+    );
   const database = createDatabase(config.database.url);
   const { db } = database;
   const auth = createAuth(db, config);
   // The vault key comes from the environment or the OS keychain (M4.02).
   const keychain = () => createOsKeychain();
   const vaultKeys = resolveVaultKeys(config.vault, keychain);
+  secrets.add([vaultKeys?.key, ...(vaultKeys?.previousKeys ?? [])]);
   const fullVault = vaultKeys
-    ? createVault({ db, key: vaultKeys.key, previousKeys: vaultKeys.previousKeys })
+    ? createVault({
+        db,
+        key: vaultKeys.key,
+        previousKeys: vaultKeys.previousKeys,
+        registry: secrets,
+      })
     : null;
   const vault = fullVault ?? createUnconfiguredVault();
   const vaultRotation: VaultRotation | null =
@@ -183,11 +234,15 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
           },
         }
       : null;
-  const { llm, provider, tiers } = createLlm(config, vault);
+  const made = createLlm(config, vault);
+  const { provider, tiers } = made;
+  const llm = overrides.llm ?? made.llm;
   const telemetry: TelemetryHandle = createTelemetry({
     serviceName: "one-for-all",
     version: config.version,
     endpoint: config.telemetry.otlpEndpoint,
+    redact: secrets.redact,
+    ...(overrides.telemetryExporter ? { exporter: overrides.telemetryExporter } : {}),
   });
 
   // Event bus: Postgres LISTEN/NOTIFY in self-host (ADR-0007).
@@ -211,7 +266,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
           ? createSearxngProvider({ baseUrl: config.search.searxngUrl })
           : null,
         sandbox,
-      }),
+      }).concat(overrides.extraTools ?? []),
     ),
     policy: createPolicyEngine({ agents }),
     calls: createToolCallStore(db),
@@ -240,6 +295,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     threads,
     memory,
     approvals,
+    redact: (ctx, text) => vault.redact(ctx, text),
     middleware: [createTelemetryMiddleware(telemetry)],
   };
 
@@ -271,6 +327,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     dispatcher: overrides.dispatcher ?? createRunDispatcher(inngest),
     inngest,
     functions,
+    harness,
     setup: createSetupService({ db, auth }),
     sessions: createSessionService({ db, auth }),
     async close() {

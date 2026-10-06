@@ -127,7 +127,13 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
         // goes back to the model to fix, and never reaches the tool (M2.29).
         const parsed = registry.validate(request.name, request.args);
         if (!parsed.ok) {
-          return { status: "error", code: "invalid_args", message: parsed.message, durationMs: 0 };
+          return {
+            status: "error",
+            code: "invalid_args",
+            // A validator can quote the value it refused.
+            message: await redact(ctx, parsed.message),
+            durationMs: 0,
+          };
         }
 
         const decision = await policy.evaluate({

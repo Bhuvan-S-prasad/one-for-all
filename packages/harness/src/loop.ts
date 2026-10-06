@@ -31,6 +31,7 @@ import {
 } from "./context";
 import { modelCallEvents, runEvent } from "./events";
 import { MiddlewareChain, type HarnessMiddleware, type RunHookContext } from "./middleware";
+import { redactJson, type RedactText } from "./redaction";
 
 // The agent loop (ARCHITECTURE.md §6.2). Every side effect happens inside a
 // durable step (hard rule 6): model calls, tool calls, run-log writes and the
@@ -65,6 +66,11 @@ export interface HarnessDeps {
    * wait, calls that need a person are refused.
    */
   readonly approvals?: ApprovalStore;
+  /**
+   * Replaces known secret values (the vault's redaction). Applied to every
+   * run event, approval request and reply before it is stored (hard rule 4).
+   */
+  readonly redact?: RedactText;
   readonly middleware?: readonly HarnessMiddleware[];
   readonly options?: HarnessOptions;
 }
@@ -168,7 +174,9 @@ export async function runAgent(
   const { ctx } = input;
   const options = deps.options ?? {};
   const chain = new MiddlewareChain(deps.middleware ?? []);
-  const log = (events: RunEventWrite[]) => deps.runs.append(ctx, ctx.runId, events);
+  const redact: RedactText = deps.redact ?? (async (_ctx, text) => text);
+  const log = async (events: RunEventWrite[]) =>
+    deps.runs.append(ctx, ctx.runId, await redactJson(redact, ctx, events));
   let hook: RunHookContext | null = null;
   /** Addresses the run was given, in `urlKey` form (filled in as the run goes). */
   const knownUrls = new Set<string>();
@@ -447,14 +455,15 @@ export async function runAgent(
         : (STOP_NOTES[stopReason] ?? "I stopped before finishing.");
     const messageId = input.threadId
       ? await steps.run("reply", async () => {
+          const content = await redact(ctx, replyText);
           const id = await deps.threads.addAgentMessage(ctx, {
             threadId: input.threadId as ThreadId,
-            content: replyText,
+            content,
           });
           await log([
             runEvent("reply", "message.created", {
               messageId: id,
-              preview: preview(replyText, 280),
+              preview: preview(content, 280),
             }),
           ]);
           return id as string;
@@ -491,8 +500,8 @@ export async function runAgent(
       const record = await approvals.request(ctx, {
         toolCallId,
         tool: call.name,
-        args: call.args,
-        summary: approval.summary,
+        args: await redactJson(redact, ctx, call.args),
+        summary: await redact(ctx, approval.summary),
         reasons: approval.reasons,
         verdict: approval.verdict,
         expiresAt: new Date(Date.now() + timeoutMs),
@@ -581,7 +590,8 @@ export async function runAgent(
       outcome = {
         status: "error",
         code: "tool_crashed",
-        message: errorMessage(error),
+        // It goes to the model as well as the run log.
+        message: await redact(ctx, errorMessage(error)),
         durationMs: 0,
       };
     }

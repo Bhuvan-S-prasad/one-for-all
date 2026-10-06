@@ -62,4 +62,18 @@ describe("createLogger", () => {
       status: 200,
     });
   });
+
+  it("redacts every line, errors included", () => {
+    const lines: string[] = [];
+    const secret = "secret-value-0123";
+    const logger = createLogger({
+      level: "info",
+      format: "pretty",
+      write: (l) => lines.push(l),
+      redact: (text) => text.split(secret).join("[REDACTED]"),
+    });
+    logger.error(`saw ${secret}`, { error: new Error(`bad ${secret}`), key: secret });
+    expect(lines[0]).toContain("saw [REDACTED]");
+    expect(lines[0]).not.toContain(secret);
+  });
 });

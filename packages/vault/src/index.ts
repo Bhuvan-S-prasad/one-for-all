@@ -23,11 +23,13 @@ export {
 } from "./keychain";
 export {
   createRedactor,
+  createSecretRegistry,
   MIN_SECRET_LENGTH,
   REDACTED,
   redactSecrets,
   redactValue,
   type Redactor,
+  type SecretRegistry,
 } from "./redact";
 export { rotateInstall, type InstallRotation } from "./rotate";
 export {

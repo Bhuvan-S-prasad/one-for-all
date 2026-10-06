@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   createKeyring,
   createRedactor,
+  createSecretRegistry,
   decryptEnvelope,
   encryptEnvelope,
   parseVaultKey,
@@ -112,6 +113,18 @@ describe("record values", () => {
 
   it("treats a value that isn't JSON as one secret", () => {
     expect(secretsInRecord("plain-secret-value")).toEqual(["plain-secret-value"]);
+  });
+});
+
+describe("secret registry", () => {
+  it("redacts every value it was given, and ignores short or empty ones", () => {
+    const registry = createSecretRegistry();
+    expect(registry.redact("nothing yet")).toBe("nothing yet");
+    registry.add(["first-secret-01", undefined, null, "short"]);
+    registry.add(["second-secret-02", "first-secret-01"]);
+    expect(registry.redact("first-secret-01 second-secret-02 short")).toBe(
+      `${REDACTED} ${REDACTED} short`,
+    );
   });
 });
 

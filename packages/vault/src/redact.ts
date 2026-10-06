@@ -45,3 +45,38 @@ export function redactValue<T>(value: T, redact: Redactor): T {
   }
   return value;
 }
+
+/**
+ * Every secret value this process has held in plaintext: what the vault
+ * decrypted or encrypted, plus the server's own secrets from its config.
+ * Logs and traces have no workspace to ask the vault about, so they redact
+ * against this (hard rule 4). Values are never removed: a replaced secret may
+ * still be in output from moments ago.
+ */
+export interface SecretRegistry {
+  add(values: Iterable<string | undefined | null>): void;
+  readonly redact: Redactor;
+}
+
+export function createSecretRegistry(): SecretRegistry {
+  const values = new Set<string>();
+  let current: Redactor = (text) => text;
+  let stale = false;
+  return {
+    add(more) {
+      for (const value of more) {
+        if (value && value.length >= MIN_SECRET_LENGTH && !values.has(value)) {
+          values.add(value);
+          stale = true;
+        }
+      }
+    },
+    redact(text) {
+      if (stale) {
+        current = createRedactor(values);
+        stale = false;
+      }
+      return current(text);
+    },
+  };
+}
