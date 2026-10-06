@@ -20,6 +20,7 @@ import {
   createToolCallStore,
   deleteSecret,
   findSecretByName,
+  listConnectionsDueForRefresh,
   listPolicyRules,
   listSecrets,
   schema,
@@ -330,6 +331,74 @@ describe.skipIf(!appUrl || !ownerUrl)("agent tables (integration)", () => {
         ),
       );
       expect(crossed.code).toBe("23503"); // foreign key violation
+    });
+
+    it("due for refresh (M4.06): active sign-ins running out soon, across workspaces, IDs only", async () => {
+      const otherId = asId<WorkspaceId>(randomUUID());
+      await owner.db.insert(schema.workspace).values({ id: otherId, name: "Workspace E" });
+      await owner.db
+        .insert(schema.membership)
+        .values({ workspaceId: otherId, userId: ctx.userId, role: "owner" });
+      const other: TenantContext = { workspaceId: otherId, userId: ctx.userId };
+      const sealed = { credentialsCiphertext: "v1.a", keyCiphertext: "v1.b", keyId: "k1" };
+      const minutes = (n: number) => new Date(Date.now() + n * 60_000);
+      async function signedIn(
+        tenant: TenantContext,
+        slug: string,
+        values: Partial<typeof schema.connection.$inferInsert>,
+      ) {
+        const [server] = await withTenant(app.db, tenant, (tx) =>
+          tx
+            .insert(schema.mcpServer)
+            .values({
+              workspaceId: tenant.workspaceId,
+              slug,
+              name: slug,
+              url: "https://x.example/mcp",
+            })
+            .returning({ id: schema.mcpServer.id }),
+        );
+        await withTenant(app.db, tenant, (tx) =>
+          tx.insert(schema.connection).values({
+            workspaceId: tenant.workspaceId,
+            mcpServerId: server!.id,
+            userId: tenant.userId,
+            ...values,
+          }),
+        );
+        return server!.id;
+      }
+      const soon = await signedIn(ctx, "due_soon", {
+        status: "active",
+        expiresAt: minutes(5),
+        ...sealed,
+      });
+      const elsewhere = await signedIn(other, "due_elsewhere", {
+        status: "active",
+        expiresAt: minutes(-1),
+        ...sealed,
+      });
+      const ours = new Set([
+        soon,
+        elsewhere,
+        await signedIn(ctx, "due_later", { status: "active", expiresAt: minutes(120), ...sealed }),
+        await signedIn(ctx, "due_reauth", { status: "needs_reauth", expiresAt: minutes(5) }),
+        await signedIn(ctx, "due_never", { status: "active", expiresAt: null, ...sealed }),
+      ]);
+
+      const due = (await listConnectionsDueForRefresh(owner.db, minutes(15))).filter((c) =>
+        ours.has(c.mcpServerId),
+      );
+      // Soonest first; the later one, the one needing a sign-in and the one that never expires are left out.
+      expect(due.map((c) => c.mcpServerId)).toEqual([elsewhere, soon]);
+      expect(due[0]).toEqual({
+        workspaceId: otherId,
+        userId: ctx.userId,
+        mcpServerId: elsewhere,
+        expiresAt: expect.any(Date),
+      });
+      // The app's own connection sees no workspace without a tenant: it needs the owner one.
+      expect(await listConnectionsDueForRefresh(app.db, minutes(15))).toEqual([]);
     });
 
     it("policy rules: personal rules only tighten, and each rule exists once", async () => {

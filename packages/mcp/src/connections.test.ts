@@ -112,6 +112,55 @@ describe("MCP connections", () => {
     expect(await mcp.refresh(alice, server.id)).toBe("sign_in_required");
   });
 
+  it("leaves the sign-in as it is when the provider is down, and refreshes once it's back", async () => {
+    await signIn(alice);
+    const before = await store.getConnection(alice, server.id);
+    fake.failRefreshes(true);
+    await expect(mcp.refresh(alice, server.id)).rejects.toMatchObject({ reason: "unavailable" });
+    const after = await store.getConnection(alice, server.id);
+    expect(after).toMatchObject({ status: "active", lastError: null, oauthState: null });
+    // No sign-in was started on the way: still the same tokens, no verifier.
+    expect(plainOf(after!.credentials)).toBe(plainOf(before!.credentials));
+    fake.failRefreshes(false);
+    expect(await mcp.refresh(alice, server.id)).toBe("refreshed");
+    expect(fake.counts.refreshed).toBe(1);
+  });
+
+  it("two refreshes at once: the one whose used refresh token is refused counts as refreshed", async () => {
+    await signIn(alice);
+    // The fake's refresh tokens work once, like Notion's: one of these gets "invalid_grant".
+    expect(
+      await Promise.all([mcp.refresh(alice, server.id), mcp.refresh(alice, server.id)]),
+    ).toEqual(["refreshed", "refreshed"]);
+    expect(fake.counts.refreshed).toBe(1);
+    expect(await store.getConnection(alice, server.id)).toMatchObject({ status: "active" });
+    fake.expireAccessTokens();
+    expect(await mcp.refresh(alice, server.id)).toBe("refreshed");
+    const session = await mcp.connect(alice, server.id);
+    expect((await session.callTool("search", { query: "x" })).isError).toBe(false);
+    await session.close();
+  });
+
+  it("without a refresh token: fine until it runs out, then asks for a sign-in", async () => {
+    await fake.close();
+    fake = await startFakeMcpServer({ refreshTokens: false });
+    let clock = Date.now();
+    mcp = createMcpConnections({
+      store,
+      cipher: testCipher,
+      redirectUrl: REDIRECT,
+      now: () => clock,
+    });
+    server = (await store.createServer(alice, { slug: "plain", name: "Plain", url: fake.mcpUrl }))!;
+    await signIn(alice);
+    expect(await mcp.refresh(alice, server.id)).toBe("no_refresh_token");
+    expect((await store.getConnection(alice, server.id))?.status).toBe("active");
+    clock += 2 * 60 * 60_000;
+    expect(await mcp.refresh(alice, server.id)).toBe("sign_in_required");
+    expect(await store.getConnection(alice, server.id)).toMatchObject({ status: "needs_reauth" });
+    expect(fake.counts.refreshed).toBe(0);
+  });
+
   it("refuses a server that moves its sign-in elsewhere", async () => {
     await signIn(alice);
     await mcp.disconnect(alice, server.id);

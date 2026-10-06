@@ -19,7 +19,7 @@ export {
 } from "./repos/agents";
 export { createApprovalStore } from "./repos/approvals";
 export { createArtifactStore } from "./repos/artifacts";
-export { createConnectionStore } from "./repos/connections";
+export { createConnectionStore, listConnectionsDueForRefresh } from "./repos/connections";
 export { recordAudit, type AuditEntry } from "./repos/audit";
 export {
   directThread,

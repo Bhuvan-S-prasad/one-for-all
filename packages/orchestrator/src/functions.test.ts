@@ -1,6 +1,7 @@
+import type { TenantContext, TokenRefresher } from "@ofa/core";
 import { NonRetriableError, RetryAfterError } from "inngest";
 import { describe, expect, it } from "vitest";
-import { inngestSteps } from "./functions";
+import { inngestSteps, refreshDue, TOKEN_REFRESH_AHEAD_MS } from "./functions";
 
 // A stand-in for Inngest's `step.run`: runs the function, passes errors through.
 const step = { run: (_id: string, fn: () => Promise<unknown>) => fn() };
@@ -64,5 +65,54 @@ describe("inngestSteps", () => {
       },
     ]);
     await expect(wait("x' || true || '")).rejects.toThrow(/Unsafe/);
+  });
+});
+
+describe("token refresh (M4.06)", () => {
+  it("refreshes each due sign-in in its own step, as its person, and counts what happened", async () => {
+    const now = Date.parse("2026-10-06T12:00:00Z");
+    let asked: Date | undefined;
+    const refreshed: [TenantContext, string][] = [];
+    const due = (n: number) => ({
+      workspaceId: "ws",
+      userId: `user-${n}`,
+      mcpServerId: `server-${n}`,
+      expiresAt: new Date(now),
+    });
+    const refresher: TokenRefresher = {
+      listDue: async (before) => {
+        asked = before;
+        return [due(1), due(2), due(3), due(4)];
+      },
+      refresh: async (ctx, serverId) => {
+        refreshed.push([ctx, serverId]);
+        if (serverId === "server-2") throw new Error("provider down");
+        if (serverId === "server-3") return "sign_in_required";
+        return "refreshed";
+      },
+    };
+    const ids: string[] = [];
+    const steps = inngestSteps({ run: (id, fn) => (ids.push(id), fn()) });
+    expect(await refreshDue(refresher, steps, () => now)).toEqual({
+      due: 4,
+      refreshed: 2,
+      failed: 1,
+      sign_in_required: 1,
+    });
+    expect(asked).toEqual(new Date(now + TOKEN_REFRESH_AHEAD_MS));
+    // One provider being down didn't stop the others.
+    expect(refreshed.map(([ctx, id]) => [ctx.userId, id])).toEqual([
+      ["user-1", "server-1"],
+      ["user-2", "server-2"],
+      ["user-3", "server-3"],
+      ["user-4", "server-4"],
+    ]);
+    expect(ids).toEqual([
+      "list-due",
+      "refresh-server-1-user-1",
+      "refresh-server-2-user-2",
+      "refresh-server-3-user-3",
+      "refresh-server-4-user-4",
+    ]);
   });
 });

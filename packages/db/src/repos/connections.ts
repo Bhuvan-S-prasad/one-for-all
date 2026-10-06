@@ -3,13 +3,14 @@ import type {
   ConnectionRecord,
   ConnectionStatus,
   ConnectionStore,
+  DueConnection,
   McpAuthKind,
   McpServerRecord,
   McpToolInfo,
   SealedValue,
   TenantContext,
 } from "@ofa/core";
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import type { Database } from "../client";
 import { connection, mcpServer } from "../schema/index";
 import { withTenant, type Tx } from "../tenant";
@@ -98,6 +99,37 @@ async function connectionOf(
     .where(and(eq(connection.mcpServerId, serverId), mine(ctx)))
     .limit(1);
   return row ? toConnection(row) : null;
+}
+
+/**
+ * Maintenance only (background token refresh, M4.06): active connections
+ * whose access token runs out before `before`, soonest first. Needs the owner
+ * connection (`DATABASE_MIGRATION_URL`), like `listWorkspaceOwners`; it
+ * returns IDs only, and each refresh then goes through tenant-scoped queries.
+ */
+export async function listConnectionsDueForRefresh(
+  ownerDb: Database,
+  before: Date,
+  limit = 100,
+): Promise<DueConnection[]> {
+  const rows = await ownerDb
+    .select({
+      workspaceId: connection.workspaceId,
+      userId: connection.userId,
+      mcpServerId: connection.mcpServerId,
+      expiresAt: connection.expiresAt,
+    })
+    .from(connection)
+    .where(
+      and(
+        eq(connection.status, "active"),
+        isNotNull(connection.credentialsCiphertext),
+        lt(connection.expiresAt, before),
+      ),
+    )
+    .orderBy(asc(connection.expiresAt))
+    .limit(limit);
+  return rows.map((row) => ({ ...row, expiresAt: row.expiresAt! }));
 }
 
 export function createConnectionStore(db: Database): ConnectionStore {

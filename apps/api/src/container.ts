@@ -17,6 +17,7 @@ import type {
   SandboxProvider,
   TenantContext,
   ThreadStore,
+  TokenRefresher,
 } from "@ofa/core";
 import {
   createAgentDirectory,
@@ -28,6 +29,7 @@ import {
   createRunStore,
   createThreadStore,
   createToolCallStore,
+  listConnectionsDueForRefresh,
   type Database,
 } from "@ofa/db";
 import { createPgEventBus, workspaceEvent } from "@ofa/events";
@@ -208,6 +210,49 @@ export function configSecrets(config: Config): (string | undefined)[] {
   ];
 }
 
+/**
+ * Background token refresh (M4.06). Finding sign-ins that run out soon spans
+ * workspaces, so it reads IDs through the owner connection, as vault rotation
+ * does; each refresh then acts as that person, through tenant-scoped queries.
+ */
+function createTokenRefresher(config: Config, mcp: McpConnections, logger: Logger): TokenRefresher {
+  let warned = false;
+  return {
+    async listDue(before) {
+      if (config.database.migrationUrl === config.database.url) {
+        if (!warned) {
+          logger.warn(
+            "mcp: background token refresh needs DATABASE_MIGRATION_URL (the owner connection); sign-ins are refreshed when used meanwhile",
+          );
+          warned = true;
+        }
+        return [];
+      }
+      const owner = createDatabase(config.database.migrationUrl, { max: 1 });
+      try {
+        return await listConnectionsDueForRefresh(owner.db, before);
+      } finally {
+        await owner.close();
+      }
+    },
+    async refresh(ctx, serverId) {
+      try {
+        const outcome = await mcp.refresh(ctx, serverId);
+        if (outcome === "sign_in_required") {
+          logger.info("mcp: a sign-in expired and needs the person again", { serverId });
+        }
+        return outcome;
+      } catch (error) {
+        logger.warn("mcp: couldn't refresh a sign-in; trying again at the next check", {
+          serverId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    },
+  };
+}
+
 export function createContainer(config: Config, overrides: ContainerOverrides = {}): Container {
   // Every secret this process holds, so logs and traces never carry one
   // (hard rule 4): the server's own from config, and what the vault decrypts.
@@ -341,7 +386,13 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     baseUrl: config.inngest.baseUrl,
     eventKey: config.inngest.eventKey,
   });
-  const functions = createFunctions(inngest, { harness, runs, approvals });
+  const tokenRefresh = mcp ? createTokenRefresher(config, mcp, logger) : null;
+  const functions = createFunctions(inngest, {
+    harness,
+    runs,
+    approvals,
+    ...(tokenRefresh ? { tokenRefresh } : {}),
+  });
 
   return {
     config,

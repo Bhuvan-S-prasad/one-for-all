@@ -1,4 +1,10 @@
-import { auth, createMCPClient, UnauthorizedError, type MCPClient } from "@ai-sdk/mcp";
+import {
+  auth,
+  createMCPClient,
+  UnauthorizedError,
+  type MCPClient,
+  type OAuthClientProvider,
+} from "@ai-sdk/mcp";
 import {
   AppError,
   McpError,
@@ -9,6 +15,7 @@ import {
   type McpToolInfo,
   type RecordCipher,
   type TenantContext,
+  type TokenRefreshOutcome,
 } from "@ofa/core";
 import { CATALOG, type CatalogEntry } from "./catalog";
 import { createDbAuthProvider, type DbAuthProvider } from "./provider";
@@ -74,8 +81,12 @@ export interface McpConnections {
    * one is refreshed first.
    */
   fetchAs(ctx: TenantContext, serverId: string, url: string, init?: RequestInit): Promise<Response>;
-  /** Refresh the person's tokens now (background refresh, M4.06). */
-  refresh(ctx: TenantContext, serverId: string): Promise<"refreshed" | "sign_in_required">;
+  /**
+   * Refresh the person's tokens now (background refresh, M4.06). Never starts
+   * a new sign-in: a refused refresh token asks the person to sign in again,
+   * and a provider that can't be reached throws and leaves the sign-in as it is.
+   */
+  refresh(ctx: TenantContext, serverId: string): Promise<TokenRefreshOutcome>;
   disconnect(ctx: TenantContext, serverId: string): Promise<boolean>;
 }
 
@@ -157,6 +168,65 @@ export function createMcpConnections(options: McpConnectionsOptions): McpConnect
       });
     }
     return new McpError("sign_in_required", `Sign in to ${server.name} first.`);
+  }
+
+  /**
+   * Refresh with the refresh token, and nothing else. When a refresh fails,
+   * the library starts a new sign-in, and it does so for a provider that is
+   * down as well as for a refused token; here that start is only noted. A
+   * refused token has been dropped by then (`invalidateCredentials`), so what
+   * is left tells the two apart.
+   */
+  async function refreshTokens(
+    ctx: TenantContext,
+    server: McpServerRecord,
+    provider: DbAuthProvider,
+  ): Promise<TokenRefreshOutcome> {
+    const before = provider.connection;
+    if (!before || before.status !== "active") return "sign_in_required";
+    if (!(await provider.tokens())?.refresh_token) {
+      const expired = before.expiresAt && before.expiresAt.getTime() <= (options.now ?? Date.now)();
+      if (!expired) return "no_refresh_token";
+      await signInRequired(ctx, server);
+      return "sign_in_required";
+    }
+    let raced = false;
+    const refreshOnly: OAuthClientProvider = {
+      ...provider,
+      // Once someone else's refresh is seen, there's nothing to retry with.
+      tokens: () => (raced ? undefined : provider.tokens()),
+      saveState: async () => {},
+      saveCodeVerifier: async () => {},
+      redirectToAuthorization: () => {},
+      async invalidateCredentials(scope) {
+        if (scope === "tokens") {
+          // Refreshed meanwhile by someone else (a run, another tick). With
+          // refresh tokens used once, ours is spent and theirs is fine.
+          const now = await store.getConnection(ctx, server.id);
+          if (
+            now?.status === "active" &&
+            now.refreshedAt?.getTime() !== before.refreshedAt?.getTime()
+          ) {
+            raced = true;
+            return;
+          }
+        }
+        await provider.invalidateCredentials?.(scope);
+      },
+    };
+    let result: Awaited<ReturnType<typeof auth>>;
+    try {
+      result = await auth(refreshOnly, { serverUrl: server.url });
+    } catch (error) {
+      if (raced) return "refreshed";
+      return rethrow(server, error);
+    }
+    if (result === "AUTHORIZED" || raced) return "refreshed";
+    if (!(await provider.tokens())) return "sign_in_required";
+    throw new McpError(
+      "unavailable",
+      `Couldn't refresh the sign-in to ${server.name}: it didn't answer. Nothing changed.`,
+    );
   }
 
   return {
@@ -305,19 +375,7 @@ export function createMcpConnections(options: McpConnectionsOptions): McpConnect
 
     async refresh(ctx, serverId) {
       const server = await serverOf(ctx, serverId);
-      const provider = await providerFor(ctx, server);
-      if (!provider.connection || provider.connection.status === "pending") {
-        return "sign_in_required";
-      }
-      try {
-        // Refreshes with the refresh token; without one, or if it was refused,
-        // it starts a new sign-in instead, which only the person can finish.
-        if ((await auth(provider, { serverUrl: server.url })) === "AUTHORIZED") return "refreshed";
-      } catch (error) {
-        rethrow(server, error);
-      }
-      await signInRequired(ctx, server);
-      return "sign_in_required";
+      return refreshTokens(ctx, server, await providerFor(ctx, server));
     },
 
     async fetchAs(ctx, serverId, url, init = {}) {
@@ -326,16 +384,19 @@ export function createMcpConnections(options: McpConnectionsOptions): McpConnect
       if (!entryOf(server)?.apiOrigins?.includes(origin)) {
         throw new McpError("unavailable", `${server.name}'s sign-in can't be used for ${origin}.`);
       }
-      const provider = await providerFor(ctx, server);
+      let provider = await providerFor(ctx, server);
       if (provider.connection?.status !== "active") throw await signInRequired(ctx, server);
 
-      const refresh = async (): Promise<void> => {
-        try {
-          if ((await auth(provider, { serverUrl: server.url })) === "AUTHORIZED") return;
-        } catch (error) {
-          rethrow(server, error);
+      /** Refresh, then read the tokens again (someone else may have refreshed them). */
+      const refresh = async (whenRefused: "sign_in" | "try_anyway"): Promise<void> => {
+        const outcome = await refreshTokens(ctx, server, provider);
+        if (
+          outcome === "sign_in_required" ||
+          (outcome !== "refreshed" && whenRefused === "sign_in")
+        ) {
+          throw await signInRequired(ctx, server);
         }
-        throw await signInRequired(ctx, server);
+        provider = await providerFor(ctx, server);
       };
       const send = async (): Promise<Response> => {
         const headers = new Headers(init.headers);
@@ -347,13 +408,14 @@ export function createMcpConnections(options: McpConnectionsOptions): McpConnect
         }
       };
 
-      const expiresAt = provider.connection.expiresAt?.getTime();
+      const expiresAt = provider.connection?.expiresAt?.getTime();
       if (expiresAt !== undefined && expiresAt < (options.now ?? Date.now)() + 60_000) {
-        await refresh();
+        // Without a refresh token, the request itself tells whether it still works.
+        await refresh("try_anyway");
       }
       let res = await send();
       if (res.status === 401) {
-        await refresh();
+        await refresh("sign_in");
         res = await send();
         if (res.status === 401) throw await signInRequired(ctx, server);
       }

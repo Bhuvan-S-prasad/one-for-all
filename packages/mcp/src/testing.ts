@@ -33,6 +33,8 @@ export interface FakeMcpServer {
   expireAccessTokens(): void;
   /** Refuse refresh tokens from now on (the person revoked access). */
   revokeRefreshTokens(): void;
+  /** Answer refreshes with a server error, as a provider that is down does. */
+  failRefreshes(failing: boolean): void;
   /** Advertise a different authorization server (a server that moved its sign-in). */
   advertiseAuthorizationServer(url: string): void;
   /** A Gmail draft for the fake Gmail API at `/gmail/v1` (M4.05). */
@@ -77,7 +79,11 @@ function json(res: ServerResponse, status: number, value: unknown, headers = {})
 const token = () => randomBytes(18).toString("base64url");
 
 export async function startFakeMcpServer(
-  options: { readonly tools?: readonly FakeTool[] } = {},
+  options: {
+    readonly tools?: readonly FakeTool[];
+    /** Issue no refresh tokens, as some providers don't. */
+    readonly refreshTokens?: false;
+  } = {},
 ): Promise<FakeMcpServer> {
   const tools = options.tools ?? DEFAULT_TOOLS;
   const clients = new Map<string, { redirectUris: string[] }>();
@@ -86,6 +92,7 @@ export async function startFakeMcpServer(
   const refreshTokens = new Set<string>();
   const counts = { registered: 0, authorized: 0, refreshed: 0, calls: 0 };
   let refuseRefresh = false;
+  let failRefresh = false;
   let base = "";
   let advertised = "";
   const drafts = new Map<string, { to: string; subject: string; body: string }>();
@@ -99,10 +106,10 @@ export async function startFakeMcpServer(
     const access = token();
     const refresh = token();
     accessTokens.add(access);
-    refreshTokens.add(refresh);
+    if (options.refreshTokens !== false) refreshTokens.add(refresh);
     json(res, 200, {
       access_token: access,
-      refresh_token: refresh,
+      ...(options.refreshTokens !== false ? { refresh_token: refresh } : {}),
       token_type: "Bearer",
       expires_in: 3600,
       scope: "read write",
@@ -215,6 +222,11 @@ export async function startFakeMcpServer(
         }
         if (form.get("grant_type") === "refresh_token") {
           const refresh = form.get("refresh_token") ?? "";
+          if (failRefresh) {
+            // A proxy's error page, not an OAuth answer.
+            res.writeHead(503, { "content-type": "text/html" });
+            return res.end("<h1>Service Unavailable</h1>");
+          }
           if (refuseRefresh || !refreshTokens.delete(refresh)) {
             return json(res, 400, { error: "invalid_grant" });
           }
@@ -288,6 +300,7 @@ export async function startFakeMcpServer(
     counts,
     expireAccessTokens: () => accessTokens.clear(),
     revokeRefreshTokens: () => void (refuseRefresh = true),
+    failRefreshes: (failing) => void (failRefresh = failing),
     advertiseAuthorizationServer: (url) => void (advertised = url),
     addDraft: (id, draft) => void drafts.set(id, draft),
     sentDrafts,

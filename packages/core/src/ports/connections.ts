@@ -137,6 +137,28 @@ export interface ConnectionStore {
   deleteConnection(ctx: TenantContext, serverId: string): Promise<boolean>;
 }
 
+/** A connection whose access token runs out soon, across workspaces (M4.06). IDs only. */
+export interface DueConnection {
+  readonly workspaceId: string;
+  readonly userId: string;
+  readonly mcpServerId: string;
+  readonly expiresAt: Date;
+}
+
+/**
+ * What refreshing a sign-in came to. `no_refresh_token`: the provider gave
+ * none, and the access token still works for now.
+ */
+export type TokenRefreshOutcome = "refreshed" | "no_refresh_token" | "sign_in_required";
+
+/** Background token refresh (M4.06): keeps idle sign-ins working. */
+export interface TokenRefresher {
+  /** Active connections whose access token runs out before `before`, soonest first. */
+  listDue(before: Date): Promise<DueConnection[]>;
+  /** Refresh one person's sign-in; throws when the provider can't be reached. */
+  refresh(ctx: TenantContext, serverId: string): Promise<TokenRefreshOutcome>;
+}
+
 /** Why an MCP server could not be used, for the person and the agent. */
 export const MCP_ERROR_REASONS = [
   /** No sign-in yet, or it expired and could not be refreshed. */
