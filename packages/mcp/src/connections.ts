@@ -117,6 +117,12 @@ export function createMcpConnections(options: McpConnectionsOptions): McpConnect
   const catalog = options.catalog ?? CATALOG;
   const entryOf = (server: McpServerRecord) =>
     server.catalogId ? catalog.find((e) => e.id === server.catalogId) : undefined;
+  /**
+   * Where sign-in starts: the MCP server, which says where its sign-in is, or
+   * for an app without one (ADR-0031) its sign-in site itself.
+   */
+  const signInAt = (server: McpServerRecord): string =>
+    entryOf(server)?.kind === "api" && server.authOrigin ? server.authOrigin : server.url;
 
   /** Seal a pre-registered client: it was not registered by us, so it is never replaced automatically. */
   async function saveOwnClient(ctx: TenantContext, serverId: string, client: OwnClient) {
@@ -216,7 +222,7 @@ export function createMcpConnections(options: McpConnectionsOptions): McpConnect
     };
     let result: Awaited<ReturnType<typeof auth>>;
     try {
-      result = await auth(refreshOnly, { serverUrl: server.url });
+      result = await auth(refreshOnly, { serverUrl: signInAt(server) });
     } catch (error) {
       if (raced) return "refreshed";
       return rethrow(server, error);
@@ -269,7 +275,7 @@ export function createMcpConnections(options: McpConnectionsOptions): McpConnect
       const provider = await providerFor(ctx, server);
       try {
         const result = await auth(provider, {
-          serverUrl: server.url,
+          serverUrl: signInAt(server),
           // Only what the entry asks for, not every scope the server offers.
           ...(entry?.scopes ? { scope: entry.scopes.join(" ") } : {}),
         });
@@ -293,7 +299,7 @@ export function createMcpConnections(options: McpConnectionsOptions): McpConnect
       const provider = await providerFor(ctx, server);
       try {
         await auth(provider, {
-          serverUrl: server.url,
+          serverUrl: signInAt(server),
           authorizationCode: code,
           callbackState: state,
           ...(issuer ? { callbackIssuer: issuer } : {}),
@@ -307,6 +313,12 @@ export function createMcpConnections(options: McpConnectionsOptions): McpConnect
     async connect(ctx, serverId) {
       const server = await serverOf(ctx, serverId);
       if (!server.enabled) throw new McpError("unavailable", `${server.name} is turned off.`);
+      if (entryOf(server)?.kind === "api") {
+        throw new McpError(
+          "unavailable",
+          `${server.name} has no MCP server: its tools are built in.`,
+        );
+      }
       let provider: DbAuthProvider | undefined;
       if (server.auth === "oauth") {
         provider = await providerFor(ctx, server);

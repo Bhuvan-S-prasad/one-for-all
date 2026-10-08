@@ -8,6 +8,7 @@ import type {
 } from "@ofa/core";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { createFakeGmail, type FakeGmail } from "./testing-gmail";
 
 // A small remote MCP server with its own OAuth authorization server, on
 // 127.0.0.1, for tests: protected-resource and authorization-server metadata,
@@ -41,6 +42,8 @@ export interface FakeMcpServer {
   addDraft(id: string, draft: { to: string; subject: string; body: string }): void;
   /** Drafts sent through the fake Gmail API, in order. */
   readonly sentDrafts: string[];
+  /** The fake Gmail API at `/gmail/v1` (ADR-0031). */
+  readonly gmail: FakeGmail;
   close(): Promise<void>;
 }
 
@@ -83,6 +86,8 @@ export async function startFakeMcpServer(
     readonly tools?: readonly FakeTool[];
     /** Issue no refresh tokens, as some providers don't. */
     readonly refreshTokens?: false;
+    /** No protected-resource metadata: a plain sign-in site, like Google's (ADR-0031). */
+    readonly protectedResource?: false;
   } = {},
 ): Promise<FakeMcpServer> {
   const tools = options.tools ?? DEFAULT_TOOLS;
@@ -95,8 +100,7 @@ export async function startFakeMcpServer(
   let failRefresh = false;
   let base = "";
   let advertised = "";
-  const drafts = new Map<string, { to: string; subject: string; body: string }>();
-  const sentDrafts: string[] = [];
+  const gmail = createFakeGmail();
   const signedIn = (req: IncomingMessage) => {
     const bearer = /^Bearer (.+)$/.exec(req.headers.authorization ?? "")?.[1];
     return bearer !== undefined && accessTokens.has(bearer);
@@ -157,6 +161,7 @@ export async function startFakeMcpServer(
       const path = url.pathname;
 
       if (path.startsWith("/.well-known/oauth-protected-resource")) {
+        if (options.protectedResource === false) return json(res, 404, { error: "not_found" });
         return json(res, 200, { resource: `${base}/mcp`, authorization_servers: [advertised] });
       }
       if (path === "/.well-known/oauth-authorization-server") {
@@ -235,30 +240,9 @@ export async function startFakeMcpServer(
         }
         return json(res, 400, { error: "unsupported_grant_type" });
       }
-      if (path.startsWith("/gmail/v1/users/me/drafts")) {
-        // Just enough of the Gmail API for gmail.send_draft.
+      if (path.startsWith("/gmail/v1/users/me/")) {
         if (!signedIn(req)) return json(res, 401, { error: { code: 401 } });
-        if (path === "/gmail/v1/users/me/drafts/send" && req.method === "POST") {
-          const { id } = JSON.parse(await body(req)) as { id: string };
-          if (!drafts.delete(id)) return json(res, 404, { error: { code: 404 } });
-          sentDrafts.push(id);
-          return json(res, 200, { id: `msg_${id}`, threadId: `thread_${id}` });
-        }
-        const id = decodeURIComponent(path.split("/").pop() ?? "");
-        const draft = drafts.get(id);
-        if (!draft) return json(res, 404, { error: { code: 404 } });
-        return json(res, 200, {
-          id,
-          message: {
-            snippet: draft.body.slice(0, 100),
-            payload: {
-              headers: [
-                { name: "To", value: draft.to },
-                { name: "Subject", value: draft.subject },
-              ],
-            },
-          },
-        });
+        return gmail.handle(req, res, url, () => body(req));
       }
       if (path === "/mcp") {
         if (req.method !== "POST") {
@@ -302,8 +286,9 @@ export async function startFakeMcpServer(
     revokeRefreshTokens: () => void (refuseRefresh = true),
     failRefreshes: (failing) => void (failRefresh = failing),
     advertiseAuthorizationServer: (url) => void (advertised = url),
-    addDraft: (id, draft) => void drafts.set(id, draft),
-    sentDrafts,
+    addDraft: gmail.addDraft,
+    sentDrafts: gmail.sentDrafts,
+    gmail,
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections();

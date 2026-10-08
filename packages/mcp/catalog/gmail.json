@@ -1,8 +1,9 @@
 {
   "id": "gmail",
   "name": "Gmail",
-  "description": "Search and read your email, and write drafts for you to review. Google's server can't send email.",
-  "url": "https://gmailmcp.googleapis.com/mcp/v1",
+  "description": "Search and read your email, write drafts, and send what you approve.",
+  "kind": "api",
+  "url": "https://gmail.googleapis.com",
   "authOrigin": "https://accounts.google.com",
   "setup": "own_client",
   "scopes": [
@@ -15,5 +16,5 @@
   },
   "apiOrigins": ["https://gmail.googleapis.com"],
   "guide": "docs/guides/google-oauth-client.md",
-  "reviewed": "2026-10-06"
+  "reviewed": "2026-10-08"
 }

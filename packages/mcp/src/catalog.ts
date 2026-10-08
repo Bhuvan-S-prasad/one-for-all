@@ -8,15 +8,22 @@ import notion from "../catalog/notion.json";
 import slack from "../catalog/slack.json";
 
 // The reviewed catalog (ADR-0018): official remote MCP servers with pinned
-// addresses and sign-in sites. Adding an app is a JSON file here, reviewed
-// against docs/guides/catalog-review.md. Entries are checked when loaded, so
-// a bad one fails at startup, not when someone presses Connect.
+// addresses and sign-in sites, and a few apps used through their own API
+// where no usable server exists (ADR-0031). Adding an app is a JSON file here,
+// reviewed against docs/guides/catalog-review.md. Entries are checked when
+// loaded, so a bad one fails at startup, not when someone presses Connect.
 
 export const catalogEntrySchema = z.object({
   /** Also the slug: the app part of its tool names (`notion.search`). */
   id: z.string().regex(/^[a-z][a-z0-9_]{0,31}$/),
   name: z.string().min(1),
   description: z.string().min(1),
+  /**
+   * `mcp`: the app's remote MCP server, at `url`. `api`: no MCP server; sign-in
+   * goes straight to `authOrigin` and the tools are ours, on the API at `url`
+   * (ADR-0031).
+   */
+  kind: z.enum(["mcp", "api"]).default("mcp"),
   url: z.url().refine((u) => u.startsWith("https://"), "catalog servers use https"),
   /** Where sign-in must happen; anything else is refused. */
   authOrigin: z.url().refine((u) => new URL(u).origin === u, "an origin, without a path"),

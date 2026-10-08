@@ -9,6 +9,7 @@ import {
 import {
   defineJsonSchemaTool,
   editableTextFields,
+  toDescriptor,
   ToolSchemaError,
   type ToolDefinition,
   type Toolkit,
@@ -23,7 +24,7 @@ import { gmailTools } from "./extras/gmail";
 // other: checked against the server's own schema, through policy, redacted.
 // Calls go out with the sign-in of the person the run works for.
 
-/** Tools we wrote for an app, beside its server's own (ADR-0029). */
+/** Tools we wrote for an app: beside its server's own (ADR-0029), or all of them for an API app (ADR-0031). */
 const EXTRAS: Record<
   string,
   (serverId: string, mcp: McpConnections, api: string) => readonly ToolDefinition<unknown>[]
@@ -89,11 +90,20 @@ export function createMcpToolkits(options: {
   // Compiled toolkits per server, until its tool list changes.
   const compiled = new Map<string, { at: number; kit: Toolkit }>();
 
+  const entryOf = (server: McpServerRecord) => catalog.find((e) => e.id === server.catalogId);
+  /** The tools we wrote for this app, if any. */
+  function extrasOf(server: McpServerRecord): readonly ToolDefinition<unknown>[] {
+    // Only with an API origin to send the sign-in to.
+    const api = entryOf(server)?.apiOrigins?.[0];
+    return api ? (EXTRAS[server.catalogId ?? ""]?.(server.id, mcp, api) ?? []) : [];
+  }
+
   function compile(server: McpServerRecord): Toolkit {
-    const entry = catalog.find((e) => e.id === server.catalogId);
+    const entry = entryOf(server);
     const tools: ToolDefinition<unknown>[] = [];
     const taken = new Set<string>();
-    for (const info of server.tools ?? []) {
+    // An API app has no server tools; its kept list only names ours.
+    for (const info of entry?.kind === "api" ? [] : (server.tools ?? [])) {
       const base = toolNameFor(server.slug, info.name);
       if (!base) continue;
       let name = base;
@@ -140,10 +150,7 @@ export function createMcpToolkits(options: {
         options.onSkippedTool?.(server.slug, info.name, error.message);
       }
     }
-    // Only with an API origin to send the sign-in to.
-    const api = entry?.apiOrigins?.[0];
-    const extras = api ? (EXTRAS[server.catalogId ?? ""]?.(server.id, mcp, api) ?? []) : [];
-    for (const extra of extras) {
+    for (const extra of extrasOf(server)) {
       if (!taken.has(extra.name)) tools.push(extra);
     }
     return {
@@ -175,6 +182,24 @@ export function createMcpToolkits(options: {
     },
 
     async refresh(ctx, serverId) {
+      const server = await connections.getServer(ctx, serverId);
+      if (server && entryOf(server)?.kind === "api") {
+        // Nothing to ask: keep our own tools' list, so the app shows what it offers.
+        const tools = extrasOf(server).map((tool) => {
+          const d = toDescriptor(tool as never);
+          return {
+            name: tool.name.slice(server.slug.length + 1),
+            description: tool.description,
+            inputSchema: d.inputSchema,
+            annotations: {
+              readOnlyHint: tool.annotations.readOnly === true,
+              destructiveHint: tool.annotations.destructive === true,
+            },
+          };
+        });
+        await connections.saveServerTools(ctx, serverId, tools);
+        return tools.length;
+      }
       const session = await mcp.connect(ctx, serverId);
       try {
         const tools = await session.listTools();
