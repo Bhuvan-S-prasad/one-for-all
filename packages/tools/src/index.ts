@@ -2,6 +2,7 @@ export {
   createToolRegistry,
   defineJsonSchemaTool,
   defineTool,
+  editableTextFields,
   inputFromJsonSchema,
   toDescriptor,
   ToolSchemaError,

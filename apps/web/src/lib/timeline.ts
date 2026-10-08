@@ -190,11 +190,14 @@ export function timeline(events: readonly RunEvent[]): Timeline {
           title:
             e.payload.decision === "approved"
               ? "You allowed it"
-              : e.payload.decision === "rejected"
-                ? "You said no"
-                : "No answer in time, so it was not done",
-          detail: null,
-          state: e.payload.decision === "approved" ? "done" : "info",
+              : e.payload.decision === "edited"
+                ? "You changed it, then allowed it"
+                : e.payload.decision === "rejected"
+                  ? "You said no"
+                  : "No answer in time, so it was not done",
+          detail: e.payload.edited?.length ? `Changed: ${e.payload.edited.join(", ")}` : null,
+          state:
+            e.payload.decision === "approved" || e.payload.decision === "edited" ? "done" : "info",
           at: e.createdAt,
         });
         break;

@@ -152,13 +152,26 @@ interface ToolStepResult {
     readonly summary: string;
     /** The site the person may allow for the rest of the run instead. */
     readonly site?: string;
+    readonly editable?: readonly string[];
+    readonly showArgs?: boolean;
   };
 }
 
-/** A person's answer: for this call only, or for every call like it on a site (M4.07). */
+/**
+ * A person's answer: for this call only, or for every call like it on a site
+ * (M4.07), and the text they changed before approving (ADR-0030).
+ */
 interface Decision {
   readonly status: "approved" | "rejected" | "expired";
   readonly site: string | null;
+  readonly edits: Record<string, string> | null;
+}
+
+/** What the model is told when a person changed the call before it ran. */
+function editedNote(fields: readonly string[]): string {
+  const names =
+    fields.length > 1 ? `${fields.slice(0, -1).join(", ")} and ${fields.at(-1)}` : fields[0];
+  return `The person changed ${names} before approving, so this ran with their version.`;
 }
 
 /**
@@ -439,17 +452,30 @@ export async function runAgent(
         if (result.approval) {
           const decision = await askPerson(toolCallId, call, result.approval);
           if (decision.status === "approved" && decision.site) allowedSites.add(decision.site);
-          result =
-            decision.status === "approved"
-              ? await steps.run(`${toolCallId}-approved`, () =>
-                  runTool(toolCallId, call, tainted, true),
-                )
-              : {
-                  content: DECLINED[decision.status],
-                  untrusted: false,
-                  ok: false,
-                  taintedNow: false,
-                };
+          if (decision.status === "approved") {
+            const { edits } = decision;
+            // Their version runs, checked against the tool's schema again.
+            const asApproved = edits
+              ? { ...call, args: { ...(call.args as Record<string, unknown>), ...edits } }
+              : call;
+            result = await steps.run(`${toolCallId}-approved`, () =>
+              runTool(toolCallId, asApproved, tainted, true),
+            );
+            if (edits) {
+              result = {
+                ...result,
+                content: `${editedNote(Object.keys(edits))}
+${result.content}`,
+              };
+            }
+          } else {
+            result = {
+              content: DECLINED[decision.status],
+              untrusted: false,
+              ok: false,
+              taintedNow: false,
+            };
+          }
         }
         usage = addUsage(usage, { inputTokens: 0, outputTokens: 0, costUsd: 0 }, { tool: 1 });
         if (result.taintedNow) tainted = true;
@@ -528,14 +554,24 @@ export async function runAgent(
     const timeoutMs = options.approvalTimeoutMs ?? APPROVAL_TIMEOUT_MS;
 
     const asked = await steps.run(`${toolCallId}-ask`, async () => {
+      const args = await redactJson(redact, ctx, call.args);
+      // Text that holds a secret is shown redacted, so it can't be edited:
+      // saving the card would replace the secret with "[REDACTED]".
+      const original = (call.args ?? {}) as Record<string, unknown>;
+      const shown = (args ?? {}) as Record<string, unknown>;
+      const editable = (approval.editable ?? []).filter(
+        (name) => typeof original[name] === "string" && shown[name] === original[name],
+      );
       const record = await approvals.request(ctx, {
         toolCallId,
         tool: call.name,
-        args: await redactJson(redact, ctx, call.args),
+        args,
         summary: await redact(ctx, approval.summary),
         reasons: approval.reasons,
         verdict: approval.verdict,
         site: approval.site ?? null,
+        editable,
+        showArgs: approval.showArgs ?? false,
         expiresAt: new Date(Date.now() + timeoutMs),
       });
       await log([
@@ -575,17 +611,23 @@ export async function runAgent(
       const status: Decision["status"] =
         record && record.status !== "pending" ? record.status : "expired";
       const site = status === "approved" && record?.scope === "site" ? record.site : null;
+      // Only text the card offered for editing; the API checks the same.
+      const changed = Object.entries(status === "approved" ? (record?.edits ?? {}) : {}).filter(
+        ([name, value]) => record?.editable.includes(name) && typeof value === "string",
+      );
+      const edits = changed.length > 0 ? Object.fromEntries(changed) : null;
       await log([
         runEvent(`${toolCallId}-decided`, "approval.decided", {
           approvalId: asked.id,
-          decision: status,
+          decision: edits ? "edited" : status,
           decidedBy: record?.decidedBy ?? null,
           ...(site ? { allowedSite: site } : {}),
+          ...(edits ? { edited: Object.keys(edits) } : {}),
         }),
         runEvent(`${toolCallId}-resumed`, "run.resumed", {}),
       ]);
       await deps.runs.update(ctx, ctx.runId, { status: "running", onlyIfStatus: "waiting" });
-      return { status, site } satisfies Decision;
+      return { status, site, edits } satisfies Decision;
     });
   }
 
@@ -700,6 +742,8 @@ export async function runAgent(
           summary:
             outcome.summary ?? `${call.name} ${JSON.stringify(call.args ?? {}).slice(0, 400)}`,
           ...(outcome.allowSite ? { site: outcome.allowSite } : {}),
+          ...(outcome.editable ? { editable: outcome.editable } : {}),
+          ...(outcome.showArgs ? { showArgs: true } : {}),
         },
       };
     }

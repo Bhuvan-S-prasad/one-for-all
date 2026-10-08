@@ -107,6 +107,43 @@ export interface ToolDefinition<Input = unknown> {
    * anything; null when there is none.
    */
   site?(args: Input, ctx: ToolRunContext): Promise<string | null>;
+  /**
+   * Top-level text arguments a person may change before approving a held
+   * call (ADR-0030): the message of an email, not the address it goes to.
+   * The call then runs with their version, checked against the schema again.
+   */
+  readonly editable?: readonly string[];
+  /** The approval card lists the arguments, because `describe` doesn't say them. */
+  readonly showArgs?: boolean;
+}
+
+/** Argument names that hold words a person writes: a message, a title, a comment. */
+const WRITTEN_TEXT =
+  /(text|body|content|message|subject|title|description|comment|markdown|summary|notes?|reply|caption)$/i;
+
+/**
+ * The text a person may change before approving a call to a tool described
+ * by `schema` (ADR-0030): top-level free-text strings with names like
+ * `body` or `page_title`. Never identifiers, addresses, enums or patterns.
+ */
+export function editableTextFields(schema: JsonSchema): string[] {
+  const properties = (schema as { properties?: Record<string, unknown> }).properties ?? {};
+  return Object.entries(properties)
+    .filter(([name, value]) => {
+      if (!WRITTEN_TEXT.test(name) || !value || typeof value !== "object") return false;
+      const prop = value as Record<string, unknown>;
+      const types = Array.isArray(prop.type) ? prop.type : [prop.type];
+      return (
+        types.includes("string") &&
+        types.every((t) => t === "string" || t === "null") &&
+        prop.enum === undefined &&
+        prop.const === undefined &&
+        prop.pattern === undefined &&
+        prop.format === undefined
+      );
+    })
+    .map(([name]) => name)
+    .slice(0, 10);
 }
 
 /** Keeps the input type flowing from the schema into `run`. */

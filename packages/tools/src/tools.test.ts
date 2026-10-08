@@ -18,6 +18,7 @@ import {
   createToolRegistry,
   defineJsonSchemaTool,
   defineTool,
+  editableTextFields,
   htmlToText,
   isPrivateAddress,
   READ_CHUNK_CHARS,
@@ -185,6 +186,38 @@ describe("tool executor", () => {
     });
   });
 
+  it("offers a held call's written text for editing, only where the agent wrote some (ADR-0030)", async () => {
+    const post = defineJsonSchemaTool({
+      name: "test.post",
+      description: "Post",
+      inputSchema: {
+        type: "object",
+        properties: {
+          channel: { type: "string" },
+          text: { type: "string" },
+          title: { type: "string" },
+        },
+      },
+      annotations: { outbound: true },
+      editable: ["text", "title"],
+      showArgs: true,
+      async run() {
+        return { content: "posted", untrusted: false };
+      },
+    });
+    const agent = agentWith([{ tool: "test.post", mode: "approve" }]);
+    const agents = { get: async () => agent };
+    const e = createToolExecutor({
+      registry: createToolRegistry([post] as unknown as ToolDefinition<never>[]),
+      policy: createPolicyEngine({ agents }),
+      calls: memoryCalls(),
+      agents,
+    });
+    expect(
+      await e.execute(request("test.post", { channel: "c1", text: "Hello" }), ctx),
+    ).toMatchObject({ status: "blocked", editable: ["text"], showArgs: true });
+  });
+
   it("runs a held call once a person approved it, but never a denied one", async () => {
     const before = sent;
     const e = executor([{ tool: "test.send", mode: "approve" }]);
@@ -237,6 +270,29 @@ describe("tool executor", () => {
       properties: { text: { type: "string", minLength: 1 } },
       required: ["text"],
     });
+  });
+});
+
+describe("editable text (ADR-0030)", () => {
+  it("offers written text, never identifiers, addresses, choices or patterns", () => {
+    expect(
+      editableTextFields({
+        type: "object",
+        properties: {
+          to: { type: "string" },
+          subject: { type: "string" },
+          body: { type: ["string", "null"] },
+          page_title: { type: "string" },
+          thread_id: { type: "string" },
+          description: { type: "string", enum: ["a", "b"] },
+          summary: { type: "string", format: "uri" },
+          comment: { type: "string", pattern: "^x" },
+          message: { type: "object" },
+          notes: { type: ["string", "number"] },
+        },
+      }),
+    ).toEqual(["subject", "body", "page_title"]);
+    expect(editableTextFields({ type: "object" })).toEqual([]);
   });
 });
 

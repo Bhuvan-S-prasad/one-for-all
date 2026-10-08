@@ -30,6 +30,8 @@ export const queryKeys = {
   mcpServers: ["connections", "servers"] as const,
   mcpCatalog: ["connections", "catalog"] as const,
   connections: ["connections"] as const,
+  appTools: (serverId: string) => ["connections", "tools", serverId] as const,
+  policyRules: ["policy-rules"] as const,
 };
 
 /** Shared by hooks and router loaders, so both read the same cache entry. */

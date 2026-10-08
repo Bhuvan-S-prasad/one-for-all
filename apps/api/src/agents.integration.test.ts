@@ -489,6 +489,53 @@ describe.skipIf(!hasDb)("M2 API (integration)", async () => {
     await send("POST", `/api/approvals/${plain.id}`, { decision: "reject" });
   });
 
+  it("takes changed text with an approval, only where the card offered it (ADR-0030)", async () => {
+    const runCtx = { ...tenant(), agentId: asId<AgentId>(agentId), runId: asId<RunId>(retryRunId) };
+    const base = {
+      tool: "notes.create_page",
+      args: { parent: "p1", title: "Plan", body: "Draft" },
+      summary: "Use Notes: Create page",
+      reasons: ["granted as part of notes.*; tools that change things ask first"],
+      verdict: "approve" as const,
+      editable: ["title", "body"],
+      showArgs: true,
+      expiresAt: new Date(Date.now() + 60_000),
+    };
+    const page = await container.approvals.request(runCtx, { ...base, toolCallId: "tool-5-0" });
+    const other = await container.approvals.request(runCtx, { ...base, toolCallId: "tool-6-0" });
+    const listed = approvalListSchema
+      .parse(await (await get(`/api/approvals?agentId=${agentId}`)).json())
+      .items.find((a) => a.id === page.id);
+    expect(listed).toMatchObject({ editable: ["title", "body"], showArgs: true, edits: null });
+
+    // Not offered for editing: refused, and nothing is settled.
+    const parent = { decision: "approve", edits: { parent: "p2" } };
+    expect((await send("POST", `/api/approvals/${page.id}`, parent)).status).toBe(422);
+    // Changes only go with a yes.
+    const no = { decision: "reject", edits: { title: "Other" } };
+    expect((await send("POST", `/api/approvals/${page.id}`, no)).status).toBe(422);
+
+    // Only what really changed is kept.
+    const ok = await send("POST", `/api/approvals/${page.id}`, {
+      decision: "approve",
+      edits: { title: "A better plan", body: "Draft" },
+    });
+    expect(ok.status).toBe(200);
+    expect(approvalSchema.parse(await ok.json())).toMatchObject({
+      status: "approved",
+      edits: { title: "A better plan" },
+    });
+    expect((await container.approvals.get(tenant(), page.id))?.edits).toEqual({
+      title: "A better plan",
+    });
+    // Unchanged text is no change at all.
+    const same = await send("POST", `/api/approvals/${other.id}`, {
+      decision: "approve",
+      edits: { title: "Plan" },
+    });
+    expect(approvalSchema.parse(await same.json())).toMatchObject({ edits: null });
+  });
+
   it("manages policy rules: workspace ones by owners, personal ones only ask first", async () => {
     const empty = policyRuleListSchema.parse(await (await get("/api/policy-rules")).json());
     expect(empty.items).toEqual([]);

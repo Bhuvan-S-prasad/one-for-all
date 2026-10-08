@@ -112,7 +112,7 @@ export function runSteps(events: readonly RunEvent[]): RunStep[] {
         // Approved: the call that follows takes the step over.
         const id = event.payload.approvalId;
         const call = [...asked.keys()].find((k) => approvalOf.get(k) === id);
-        if (call && event.payload.decision !== "approved") {
+        if (call && event.payload.decision !== "approved" && event.payload.decision !== "edited") {
           steps.set(call, {
             id: call,
             label: event.payload.decision === "rejected" ? "You said no" : "No answer in time",
@@ -239,7 +239,9 @@ export function runSummary(events: readonly RunEvent[]): RunSummary {
     blocked: events.filter(
       (e) =>
         (e.type === "policy.decided" && e.payload.verdict === "deny") ||
-        (e.type === "approval.decided" && e.payload.decision !== "approved"),
+        (e.type === "approval.decided" &&
+          e.payload.decision !== "approved" &&
+          e.payload.decision !== "edited"),
     ).length,
   };
 }

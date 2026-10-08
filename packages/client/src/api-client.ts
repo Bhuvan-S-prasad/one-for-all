@@ -4,12 +4,16 @@ import {
   agentStatsListSchema,
   approvalListSchema,
   approvalSchema,
+  appToolListSchema,
   artifactListSchema,
   catalogListSchema,
   mcpServerListSchema,
   mcpServerSchema,
   mcpToolListSchema,
+  policyRuleListSchema,
+  policyRuleSchema,
   signInStartSchema,
+  toolRefreshSchema,
   errorResponseSchema,
   healthResponseSchema,
   llmSettingsSchema,
@@ -38,6 +42,12 @@ import {
   type McpServer,
   type McpServerList,
   type McpToolList,
+  type AddMcpServerInput,
+  type AppToolList,
+  type CreatePolicyRuleInput,
+  type PolicyRuleItem,
+  type PolicyRuleList,
+  type ToolRefreshResponse,
   type OwnClientInput,
   type SignInStartResponse,
   type CreateAgentInput,
@@ -295,15 +305,31 @@ export function createApiClient(options: ApiClientOptions = {}) {
     listApprovals: (filter: { agentId?: string; runId?: string } = {}): Promise<ApprovalList> =>
       request("GET", `/api/approvals${query({ ...filter })}`, approvalListSchema),
     /** `site`: approve every call like it on the approval’s site for the rest of the run. */
+    /** `edits`: text the card offered for editing, changed before approving (ADR-0030). */
     decideApproval: (
       id: string,
       decision: "approve" | "reject",
       scope: "once" | "site" = "once",
+      edits?: Record<string, string>,
     ): Promise<Approval> =>
       request("POST", `/api/approvals/${encodeURIComponent(id)}`, approvalSchema, {
         decision,
         scope,
+        ...(edits && Object.keys(edits).length > 0 ? { edits } : {}),
       }),
+
+    // ── Rules (M4.07, M4.09) ───────────────────────────────────────────────
+    /** The workspace's rules and your own. */
+    listPolicyRules: (): Promise<PolicyRuleList> =>
+      request("GET", "/api/policy-rules", policyRuleListSchema),
+    createPolicyRule: (input: CreatePolicyRuleInput): Promise<PolicyRuleItem> =>
+      request("POST", "/api/policy-rules", policyRuleSchema, input),
+    setPolicyRuleEnabled: (id: string, enabled: boolean): Promise<PolicyRuleItem> =>
+      request("PATCH", `/api/policy-rules/${encodeURIComponent(id)}`, policyRuleSchema, {
+        enabled,
+      }),
+    deletePolicyRule: (id: string): Promise<void> =>
+      request("DELETE", `/api/policy-rules/${encodeURIComponent(id)}`, null),
 
     // ── Saved logins (M3.08) ───────────────────────────────────────────────
     listLogins: (): Promise<SavedLoginList> => request("GET", "/api/logins", savedLoginListSchema),
@@ -336,6 +362,19 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request("DELETE", `/api/mcp-servers/${encodeURIComponent(id)}`, null),
     listMcpTools: (id: string): Promise<McpToolList> =>
       request("GET", `/api/mcp-servers/${encodeURIComponent(id)}/tools`, mcpToolListSchema),
+    /** A custom server: not reviewed, so it needs `acknowledgeRisk`. Owners and admins. */
+    addMcpServer: (input: AddMcpServerInput): Promise<McpServer> =>
+      request("POST", "/api/mcp-servers", mcpServerSchema, input),
+    /** Fetch the app's tool list again with your sign-in; agents use the kept one. */
+    refreshMcpTools: (id: string): Promise<ToolRefreshResponse> =>
+      request(
+        "POST",
+        `/api/mcp-servers/${encodeURIComponent(id)}/tools/refresh`,
+        toolRefreshSchema,
+      ),
+    /** The app's tools as agents see them (`notion.search`), for choosing what an agent may use. */
+    appTools: (id: string): Promise<AppToolList> =>
+      request("GET", `/api/mcp-servers/${encodeURIComponent(id)}/agent-tools`, appToolListSchema),
 
     // ── Memory (UX.14) ─────────────────────────────────────────────────────
     listMemories: (filter: MemoryFilter = {}): Promise<MemoryList> =>

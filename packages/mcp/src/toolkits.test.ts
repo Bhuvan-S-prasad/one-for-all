@@ -166,7 +166,22 @@ describe("connected apps as toolkits", () => {
     // Granted as part of notes.*, a destructive tool asks first (and deleting is always-human).
     const deleting = await executor.execute(call("notes.delete_page", { id: "p1" }, "t3"), ctx);
     expect(deleting).toMatchObject({ status: "blocked", verdict: "human" });
+    // The card names the app and action, and lists the arguments (nothing here to edit).
+    expect(deleting).toMatchObject({ summary: "Use Team Notes: Delete page", showArgs: true });
+    expect(deleting).not.toHaveProperty("editable");
     expect(fake.counts.calls).toBe(1);
+  });
+
+  it("lists one app's tools as agents see them, for choosing grants", async () => {
+    const { toolkits, server } = await setup("notes", []);
+    const kit = await toolkits.forServer(ctx, server.id);
+    expect(
+      kit?.tools.map((t) => [t.name, t.annotations.readOnly, t.annotations.destructive]),
+    ).toEqual([
+      ["notes.search", true, false],
+      ["notes.delete_page", false, true],
+    ]);
+    expect(await toolkits.forServer(ctx, "00000000-0000-0000-0000-000000000000")).toBeNull();
   });
 
   it("keeps a large app behind load_toolkit until the run loads it", async () => {

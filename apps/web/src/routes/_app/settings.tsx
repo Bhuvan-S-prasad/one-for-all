@@ -14,6 +14,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { SecretInput } from "@/components/secret-input";
+import { NotificationsCard } from "@/components/settings/notifications-card";
+import { RulesCard } from "@/components/settings/rules-card";
 import { Card, CardTitle } from "@/components/ui/card";
 import { roleLabel, timeAgo } from "@/lib/format";
 import { toast } from "@/lib/toast";
@@ -80,6 +82,14 @@ function SettingsPage() {
 
       <SavedLoginsCard
         canEdit={session.workspace?.role === "owner" || session.workspace?.role === "admin"}
+      />
+
+      <NotificationsCard />
+
+      <RulesCard
+        canEditWorkspace={
+          session.workspace?.role === "owner" || session.workspace?.role === "admin"
+        }
       />
 
       <div className="grid gap-4 md:grid-cols-2">

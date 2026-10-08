@@ -8,6 +8,7 @@ import {
 } from "@ofa/core";
 import {
   defineJsonSchemaTool,
+  editableTextFields,
   ToolSchemaError,
   type ToolDefinition,
   type Toolkit,
@@ -63,9 +64,17 @@ export function annotationsFor(info: McpToolInfo): ToolAnnotations {
   };
 }
 
+/** "create_page" → "Create page", for people. */
+function sentence(action: string): string {
+  const words = action.replace(/_/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 export interface McpToolkits extends ToolkitSource {
   /** Fetch a server's tools again with the person's sign-in, and keep them. */
   refresh(ctx: TenantContext, serverId: string): Promise<number>;
+  /** One server's tools as agents see them, from its kept list; null before it has one. */
+  forServer(ctx: TenantContext, serverId: string): Promise<Toolkit | null>;
 }
 
 export function createMcpToolkits(options: {
@@ -99,6 +108,12 @@ export function createMcpToolkits(options: {
             inputSchema: info.inputSchema,
             annotations: annotationsFor(info),
             source: "mcp",
+            // The card names the app and action, then lists the arguments;
+            // written text in them can be changed before approving (ADR-0030).
+            describe: async () =>
+              `Use ${server.name}: ${info.title?.trim() || sentence(name.slice(server.slug.length + 1))}`,
+            showArgs: true,
+            editable: editableTextFields(info.inputSchema),
             async run(args, ctx) {
               const session = await mcp.connect(ctx, server.id);
               try {
@@ -139,19 +154,24 @@ export function createMcpToolkits(options: {
     };
   }
 
+  function kitOf(server: McpServerRecord): Toolkit {
+    const at = server.toolsFetchedAt?.getTime() ?? 0;
+    const cached = compiled.get(server.id);
+    if (cached && cached.at === at) return cached.kit;
+    const kit = compile(server);
+    compiled.set(server.id, { at, kit });
+    return kit;
+  }
+
   return {
     async toolkits(ctx: RunContext) {
       const servers = await connections.listServers(ctx);
-      return servers
-        .filter((s) => s.enabled && s.tools)
-        .map((server) => {
-          const at = server.toolsFetchedAt?.getTime() ?? 0;
-          const cached = compiled.get(server.id);
-          if (cached && cached.at === at) return cached.kit;
-          const kit = compile(server);
-          compiled.set(server.id, { at, kit });
-          return kit;
-        });
+      return servers.filter((s) => s.enabled && s.tools).map(kitOf);
+    },
+
+    async forServer(ctx, serverId) {
+      const server = await connections.getServer(ctx, serverId);
+      return server?.tools ? kitOf(server) : null;
     },
 
     async refresh(ctx, serverId) {

@@ -77,6 +77,18 @@ export const mcpToolSchema = z.object({
 });
 export const mcpToolListSchema = z.object({ items: z.array(mcpToolSchema) });
 
+/** A connected app's tool as agents see it (`notion.search`), for choosing what an agent may use. */
+export const appToolSchema = z.object({
+  name: z.string(),
+  description: z.string(),
+  readOnly: z.boolean(),
+  /** Can't be undone: always asks first, whatever the grant says. */
+  destructive: z.boolean(),
+});
+export type AppTool = z.infer<typeof appToolSchema>;
+export const appToolListSchema = z.object({ items: z.array(appToolSchema) });
+export type AppToolList = z.infer<typeof appToolListSchema>;
+
 export const toolRefreshSchema = z.object({ count: z.number().int() });
 export type ToolRefreshResponse = z.infer<typeof toolRefreshSchema>;
 export type McpToolList = z.infer<typeof mcpToolListSchema>;

@@ -463,6 +463,95 @@ describe("approvals", () => {
     });
   });
 
+  it("runs the text a person changed before approving, and tells the model (ADR-0030)", async () => {
+    const { runtime } = held(() => null);
+    const page: ToolDescriptor = {
+      name: "notes.create_page",
+      description: "Create a page",
+      inputSchema: {
+        type: "object",
+        properties: {
+          parent: { type: "string" },
+          title: { type: "string" },
+          body: { type: "string" },
+        },
+      },
+      annotations: { outbound: true },
+      source: "mcp",
+    };
+    const llm = createScriptedLLM([
+      {
+        toolCalls: [
+          {
+            name: "notes.create_page",
+            args: { parent: "p1", title: "Plan", body: "Key: hunter2-secret-value" },
+          },
+        ],
+      },
+      { text: "Created." },
+    ]);
+    const tools = createFakeToolExecutor([
+      {
+        descriptor: page,
+        run: (_args, request) =>
+          request.approved
+            ? okOutcome("Page created", true)
+            : {
+                status: "blocked",
+                verdict: "approve",
+                reasons: ["granted as part of notes.*; tools that change things ask first"],
+                message: "notes.create_page needs a person's approval first.",
+                summary: "Use Notes: Create page",
+                editable: ["title", "body"],
+                showArgs: true,
+              },
+      },
+    ]);
+    const approvals = createMemoryApprovals();
+    const steps = createMemoStepRunner({
+      onWait: () => {
+        const id = approvals.records[0]!.id;
+        void approvals.decide(ctx, id, {
+          status: "approved",
+          decidedBy: "usr_1",
+          edits: { title: "A better plan" },
+        });
+        return { approvalId: id };
+      },
+    });
+    await runAgent(
+      { ctx, threadId, trigger: "message" },
+      {
+        llm,
+        tools,
+        runs: runtime.runs,
+        agents: runtime.agents,
+        threads: runtime.threads,
+        approvals,
+        redact: async (_ctx, text) => text.replaceAll("hunter2-secret-value", "[REDACTED]"),
+      },
+      steps,
+    );
+    // Text holding a secret is shown redacted, so it isn't offered for editing.
+    expect(approvals.records[0]).toMatchObject({
+      editable: ["title"],
+      showArgs: true,
+      args: { parent: "p1", title: "Plan", body: "Key: [REDACTED]" },
+    });
+    // Their title, the agent's body (with the real value), the same idempotency key.
+    expect(tools.calls[1]).toMatchObject({
+      args: { parent: "p1", title: "A better plan", body: "Key: hunter2-secret-value" },
+      key: tools.calls[0]?.key,
+    });
+    expect(JSON.stringify(llm.requests[1]?.messages)).toContain(
+      "The person changed title before approving, so this ran with their version.",
+    );
+    expect(runtime.runs.events.find((e) => e.type === "approval.decided")?.payload).toMatchObject({
+      decision: "edited",
+      edited: ["title"],
+    });
+  });
+
   it("tells the model when the person said no, and runs nothing", async () => {
     const { tools, llm, run } = held((_id, a) => decide(a, "rejected"));
     await run();

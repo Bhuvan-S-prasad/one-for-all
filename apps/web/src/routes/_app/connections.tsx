@@ -1,14 +1,16 @@
 import {
+  useAddMcpServer,
   useConnectMcpServer,
   useDisconnectMcpServer,
   useInstallCatalogEntry,
   useMcpCatalog,
   useMcpServers,
+  useRefreshMcpTools,
   useRemoveMcpServer,
 } from "@ofa/client";
 import type { CatalogItem, McpServer } from "@ofa/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { KeyRound, Lock, Plug, Wrench } from "lucide-react";
+import { KeyRound, Lock, Plug, RefreshCw, ServerCog, Wrench } from "lucide-react";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { AppIcon } from "@/components/app-icon";
 import { SecretInput } from "@/components/secret-input";
@@ -20,10 +22,10 @@ import { timeAgo } from "@/lib/format";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
-// Connections (M4.04): apps from the reviewed catalog. An owner or admin adds
-// an app; each person then signs in to it on the app's own page, which sends
-// them back here. Agents use an app's tools with the sign-in of the person
-// they work for. Per-agent tools, rules and custom servers come in M4.09.
+// Connections (M4.04, M4.09): apps from the reviewed catalog, and custom
+// servers an owner or admin adds knowingly. Each person signs in to an app on
+// its own page, which sends them back here. Agents use an app's tools with the
+// sign-in of the person they work for; which tools is set per agent.
 
 interface ConnectionsSearch {
   connected?: string;
@@ -157,6 +159,7 @@ function ConnectionsPage() {
               </Grid>
             </Section>
           )}
+          {canEdit && <CustomServerForm onError={setFailure} />}
         </>
       )}
     </div>
@@ -260,8 +263,14 @@ function AppCard({
   const connect = useConnectMcpServer();
   const disconnect = useDisconnectMcpServer();
   const remove = useRemoveMcpServer();
+  const refreshTools = useRefreshMcpTools();
   const [settingUp, setSettingUp] = useState(false);
-  const busy = install.isPending || connect.isPending || disconnect.isPending || remove.isPending;
+  const busy =
+    install.isPending ||
+    connect.isPending ||
+    disconnect.isPending ||
+    remove.isPending ||
+    refreshTools.isPending;
 
   const signIn = (id: string) =>
     connect.mutate(id, {
@@ -274,9 +283,14 @@ function AppCard({
 
   let detail: ReactNode = null;
   if (state === "connected") {
-    detail = server?.connection?.lastUsedAt
-      ? `Last used ${timeAgo(server.connection.lastUsedAt)}`
-      : "Not used by an agent yet";
+    const tools =
+      server?.toolCount === null || server?.toolCount === undefined
+        ? "Tools not listed yet"
+        : `${server.toolCount} tools`;
+    const used = server?.connection?.lastUsedAt
+      ? `last used ${timeAgo(server.connection.lastUsedAt)}`
+      : "not used by an agent yet";
+    detail = `${tools} · ${used}`;
   } else if (state === "reauth") {
     detail = server?.connection?.lastError ?? "The sign-in expired.";
   } else if (state === "not_added" && item) {
@@ -296,19 +310,39 @@ function AppCard({
   let primary: ReactNode = null;
   if (state === "connected" && server) {
     primary = (
-      <Button
-        size="sm"
-        variant="outline"
-        disabled={busy}
-        onClick={() =>
-          disconnect.mutate(server.id, {
-            onSuccess: () => toast(`Signed out of ${name}`),
-            onError: (error) => onError(error.message),
-          })
-        }
-      >
-        Disconnect
-      </Button>
+      <>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          title="Ask the app for its tools again, after it added or changed some"
+          onClick={() =>
+            refreshTools.mutate(server.id, {
+              onSuccess: ({ count }) => toast(`${name} has ${count} tools`),
+              onError: (error) => onError(error.message),
+            })
+          }
+        >
+          <RefreshCw
+            className={cn("size-3.5", refreshTools.isPending && "animate-spin")}
+            aria-hidden
+          />
+          Refresh tools
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          onClick={() =>
+            disconnect.mutate(server.id, {
+              onSuccess: () => toast(`Signed out of ${name}`),
+              onError: (error) => onError(error.message),
+            })
+          }
+        >
+          Disconnect
+        </Button>
+      </>
     );
   } else if ((state === "reauth" || state === "ready") && server) {
     primary = (
@@ -489,6 +523,139 @@ function OwnClientForm({
         <span className="text-[13px] text-muted-foreground">The secret is stored encrypted.</span>
       </div>
       {install.error && <ErrorAlert>{install.error.message}</ErrorAlert>}
+    </form>
+  );
+}
+
+/**
+ * A server outside the reviewed catalog (ADR-0018): its tools run with what
+ * people grant them, so adding one needs an explicit yes. Owners and admins.
+ */
+function CustomServerForm({ onError }: { onError: (message: string) => void }) {
+  const add = useAddMcpServer();
+  const connect = useConnectMcpServer();
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [url, setUrl] = useState("");
+  const [auth, setAuth] = useState<"oauth" | "none">("oauth");
+  const [trusted, setTrusted] = useState(false);
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (!name.trim() || !url.trim() || !trusted) return;
+    add.mutate(
+      { name: name.trim(), url: url.trim(), auth, acknowledgeRisk: true },
+      {
+        onSuccess: (server) => {
+          setOpen(false);
+          setName("");
+          setUrl("");
+          setTrusted(false);
+          connect.mutate(server.id, {
+            onSuccess: (result) => {
+              if (result.status === "redirect") window.location.assign(result.authorizationUrl);
+              else toast(`Connected to ${server.name}`);
+            },
+            onError: (error) => onError(error.message),
+          });
+        },
+      },
+    );
+  };
+
+  if (!open) {
+    return (
+      <div className="flex flex-wrap items-center gap-3 rounded-[20px] border border-dashed px-5 py-4">
+        <ServerCog className="size-5 text-muted-foreground" aria-hidden />
+        <p className="flex-1 text-sm text-muted-foreground">
+          Another app with an MCP server? Add it by its address. It isn&rsquo;t reviewed like the
+          apps above.
+        </p>
+        <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+          Add a custom server
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <form
+      onSubmit={submit}
+      aria-label="Add a custom server"
+      className="flex flex-col gap-4 rounded-[20px] border bg-card p-5"
+    >
+      <div className="flex flex-col gap-1">
+        <span className="text-[20px] leading-tight font-bold tracking-[-0.015em]">
+          Add a custom server
+        </span>
+        <p className="text-[13.5px] text-muted-foreground">
+          Its tools can act in that app with your sign-in, as far as each agent is allowed. Add only
+          servers you trust.
+        </p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="custom-name">Name</Label>
+          <Input
+            id="custom-name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Team wiki"
+            maxLength={80}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="custom-url">Server address</Label>
+          <Input
+            id="custom-url"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://mcp.example.com/mcp"
+            autoComplete="off"
+            spellCheck={false}
+            inputMode="url"
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="custom-auth">Sign-in</Label>
+          <select
+            id="custom-auth"
+            value={auth}
+            onChange={(e) => setAuth(e.target.value as typeof auth)}
+            className="h-13 rounded-md border border-input bg-field px-4 text-base outline-none focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <option value="oauth">Each person signs in (OAuth)</option>
+            <option value="none">No sign-in</option>
+          </select>
+        </div>
+      </div>
+      <label className="flex items-start gap-2.5 text-[13.5px]">
+        <input
+          type="checkbox"
+          checked={trusted}
+          onChange={(e) => setTrusted(e.target.checked)}
+          className="mt-0.5 size-4 accent-primary"
+        />
+        <span>
+          I trust this server. I understand it isn&rsquo;t reviewed, and that where it signs in is
+          fixed at the first sign-in.
+        </span>
+      </label>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          type="submit"
+          size="sm"
+          disabled={add.isPending || connect.isPending || !name.trim() || !url.trim() || !trusted}
+        >
+          Add and connect
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={() => setOpen(false)}>
+          Cancel
+        </Button>
+        <span className="text-[13px] text-muted-foreground">
+          https only; plain http only reaches this computer.
+        </span>
+      </div>
+      {add.error && <ErrorAlert>{add.error.message}</ErrorAlert>}
     </form>
   );
 }

@@ -198,6 +198,10 @@ export type ToolOutcome =
       readonly summary?: string;
       /** The site a person may allow for the rest of the run instead (see `PolicyDecision.allowSite`). */
       readonly allowSite?: string;
+      /** Top-level text arguments the person may change before approving (ADR-0030). */
+      readonly editable?: readonly string[];
+      /** The card should list the call's arguments: the summary doesn't say them. */
+      readonly showArgs?: boolean;
     }
   | {
       readonly status: "error";

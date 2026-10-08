@@ -1,6 +1,8 @@
 import type {
+  AddMcpServerInput,
   Agent,
   CreateAgentInput,
+  CreatePolicyRuleInput,
   FirstRunSetupRequest,
   LoginRequest,
   Message,
@@ -355,11 +357,13 @@ export function useDecideApproval() {
       id,
       decision,
       scope,
+      edits,
     }: {
       id: string;
       decision: "approve" | "reject";
       scope?: "once" | "site";
-    }) => api.decideApproval(id, decision, scope),
+      edits?: Record<string, string>;
+    }) => api.decideApproval(id, decision, scope, edits),
     onSettled: () => void queryClient.invalidateQueries({ queryKey: queryKeys.approvalLists }),
   });
 }
@@ -426,6 +430,60 @@ export function useDisconnectMcpServer() {
 export function useRemoveMcpServer() {
   const api = useApiClient();
   return useConnectionsMutation((id: string) => api.removeMcpServer(id));
+}
+
+export function useAddMcpServer() {
+  const api = useApiClient();
+  return useConnectionsMutation((input: AddMcpServerInput) => api.addMcpServer(input));
+}
+
+export function useRefreshMcpTools() {
+  const api = useApiClient();
+  return useConnectionsMutation((id: string) => api.refreshMcpTools(id));
+}
+
+/** A connected app's tools as agents see them; off until `serverId` is set. */
+export function useAppTools(serverId: string | null) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: queryKeys.appTools(serverId ?? ""),
+    queryFn: async () => (await api.appTools(serverId!)).items,
+    enabled: !!serverId,
+    staleTime: 60_000,
+  });
+}
+
+export function usePolicyRules() {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: queryKeys.policyRules,
+    queryFn: async () => (await api.listPolicyRules()).items,
+  });
+}
+
+function usePolicyRulesMutation<I, O>(fn: (input: I) => Promise<O>) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: queryKeys.policyRules }),
+  });
+}
+
+export function useCreatePolicyRule() {
+  const api = useApiClient();
+  return usePolicyRulesMutation((input: CreatePolicyRuleInput) => api.createPolicyRule(input));
+}
+
+export function useSetPolicyRuleEnabled() {
+  const api = useApiClient();
+  return usePolicyRulesMutation(({ id, enabled }: { id: string; enabled: boolean }) =>
+    api.setPolicyRuleEnabled(id, enabled),
+  );
+}
+
+export function useDeletePolicyRule() {
+  const api = useApiClient();
+  return usePolicyRulesMutation((id: string) => api.deletePolicyRule(id));
 }
 
 export function useDeleteLogin() {

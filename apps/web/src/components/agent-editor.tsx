@@ -7,6 +7,7 @@ import {
   FAMILIAR_MARKS,
   FAMILIAR_MOODS,
   FAMILIAR_SKINS,
+  type AgentGrant,
   type CreateAgentInput,
   type FamiliarColor,
   type FamiliarLook,
@@ -15,6 +16,7 @@ import {
 import { MODEL_TIERS } from "@ofa/core";
 import { ArrowLeft, ArrowRight, Dices } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
+import { AppGrants } from "@/components/app-grants";
 import { Familiar } from "@/components/familiar";
 import { ErrorAlert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -34,15 +36,31 @@ export interface AgentDraft {
   job: string;
   description: string;
   tier: (typeof MODEL_TIERS)[number];
+  /** Built-in tools switched on. */
   tools: string[];
+  /** Every other grant (connected apps, anything set elsewhere), kept as it is unless changed here. */
+  grants: AgentGrant[];
+}
+
+const BUILTIN_NAMES: ReadonlySet<string> = new Set(BUILTIN_TOOLS.map((t) => t.name));
+
+/** The agent's grants, split into built-in switches and the rest. */
+export function draftGrants(grants: readonly AgentGrant[]): Pick<AgentDraft, "tools" | "grants"> {
+  return {
+    tools: grants
+      .filter((g) => BUILTIN_NAMES.has(g.tool) && g.mode !== "blocked")
+      .map((g) => g.tool),
+    grants: grants.filter((g) => !BUILTIN_NAMES.has(g.tool) || g.mode === "blocked"),
+  };
 }
 
 export function toRequest(draft: AgentDraft): CreateAgentInput {
+  const others = draft.grants.filter((g) => !draft.tools.includes(g.tool));
   return {
     name: draft.name.trim(),
     description: draft.description.trim(),
     spec: { job: draft.job.trim(), modelTier: draft.tier, voice: draft.voice, avatar: draft.look },
-    grants: draft.tools.map((tool) => ({ tool, mode: "auto" as const })),
+    grants: [...draft.tools.map((tool) => ({ tool, mode: "auto" as const })), ...others],
   };
 }
 
@@ -388,8 +406,7 @@ export function AgentEditor({ initial, mode, saving, error, onCancel, onSave }: 
                   What may {displayName} use?
                 </h3>
                 <p className="text-[15px] text-muted-foreground">
-                  It can only use what you switch on here. Apps like email and calendars come with
-                  Connections.
+                  It can only use what you switch on here.
                 </p>
               </div>
               <ul className="flex flex-col divide-y rounded-md border">
@@ -426,6 +443,22 @@ export function AgentEditor({ initial, mode, saving, error, onCancel, onSave }: 
                   );
                 })}
               </ul>
+              <div className="flex flex-col gap-1">
+                <h4 className="eyebrow text-xs text-muted-foreground">Apps</h4>
+                <p className="text-sm text-muted-foreground">
+                  Connected apps it may use. Anything that can't be undone, and anything after it
+                  read outside content, still asks you first.
+                </p>
+              </div>
+              <AppGrants
+                grants={draft.grants.filter((g) => !BUILTIN_NAMES.has(g.tool))}
+                onChange={(apps) =>
+                  set({
+                    grants: [...draft.grants.filter((g) => BUILTIN_NAMES.has(g.tool)), ...apps],
+                  })
+                }
+                agentName={displayName}
+              />
             </>
           )}
 

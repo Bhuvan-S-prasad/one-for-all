@@ -8,6 +8,7 @@ import {
   type McpServerList,
   type McpToolList,
   type SignInStartResponse,
+  type AppToolList,
   type ToolRefreshResponse,
 } from "@ofa/contracts";
 import {
@@ -40,12 +41,16 @@ import type { AppEnv } from "../types";
  *   DELETE /api/mcp-servers/:id/connection   sign out of it
  *   GET    /api/mcp-servers/:id/tools        what it offers, as you
  *   POST   /api/mcp-servers/:id/tools/refresh  fetch and keep its tool list again (agents use the kept one)
+ *   GET    /api/mcp-servers/:id/agent-tools    the kept list as agents see it (`notion.search`), for grants
  *   GET    /api/connections/callback         where the provider sends you back
  *
  * Tokens stay inside the MCP client; nothing here returns one.
  */
 export function mcpServerRoutes(
-  deps: Pick<Container, "db" | "sessions" | "connections" | "mcp" | "toolkits" | "config">,
+  deps: Pick<
+    Container,
+    "db" | "sessions" | "connections" | "mcp" | "toolkits" | "config" | "logger"
+  >,
 ) {
   function requireAdmin(c: Context<AppEnv>): TenantContext {
     const role = c.get("session").membership?.role;
@@ -165,6 +170,14 @@ export function mcpServerRoutes(
     .post("/:id/connect", async (c) => {
       const tenant = c.get("tenant");
       const result = await client().startSignIn(tenant, c.req.param("id"));
+      if (result.status === "connected") {
+        // No sign-in page to come back from: keep its tool list for agents now.
+        await deps.toolkits?.refresh(tenant, c.req.param("id")).catch((error: unknown) => {
+          deps.logger.warn("mcp: couldn't fetch tools after connecting", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
       return c.json(result satisfies SignInStartResponse);
     })
     .delete("/:id/connection", async (c) => {
@@ -181,6 +194,17 @@ export function mcpServerRoutes(
         });
       }
       return c.body(null, 204);
+    })
+    .get("/:id/agent-tools", async (c) => {
+      if (!deps.toolkits) client();
+      const kit = await deps.toolkits!.forServer(c.get("tenant"), c.req.param("id"));
+      const items = (kit?.tools ?? []).map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        readOnly: tool.annotations.readOnly === true,
+        destructive: tool.annotations.destructive === true,
+      }));
+      return c.json({ items } satisfies AppToolList);
     })
     .post("/:id/tools/refresh", async (c) => {
       if (!deps.toolkits) client();

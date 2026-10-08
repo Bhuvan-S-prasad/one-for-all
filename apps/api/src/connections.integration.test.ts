@@ -149,6 +149,18 @@ describe.skipIf(!hasDb)("MCP connections API (integration)", async () => {
     );
     expect(tools.items.map((t) => t.name)).toEqual(["search", "delete_page"]);
     expect(tools.items[1]?.annotations).toEqual({ destructiveHint: true });
+    // As agents see them, from the list kept at sign-in: for choosing grants.
+    const kept = await (await send("GET", `/api/mcp-servers/${serverId}/agent-tools`)).json();
+    expect(kept).toEqual({
+      items: [
+        expect.objectContaining({ name: "team_notes.search", readOnly: true, destructive: false }),
+        expect.objectContaining({
+          name: "team_notes.delete_page",
+          readOnly: false,
+          destructive: true,
+        }),
+      ],
+    });
   });
 
   it("an agent granted the app uses its tools in a run, with the person's sign-in", async () => {

@@ -2,7 +2,7 @@ import { useAgent, useAgents, useShareLogin, useUpdateAgent } from "@ofa/client"
 import type { Agent } from "@ofa/contracts";
 import { useState, type FormEvent } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { AgentEditor, toRequest } from "@/components/agent-editor";
+import { AgentEditor, draftGrants, toRequest } from "@/components/agent-editor";
 import { usesBrowser } from "@/components/computer/computer-panel";
 import { ErrorAlert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -44,7 +44,7 @@ function EditAgentPage() {
           job: agent.spec.job,
           description: agent.description,
           tier: agent.spec.modelTier,
-          tools: agent.grants.filter((g) => g.mode !== "blocked").map((g) => g.tool),
+          ...draftGrants(agent.grants),
         }}
         saving={update.isPending}
         error={update.error}

@@ -87,6 +87,16 @@ function visible(agent: AgentProfile, name: string): boolean {
   return grant ? grant.mode !== "blocked" : PLATFORM_TOOLS.has(name);
 }
 
+/** The tool's editable arguments that this call fills with text (ADR-0030). */
+function editableIn(
+  tool: { editable?: readonly string[] },
+  args: unknown,
+): { editable?: string[] } {
+  const values = (args ?? {}) as Record<string, unknown>;
+  const editable = (tool.editable ?? []).filter((name) => typeof values[name] === "string");
+  return editable.length > 0 ? { editable } : {};
+}
+
 /** The tool's own words for a call, or its name and arguments; never fails. */
 async function describe(
   tool: { name: string; describe?: (args: unknown, ctx: ToolRunContext) => Promise<string> },
@@ -276,6 +286,8 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
             message: `${request.name} needs a person's approval first.`,
             summary: await redact(ctx, await describe(tool, parsed.value, runCtx)),
             ...(decision.allowSite ? { allowSite: decision.allowSite } : {}),
+            ...editableIn(tool, parsed.value),
+            ...(tool.showArgs ? { showArgs: true } : {}),
           };
         }
 

@@ -28,6 +28,9 @@ const columns = {
   verdict: approval.verdict,
   site: approval.site,
   scope: approval.scope,
+  editable: approval.editable,
+  showArgs: approval.showArgs,
+  edits: approval.edits,
   status: approval.status,
   decidedBy: approval.decidedBy,
   createdAt: approval.createdAt,
@@ -48,6 +51,9 @@ interface Row {
   verdict: Verdict;
   site: string | null;
   scope: string;
+  editable: string[];
+  showArgs: boolean;
+  edits: Record<string, string> | null;
   status: string;
   decidedBy: string | null;
   createdAt: Date;
@@ -87,6 +93,8 @@ export function createApprovalStore(db: Database): ApprovalStore {
             reasons: [...input.reasons],
             verdict: input.verdict,
             site: input.site ?? null,
+            editable: [...(input.editable ?? [])],
+            showArgs: input.showArgs ?? false,
             expiresAt: input.expiresAt,
           })
           .onConflictDoNothing({ target: [approval.runId, approval.toolCallId] });
@@ -121,6 +129,10 @@ export function createApprovalStore(db: Database): ApprovalStore {
               input.status === "approved" && input.scope === "site"
                 ? sql`case when ${approval.site} is null then 'once' else 'site' end`
                 : "once",
+            edits:
+              input.status === "approved" && input.edits && Object.keys(input.edits).length > 0
+                ? { ...input.edits }
+                : null,
           })
           .where(and(eq(approval.id, id), eq(approval.status, "pending")))
           .returning({ id: approval.id });
