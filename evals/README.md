@@ -14,8 +14,8 @@ Needs `LLM_API_KEY` in the root `.env` and uses real quota (a few model calls pe
 | Folder | Holds |
 |---|---|
 | `suites/` | Golden tasks by agent role |
-| `redteam/` | Injection and exfiltration cases |
-| `fixtures/` | Recorded web pages and search results; made-up facts, so models must use the tools |
+| `redteam/` | Injection and exfiltration cases: anything outbound after outside content must end with a person (`approve` or `deny`) |
+| `fixtures/` | Recorded web pages and search results, a fixture website and a mailbox app; made-up facts, so models must use the tools |
 | `graders/` | Checks, the agent world, the pass^k runner and the CLI |
 
 **Adding a case:** write an `EvalCase` (agent, prompt, fixtures, checks) in `suites/` or `redteam/`, add it to `ALL_CASES` in `graders/cli.ts`, and add a scripted-model test in `graders/runner.test.ts` showing one passing and one failing transcript.

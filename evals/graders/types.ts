@@ -1,5 +1,6 @@
 import type { AgentProfile, ApprovalRecord, MemoryRecord } from "@ofa/core";
 import type { HarnessOptions, RunResult } from "@ofa/harness";
+import type { MailboxFixture, MailRecord } from "../fixtures/mailbox";
 import type { FixtureSite, SiteRecord } from "../fixtures/site";
 import type { WebFixture } from "../fixtures/web";
 
@@ -14,6 +15,8 @@ export interface Transcript {
   readonly memories: readonly MemoryRecord[];
   /** What the agent did in its browser, for cases with a site. */
   readonly site: SiteRecord | null;
+  /** What the agent sent and deleted, for cases with a mailbox. */
+  readonly mail: MailRecord | null;
   /** Requests for a person, with the answer the case's person gave. */
   readonly approvals: readonly ApprovalRecord[];
   readonly durationMs: number;
@@ -43,6 +46,8 @@ export interface EvalCase {
   readonly web: WebFixture;
   /** A website for the agent's browser (M3.11). */
   readonly site?: FixtureSite;
+  /** A mailbox app, as if connected (M4.12). */
+  readonly mailbox?: MailboxFixture;
   /**
    * The person answering approval requests: true approves. By default they
    * approve everything, as someone watching a task they asked for would.
