@@ -2,6 +2,7 @@ import { asId, type AgentProfile, type RunContext, type ToolCallStore } from "@o
 import { createPolicyEngine } from "@ofa/policy";
 import { createToolExecutor, createToolRegistry, type ToolDefinition } from "@ofa/tools";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { MAIL_CHUNK_CHARS, readableText } from "./extras/gmail";
 import { buildPlainEmail, encodeWord, MimeError, parseRecipients } from "./extras/mime";
 import {
   CATALOG,
@@ -61,6 +62,22 @@ describe("plain email (ADR-0031)", () => {
       buildPlainEmail({ to: "a@x.example", subject: "Hi", body: "x", inReplyTo: "<a>\r\nX: y" }),
     );
     bad(() => buildPlainEmail({ to: "", subject: "Hi", body: "x" }));
+  });
+});
+
+describe("mail a model can read cheaply", () => {
+  it("drops invisible padding and blank runs, and cuts long links to their site", () => {
+    // What newsletters put after their preview text.
+    const PADDING = String.fromCodePoint(0x34f, 0x200b).repeat(20);
+    const tracking = `https://click.news.example/ls/click?upn=${"a1B2".repeat(40)}`;
+    const { text, cut } = readableText(
+      `Big sale${PADDING}\r\n\r\n\r\n\r\nShop now (${tracking})\nhttps://short.example/x`,
+    );
+    expect(text).toBe(
+      "Big sale\n\nShop now (https://click.news.example/…)\nhttps://short.example/x",
+    );
+    expect(cut).toBe(1);
+    expect(readableText(tracking, true)).toEqual({ text: tracking, cut: 0 });
   });
 });
 
@@ -212,6 +229,75 @@ describe("Gmail through Google's API, without an MCP server (ADR-0031)", () => {
     expect(read).toMatchObject({ status: "ok", untrusted: true });
     expect(read.status === "ok" && read.content).toContain("Big savings inside");
     expect(read.status === "ok" && read.content).not.toContain("<b>");
+  });
+
+  it("says when more mail matches, and pages on", async () => {
+    const { executor, toolkits, server } = await signedIn();
+    await toolkits.refresh(ctx, server.id);
+    for (let i = 1; i <= 5; i += 1) {
+      fake.gmail.addMessage({
+        id: `m${i}`,
+        from: "Shop <deals@shop.example>",
+        to: "alex@example.com",
+        subject: `Deal ${i}`,
+        body: "Sale",
+      });
+    }
+    const first = await executor.execute(
+      call("gmail.search_messages", { query: "sale", max: 2 }, "t1"),
+      ctx,
+    );
+    const firstText = first.status === "ok" ? String(first.content) : "";
+    expect(firstText).toContain("m5 · ");
+    expect(firstText).toContain("…[2 shown of about 5; more match.");
+    const token = /page_token: (\S+)]/.exec(firstText)?.[1] ?? "";
+
+    const last = await executor.execute(
+      call("gmail.search_messages", { query: "sale", max: 3, page_token: token }, "t2"),
+      ctx,
+    );
+    const lastText = last.status === "ok" ? String(last.content) : "";
+    expect(lastText).toContain("m1 · ");
+    expect(lastText).not.toContain("more match");
+  });
+
+  it("reads a long email a piece at a time, and answers a mistyped ID plainly", async () => {
+    const { executor, toolkits, server } = await signedIn();
+    await toolkits.refresh(ctx, server.id);
+    fake.gmail.addMessage({
+      id: "m1",
+      from: "News <news@shop.example>",
+      to: "alex@example.com",
+      subject: "Weekly digest",
+      body: `${"Story. ".repeat(1_000)}Read more: https://t.shop.example/c/${"x".repeat(200)}`,
+    });
+    const first = await executor.execute(
+      call("gmail.read_message", { message_id: "m1" }, "t1"),
+      ctx,
+    );
+    const firstText = first.status === "ok" ? String(first.content) : "";
+    expect(firstText).toContain("Subject: Weekly digest");
+    expect(firstText).toContain(`call again with from: ${MAIL_CHUNK_CHARS} to read more`);
+
+    const rest = await executor.execute(
+      call("gmail.read_message", { message_id: "m1", from: MAIL_CHUNK_CHARS }, "t2"),
+      ctx,
+    );
+    const restText = rest.status === "ok" ? String(rest.content) : "";
+    expect(restText).toContain("Read more: https://t.shop.example/…");
+    expect(restText).toContain("1 long link cut; full_links: true shows them");
+    expect(restText).not.toContain("read more]");
+
+    const typo = await executor.execute(
+      call("gmail.read_message", { message_id: "m9" }, "t3"),
+      ctx,
+    );
+    expect(typo).toMatchObject({
+      status: "error",
+      code: "not_found",
+      message:
+        "No message with ID m9. Copy the ID exactly as gmail.search_messages shows it, or search again.",
+    });
   });
 
   it("sends only what a person approved, replying in the thread", async () => {

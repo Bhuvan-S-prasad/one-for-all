@@ -70,12 +70,80 @@ function attachments(payload: Part | undefined): string[] {
   return names;
 }
 
-async function failure(res: Response, what: string): Promise<Error> {
+/**
+ * Invisible padding: newsletters fill the inbox preview with these, often
+ * hundreds at a time, and each one costs the model a token.
+ */
+const INVISIBLE: readonly (readonly [number, number])[] = [
+  [0xad, 0xad], // soft hyphen
+  [0x34f, 0x34f], // combining grapheme joiner
+  [0x61c, 0x61c],
+  [0x115f, 0x1160], // Hangul fillers
+  [0x17b4, 0x17b5],
+  [0x180e, 0x180e],
+  [0x200b, 0x200f], // zero-width spaces and joiners, direction marks
+  [0x202a, 0x202e],
+  [0x2060, 0x2064],
+  [0x3164, 0x3164],
+  [0xfeff, 0xfeff],
+  [0xffa0, 0xffa0],
+];
+
+const dropInvisible = (text: string) =>
+  Array.from(text)
+    .filter((c) => {
+      const code = c.codePointAt(0)!;
+      return !INVISIBLE.some(([low, high]) => code >= low && code <= high);
+    })
+    .join("");
+
+/** Links this long are tracking addresses: a few hundred characters that say nothing. */
+const LONG_LINK = /\bhttps?:\/\/[^\s<>()[\]"']{60,}/g;
+
+/**
+ * Text a model can read cheaply: no invisible padding, no runs of blank lines,
+ * and (unless asked for) long links cut to their site. Returns how many links
+ * were cut, so the tool can say so.
+ */
+export function readableText(text: string, fullLinks = false): { text: string; cut: number } {
+  let cut = 0;
+  let out = dropInvisible(text.replace(/\r\n?/g, "\n"));
+  if (!fullLinks) {
+    out = out.replace(LONG_LINK, (link) => {
+      try {
+        const { origin } = new URL(link);
+        cut += 1;
+        return `${origin}/…`;
+      } catch {
+        return link;
+      }
+    });
+  }
+  out = out
+    .replace(/[^\S\n]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return { text: out, cut };
+}
+
+/** Characters of an email per read; the agent reads on with `from`, as with web.read_url. */
+export const MAIL_CHUNK_CHARS = 4_000;
+
+async function failure(res: Response, what: string, notFound?: string): Promise<Error> {
   const text = (await res.text().catch(() => "")).slice(0, 500);
+  // A mistyped ID is the usual cause: say so plainly, so the model fixes the
+  // ID instead of reading Google's error. Gmail answers a malformed one with 400.
+  if (notFound && (res.status === 404 || (res.status === 400 && /invalid id/i.test(text)))) {
+    return Object.assign(new Error(notFound), { code: "not_found" });
+  }
   return Object.assign(new Error(`Gmail couldn't ${what} (HTTP ${res.status}). ${text}`.trim()), {
     code: res.status === 404 ? "not_found" : "app_error",
   });
 }
+
+const noMessage = (messageId: string) =>
+  `No message with ID ${messageId}. Copy the ID exactly as gmail.search_messages shows it, or search again.`;
 
 /** Recipients the model wrote, checked before the call reaches policy or a person. */
 const recipients = (field: string) =>
@@ -119,9 +187,10 @@ export function gmailTools(
     path: string,
     what: string,
     init?: RequestInit,
+    notFound?: string,
   ): Promise<T> => {
     const res = await mcp.fetchAs(ctx, serverId, `${api}${path}`, init);
-    if (!res.ok) throw await failure(res, what);
+    if (!res.ok) throw await failure(res, what, notFound);
     return (await res.json()) as T;
   };
   const post = <T>(ctx: ToolRunContext, path: string, what: string, body: unknown) =>
@@ -142,6 +211,8 @@ export function gmailTools(
         ctx,
         `/messages/${input.reply_to_message_id}?${metadata(["Message-ID", "References"])}`,
         "find the message to reply to",
+        undefined,
+        noMessage(input.reply_to_message_id),
       );
       threadId = original.threadId;
       // Only well-formed IDs: these came from someone else's mail.
@@ -165,22 +236,40 @@ export function gmailTools(
 
   const search = defineTool({
     name: "gmail.search_messages",
-    description:
-      "Search the person's Gmail with Gmail's search syntax (e.g. `in:inbox is:unread`, `from:sam newer_than:7d`). Returns IDs, senders, subjects, dates and snippets, newest first.",
+    description: [
+      "Search the person's Gmail with Gmail's search syntax. Returns message IDs, dates, senders, subjects and snippets, newest first, and says when more match.",
+      "Narrow the search rather than reading more: `category:primary` is mail from people (not promotions, social or updates), `-category:promotions` drops ads, `is:unread`, `newer_than:7d`, `from:sam`, `subject:invoice`, `has:attachment`, `is:important`. Combine them with spaces.",
+      "If two or three searches find nothing that fits, stop and tell the person what you looked for, rather than searching on.",
+    ].join(" "),
     input: z.object({
       query: z.string().max(500).default("in:inbox"),
       max: z.number().int().min(1).max(20).default(10),
+      page_token: z
+        .string()
+        .max(200)
+        .regex(/^[A-Za-z0-9_-]+$/, "a page token from a previous search")
+        .optional()
+        .describe("To see the next page of the same search: the token it gave"),
     }),
     annotations: { readOnly: true },
     source: "mcp",
-    async run({ query, max }, ctx) {
-      const found = await request<{ messages?: { id: string }[] }>(
+    async run({ query, max, page_token }, ctx) {
+      const found = await request<{
+        messages?: { id: string }[];
+        nextPageToken?: string;
+        resultSizeEstimate?: number;
+      }>(
         ctx,
-        `/messages?q=${encodeURIComponent(query)}&maxResults=${max}`,
+        `/messages?q=${encodeURIComponent(query)}&maxResults=${max}${page_token ? `&pageToken=${page_token}` : ""}`,
         "search",
       );
       const ids = (found.messages ?? []).map((m) => m.id);
-      if (ids.length === 0) return { content: "No messages match.", untrusted: true };
+      if (ids.length === 0) {
+        return {
+          content: page_token ? "No more messages match." : "No messages match.",
+          untrusted: true,
+        };
+      }
       const messages = await Promise.all(
         ids.map((messageId) =>
           request<Message>(
@@ -190,14 +279,23 @@ export function gmailTools(
           ),
         ),
       );
-      const lines = messages.map((m) =>
-        [
+      const lines = messages.map((m) => {
+        // Snippets arrive HTML-escaped and padded with invisible characters.
+        const snippet = m.snippet ? readableText(htmlToText(m.snippet)).text : "";
+        return [
           `${m.id} · ${header(m.payload, "Date")} · ${header(m.payload, "From")} · ${header(m.payload, "Subject") || "(no subject)"}`,
-          m.snippet ? `  ${m.snippet}` : "",
+          snippet ? `  ${snippet}` : "",
         ]
           .filter(Boolean)
-          .join("\n"),
-      );
+          .join("\n");
+      });
+      // Without this the model takes the first page for the whole mailbox.
+      if (found.nextPageToken) {
+        const estimate = found.resultSizeEstimate ?? 0;
+        lines.push(
+          `…[${ids.length} shown${estimate > ids.length ? ` of about ${estimate}` : ""}; more match. Narrow the search, or call again with page_token: ${found.nextPageToken}]`,
+        );
+      }
       // Other people's words: the run is tainted from here (§10.3).
       return { content: lines.join("\n"), untrusted: true };
     },
@@ -205,18 +303,42 @@ export function gmailTools(
 
   const read = defineTool({
     name: "gmail.read_message",
-    description: "Read one email in full, by its message ID from gmail.search_messages.",
-    input: z.object({ message_id: id("message") }),
+    description: `Read one email by its message ID from gmail.search_messages, ${MAIL_CHUNK_CHARS.toLocaleString("en")} characters at a time. Long tracking links are cut to their site; ask for full_links only when you need to open one.`,
+    input: z.object({
+      message_id: id("message"),
+      from: z
+        .number()
+        .int()
+        .min(0)
+        .default(0)
+        .describe("Character to start from, to read further into a long email"),
+      full_links: z.boolean().default(false).describe("Show long links whole"),
+    }),
     annotations: { readOnly: true },
     source: "mcp",
-    async run({ message_id }, ctx) {
+    async run({ message_id, from, full_links }, ctx) {
       const m = await request<Message>(
         ctx,
         `/messages/${encodeURIComponent(message_id)}?format=full`,
         "read that message",
+        undefined,
+        noMessage(message_id),
       );
       const files = attachments(m.payload);
-      const text = messageText(m.payload).trim().slice(0, 8_000);
+      const { text: all, cut } = readableText(messageText(m.payload), full_links);
+      const chunk = all.slice(from, from + MAIL_CHUNK_CHARS);
+      const end = from + chunk.length;
+      const notes = [
+        ...(end < all.length
+          ? [
+              `characters ${from}–${end} of ${all.length}; call again with from: ${end} to read more`,
+            ]
+          : []),
+        ...(cut
+          ? [`${cut} long link${cut === 1 ? "" : "s"} cut; full_links: true shows them`]
+          : []),
+      ];
+      const text = `${chunk || (from ? "(nothing more in this email)" : "")}${notes.length ? `\n…[${notes.join("; ")}]` : ""}`;
       const lines = [
         `From: ${header(m.payload, "From")}`,
         `To: ${header(m.payload, "To")}`,

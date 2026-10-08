@@ -57,6 +57,22 @@ const server = serve(
 
 app.injectWebSocket(server);
 
+// Browsers may look `localhost` up as ::1 first (OAuth providers send people
+// back to http://localhost:…). Listen on IPv6 loopback too: still this machine
+// only (ADR-0017). Without IPv6, or with it already taken, 127.0.0.1 is enough.
+const loopbackV6 =
+  config.server.host === "127.0.0.1" || config.server.host === "localhost"
+    ? serve({ fetch: app.fetch, hostname: "::1", port: config.server.port })
+    : null;
+if (loopbackV6) {
+  app.injectWebSocket(loopbackV6);
+  loopbackV6.on("error", (error: NodeJS.ErrnoException) => {
+    logger.warn("not listening on IPv6 loopback (::1); use 127.0.0.1 in addresses", {
+      code: error.code,
+    });
+  });
+}
+
 // A taken port is the usual start-up failure in development (another API
 // still running); say so plainly instead of an unhandled-error stack trace.
 server.on("error", (error: NodeJS.ErrnoException) => {
@@ -77,6 +93,7 @@ async function shutdown(signal: string) {
   stopping = true;
   logger.info("shutting down", { signal });
   server.close();
+  loopbackV6?.close();
   await container.close();
   process.exit(0);
 }

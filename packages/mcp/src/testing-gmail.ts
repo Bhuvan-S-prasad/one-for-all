@@ -108,21 +108,29 @@ export function createFakeGmail(): FakeGmail & {
         const q = (url.searchParams.get("q") ?? "").toLowerCase();
         const words = q.split(/\s+/).filter((w) => w && !w.includes(":"));
         const from = /from:(\S+)/.exec(q)?.[1];
-        const found = messages
+        const all = messages
           .filter((m) => !from || m.from.toLowerCase().includes(from))
-          .filter((m) => words.every((w) => `${m.subject} ${m.body}`.toLowerCase().includes(w)))
-          .slice(0, Number(url.searchParams.get("maxResults") ?? 100));
+          .filter((m) => words.every((w) => `${m.subject} ${m.body}`.toLowerCase().includes(w)));
+        // Page tokens are the offset, which is enough to test paging.
+        const start = Number(url.searchParams.get("pageToken")?.replace("p", "") ?? 0);
+        const end = start + Number(url.searchParams.get("maxResults") ?? 100);
+        const found = all.slice(start, end);
         return json(res, 200, {
           ...(found.length
             ? { messages: found.map((m) => ({ id: m.id, threadId: m.threadId ?? m.id })) }
             : {}),
-          resultSizeEstimate: found.length,
+          ...(end < all.length ? { nextPageToken: `p${end}` } : {}),
+          resultSizeEstimate: all.length,
         });
       }
       const message = /^\/messages\/([^/]+)$/.exec(path);
       if (message && req.method === "GET") {
         const m = messages.find((x) => x.id === decodeURIComponent(message[1]!));
-        if (!m) return json(res, 404, { error: { code: 404 } });
+        if (!m) {
+          return json(res, 404, {
+            error: { code: 404, message: "Requested entity was not found." },
+          });
+        }
         const full = url.searchParams.get("format") === "full";
         const part = m.html
           ? { mimeType: "text/html", body: { data: b64url(`<p>${m.body}</p>`) } }
