@@ -212,11 +212,24 @@ export type ToolOutcome =
       readonly durationMs: number;
     };
 
+/**
+ * A tool `load_toolkit` picked from an app, by its full name, however the
+ * model wrote it: `create_pages`, `notion.create_pages` or `notion_create_pages`.
+ */
+export function toolkitToolName(app: string, tool: string): string {
+  const name = tool.trim().toLowerCase();
+  for (const sep of [".", "_"]) {
+    if (name.startsWith(`${app}${sep}`)) return `${app}.${name.slice(app.length + 1)}`;
+  }
+  return `${app}.${name}`;
+}
+
 /** Lists the tools an agent may use and runs them through policy (hard rule 5). */
 export interface ToolExecutor {
   /**
-   * The tools the model sees. Apps with many tools stay behind
-   * `load_toolkit` until the run loads them (`toolkits`, by app slug).
+   * The tools the model sees. Apps with many tools stay behind `load_toolkit`
+   * until the run loads them: `toolkits` holds whole apps by slug (`notes`)
+   * and single tools picked from a large app (`notion.create_pages`).
    */
   listTools(
     ctx: RunContext,

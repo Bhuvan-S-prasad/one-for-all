@@ -16,6 +16,7 @@ import { LOAD_TOOLKIT } from "./builtins/toolkits";
 import { toDescriptor } from "./define";
 import type {
   Toolkit,
+  ToolDefinition,
   ToolkitSource,
   ToolkitSummary,
   ToolRegistry,
@@ -117,12 +118,17 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
   const { registry, policy, calls } = options;
   const directLimit = options.directToolkitLimit ?? 8;
 
-  /** The workspace's toolkits, each cut down to what this agent was granted. */
+  /**
+   * The workspace's toolkits, each cut down to what this agent was granted,
+   * with the tools the run has loaded: a whole app, or the ones it picked.
+   */
   async function grantedKits(
     ctx: RunContext,
     agent: AgentProfile,
     loaded: ReadonlySet<string>,
-  ): Promise<{ kit: Toolkit; summary: ToolkitSummary }[]> {
+  ): Promise<
+    { kit: Toolkit; summary: ToolkitSummary; inList: readonly ToolDefinition<unknown>[] }[]
+  > {
     const kits = (await options.toolkits?.toolkits(ctx)) ?? [];
     return kits.flatMap((kit) => {
       // App tools need a grant: none of them is a platform tool.
@@ -131,6 +137,7 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
         return grant !== undefined && grant.mode !== "blocked";
       });
       if (tools.length === 0) return [];
+      const whole = loaded.has(kit.app) || tools.length <= directLimit;
       return [
         {
           kit: { ...kit, tools },
@@ -139,8 +146,9 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
             name: kit.name,
             description: kit.description,
             tools: tools.map((t) => ({ name: t.name, description: t.description })),
-            loaded: loaded.has(kit.app) || tools.length <= directLimit,
+            loaded: whole,
           },
+          inList: whole ? tools : tools.filter((t) => loaded.has(t.name)),
         },
       ];
     });
@@ -168,16 +176,18 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
       const builtins = registry.descriptors().flatMap((d) => {
         if (!visible(agent, d.name)) return [];
         if (d.name !== LOAD_TOOLKIT) return [d];
-        // Only when something is waiting, and naming what is.
+        // Only when something is waiting, naming what is and its tools, so the
+        // agent can pick from a large app in one call.
         if (waiting.length === 0) return [];
         const apps = waiting
-          .map((s) => `${s.app} (${s.name}, ${s.tools.length} tools): ${s.description}`)
+          .map((s) => {
+            const names = s.tools.map((t) => t.name.slice(s.app.length + 1)).join(", ");
+            return `${s.app} (${s.name}, ${s.tools.length} tools: ${names}): ${s.description}`;
+          })
           .join("\n");
         return [{ ...d, description: `${d.description}\nApps you can load:\n${apps}` }];
       });
-      const loadedTools = kits
-        .filter((k) => k.summary.loaded)
-        .flatMap((k) => k.kit.tools.map((t) => toDescriptor(t as never)));
+      const loadedTools = kits.flatMap((k) => k.inList.map((t) => toDescriptor(t as never)));
       return [...builtins, ...loadedTools];
     },
 

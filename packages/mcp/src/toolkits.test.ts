@@ -188,7 +188,8 @@ describe("connected apps as toolkits", () => {
     const { executor } = await setup("notes", [{ tool: "notes.*", mode: "auto" }], 1);
     const before = await executor.listTools(ctx);
     expect(before.map((t) => t.name)).toEqual(["load_toolkit"]);
-    expect(before[0]?.description).toContain("notes (Team Notes, 2 tools)");
+    // Its tools by name, so a large app can be picked from in one call.
+    expect(before[0]?.description).toContain("notes (Team Notes, 2 tools: search, delete_page)");
 
     const loaded = await executor.execute(call("load_toolkit", { app: "notes" }, "t1"), ctx);
     expect(loaded).toMatchObject({ status: "ok", verdict: "auto" });
@@ -200,6 +201,27 @@ describe("connected apps as toolkits", () => {
 
     const after = await executor.listTools(ctx, { toolkits: ["notes"] });
     expect(after.map((t) => t.name)).toEqual(["notes.search", "notes.delete_page"]);
+  });
+
+  it("loads only the tools picked from an app, leaving the rest to load later", async () => {
+    const { executor } = await setup("notes", [{ tool: "notes.*", mode: "auto" }], 1);
+    const picked = await executor.execute(
+      call("load_toolkit", { app: "notes", tools: ["notes_search"] }, "t1"),
+      ctx,
+    );
+    expect(picked).toMatchObject({ status: "ok" });
+    expect(picked.status === "ok" && picked.content).toContain("Loaded from Team Notes");
+    expect(picked.status === "ok" && picked.content).not.toContain("delete_page");
+    expect(
+      await executor.execute(call("load_toolkit", { app: "notes", tools: ["rename"] }, "t2"), ctx),
+    ).toMatchObject({
+      status: "error",
+      code: "unknown_tool",
+      message: "Team Notes has no notes.rename. Its tools: notes.search, notes.delete_page.",
+    });
+    // Still waiting, so more can be loaded; only the picked tool is listed.
+    const after = await executor.listTools(ctx, { toolkits: ["notes.search"] });
+    expect(after.map((t) => t.name)).toEqual(["load_toolkit", "notes.search"]);
   });
 
   it("shows nothing of an app the agent wasn't granted", async () => {

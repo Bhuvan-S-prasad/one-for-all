@@ -1,6 +1,7 @@
 import { INNGEST_EVENTS, type RunStopReason } from "@ofa/contracts";
 import {
   APPROVAL_TIMEOUT_MS,
+  toolkitToolName,
   urlKey,
   urlsIn,
   type AgentDirectory,
@@ -172,6 +173,23 @@ function editedNote(fields: readonly string[]): string {
   const names =
     fields.length > 1 ? `${fields.slice(0, -1).join(", ")} and ${fields.at(-1)}` : fields[0];
   return `The person changed ${names} before approving, so this ran with their version.`;
+}
+
+/**
+ * A call to a tool the model wasn't given, while apps wait behind
+ * `load_toolkit`, gets told how to load it: with "Unknown tool" alone, an
+ * agent guessed Notion tool names for six steps (M4 end-to-end check).
+ */
+function withLoadHint<T extends { readonly name: string; readonly invalid?: string }>(
+  call: T,
+  tools: readonly ToolDescriptor[],
+): T {
+  if (!call.invalid || tools.some((t) => t.name === call.name)) return call;
+  if (!tools.some((t) => t.name === "load_toolkit")) return call;
+  return {
+    ...call,
+    invalid: `${call.invalid}. If it belongs to a connected app, call load_toolkit first with the app and the tools you need, then call them by the names it gives.`,
+  };
 }
 
 /**
@@ -444,8 +462,9 @@ export async function runAgent(
         toolCalls: step.toolCalls.map(({ id, name, args }) => ({ id, name, args })),
       });
 
-      for (const [j, call] of step.toolCalls.entries()) {
+      for (const [j, offered] of step.toolCalls.entries()) {
         const toolCallId = `tool-${i}-${j}`;
+        const call = withLoadHint(offered, tools);
         let result: ToolStepResult = await steps.run(toolCallId, () =>
           runTool(toolCallId, call, tainted),
         );
@@ -484,11 +503,17 @@ ${result.content}`,
           if (Array.isArray(items)) todos = items;
         }
         if (result.ok && call.name === "load_toolkit") {
-          const app = String((call.args as { app?: unknown }).app ?? "")
+          const args = call.args as { app?: unknown; tools?: unknown };
+          const app = String(args.app ?? "")
             .trim()
             .toLowerCase();
-          if (app && !loadedToolkits.has(app)) {
-            loadedToolkits.add(app);
+          // A whole app, or the tools picked from a large one.
+          const picked = Array.isArray(args.tools)
+            ? args.tools.map((t) => toolkitToolName(app, String(t)))
+            : [app];
+          const fresh = app ? picked.filter((entry) => !loadedToolkits.has(entry)) : [];
+          if (fresh.length) {
+            for (const entry of fresh) loadedToolkits.add(entry);
             tools = await steps.run(`${toolCallId}-toolkit`, () =>
               deps.tools.listTools(ctx, { toolkits: [...loadedToolkits] }),
             );

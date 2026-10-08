@@ -303,7 +303,7 @@ export function gmailTools(
 
   const read = defineTool({
     name: "gmail.read_message",
-    description: `Read one email by its message ID from gmail.search_messages, ${MAIL_CHUNK_CHARS.toLocaleString("en")} characters at a time. Long tracking links are cut to their site; ask for full_links only when you need to open one.`,
+    description: `Read one email by its message ID from gmail.search_messages, ${MAIL_CHUNK_CHARS.toLocaleString("en")} characters at a time. To read several, call this for each of them in the same step rather than one per step. Long tracking links are cut to their site; ask for full_links only when you need to open one.`,
     input: z.object({
       message_id: id("message"),
       from: z

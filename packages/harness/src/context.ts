@@ -137,16 +137,20 @@ export function assembleContext(input: ContextInput, budget: ContextBudget): Ass
   blocks.identity = estimateTokens(identity);
 
   // Tool schemas travel separately but count against the window. Keep the
-  // granted set in a stable order; drop the tail if it does not fit.
+  // granted set in a stable order. App schemas can be large (Notion's
+  // create_pages alone is ~2,000 tokens), so tools may borrow up to their
+  // budget again from history; a tool that still does not fit is left out,
+  // but not the ones after it.
   const tools: ToolDescriptor[] = [];
   let toolTokens = 0;
   for (const tool of [...input.tools].sort((a, b) => a.name.localeCompare(b.name))) {
     const cost = estimateTools([tool]);
-    if (toolTokens + cost > budget.tools) break;
+    if (toolTokens + cost > budget.tools * 2) continue;
     tools.push(tool);
     toolTokens += cost;
   }
   blocks.tools = toolTokens;
+  const borrowed = Math.max(0, toolTokens - budget.tools);
 
   // Per task: memory and plan.
   const memoryLines: string[] = [];
@@ -189,7 +193,7 @@ export function assembleContext(input: ContextInput, budget: ContextBudget): Ass
   // Volatile: the thread (newest kept, oldest dropped), then this run's steps.
   const history: LLMMessage[] = [];
   let historyTokens = 0;
-  const historyBudget = budget.history - blocks.notes;
+  const historyBudget = budget.history - blocks.notes - borrowed;
   for (let i = input.history.length - 1; i >= 0; i -= 1) {
     const raw = input.history[i];
     const message = raw ? historyMessage(raw, input.agent.id) : null;

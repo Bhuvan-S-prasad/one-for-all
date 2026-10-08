@@ -305,6 +305,50 @@ describe("runAgent", () => {
     expect(steps.ran).toContain("tool-0-0-toolkit");
   });
 
+  it("loads just the tools picked from a large app, however the model names them", async () => {
+    const { tools, llm, run } = setup([
+      {
+        toolCalls: [
+          {
+            name: "load_toolkit",
+            args: { app: "notion", tools: ["create_pages", "notion_search"] },
+          },
+        ],
+      },
+      { toolCalls: [{ name: "load_toolkit", args: { app: "notion", tools: ["search"] } }] },
+      { text: "Ready." },
+    ]);
+    const asked: (readonly string[] | undefined)[] = [];
+    tools.listTools = async (_c, listing) => {
+      asked.push(listing?.toolkits);
+      return [search];
+    };
+    const execute = tools.execute.bind(tools);
+    tools.execute = async (request, c) =>
+      request.name === "load_toolkit" ? okOutcome("loaded") : execute(request, c);
+    await run();
+    // The second call picked nothing new, so the list wasn't fetched again.
+    expect(asked).toEqual([undefined, ["notion.create_pages", "notion.search"]]);
+    expect(llm.requests).toHaveLength(3);
+  });
+
+  it("points a call to a tool it wasn't given at load_toolkit, when apps are waiting", async () => {
+    const { llm, tools, run } = setup([
+      {
+        toolCalls: [
+          { name: "notion_create_pages", args: {}, invalid: "Unknown tool: notion_create_pages" },
+        ],
+      },
+      { text: "Sorry." },
+    ]);
+    const loader = { ...search, name: "load_toolkit", description: "Load an app" };
+    tools.listTools = async () => [search, loader];
+    await run();
+    expect(llm.requests[1]?.messages.at(-1)?.content).toBe(
+      "Error: Unknown tool: notion_create_pages. If it belongs to a connected app, call load_toolkit first with the app and the tools you need, then call them by the names it gives.",
+    );
+  });
+
   it("lets middleware block a tool before it runs", async () => {
     const { runtime, tools, run } = setup([
       { toolCalls: [{ name: "web.search", args: { query: "x" } }] },
@@ -712,6 +756,36 @@ describe("context assembly", () => {
     );
     const tool = out.messages.at(-1)?.content ?? "";
     expect(tool.match(/<\/untrusted>/g)).toHaveLength(1);
+  });
+
+  it("lets large app tools borrow from history, and skips only what still doesn't fit", () => {
+    const budget = contextBudget(32_000, 32_000);
+    // About 1,500 tokens of schema each, like Notion's.
+    const big = (name: string): ToolDescriptor => ({
+      ...search,
+      name,
+      inputSchema: { type: "object", description: "x".repeat(6_000) },
+    });
+    const huge = { ...big("app.huge"), inputSchema: { description: "x".repeat(40_000) } };
+    const out = assembleContext(
+      {
+        ...base,
+        history: [],
+        tools: [big("app.a"), huge, big("app.b"), big("app.c"), big("app.d"), search],
+      },
+      budget,
+    );
+    // Past the 4,000-token tool budget, into history's; the one that can't
+    // fit at all is left out, not everything after it.
+    expect(out.tools.map((t) => t.name)).toEqual([
+      "app.a",
+      "app.b",
+      "app.c",
+      "app.d",
+      "web.search",
+    ]);
+    expect(out.tokens.blocks.tools).toBeGreaterThan(budget.tools);
+    expect(out.tokens.blocks.tools).toBeLessThanOrEqual(budget.tools * 2);
   });
 });
 

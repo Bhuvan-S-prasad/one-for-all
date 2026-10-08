@@ -21,6 +21,8 @@ import {
   editableTextFields,
   htmlToText,
   isPrivateAddress,
+  LOAD_ALL_LIMIT,
+  loadToolkitTool,
   READ_CHUNK_CHARS,
   safeFetch,
   toDescriptor,
@@ -270,6 +272,35 @@ describe("tool executor", () => {
       properties: { text: { type: "string", minLength: 1 } },
       required: ["text"],
     });
+  });
+});
+
+describe("load_toolkit", () => {
+  const big = {
+    app: "notion",
+    name: "Notion",
+    description: "Pages and databases",
+    tools: Array.from({ length: LOAD_ALL_LIMIT + 1 }, (_, i) => ({
+      name: `notion.tool_${i}`,
+      description: `Tool ${i}\nmore detail`,
+    })),
+    loaded: false,
+  };
+  const runCtx = { ...ctx, toolkits: { list: async () => [big] } } as never;
+
+  it("asks the agent to pick from an app too large to load whole, listing its tools", async () => {
+    const tool = loadToolkitTool();
+    await expect(tool.run({ app: "Notion" }, runCtx)).rejects.toMatchObject({
+      code: "choose_tools",
+      message: expect.stringContaining(
+        `Notion has ${LOAD_ALL_LIMIT + 1} tools, too many to load at once. Call load_toolkit again with app "notion"`,
+      ),
+    });
+    await expect(tool.run({ app: "notion" }, runCtx)).rejects.toThrow("- notion.tool_0: Tool 0\n");
+    const picked = await tool.run({ app: "notion", tools: ["tool_1", "notion.tool_2"] }, runCtx);
+    expect(picked.content).toBe(
+      "Loaded from Notion, for the rest of this task:\n- notion.tool_1: Tool 1\n- notion.tool_2: Tool 2",
+    );
   });
 });
 
