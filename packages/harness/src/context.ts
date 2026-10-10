@@ -1,6 +1,7 @@
 import type { LLMMessage, ToolDescriptor } from "@ofa/core";
 import {
   AGENT_IDENTITY,
+  AGENT_MESSAGE,
   AGENT_VOICE,
   HANDOFF_BRIEF,
   PLATFORM_RULES,
@@ -19,11 +20,18 @@ export interface HistoryMessage {
   /** The agent that wrote it, for agent messages. */
   readonly agentId: string | null;
   readonly content: string;
+  /** The writing agent's name, so a shared thread says who said what (M5.04). */
+  readonly agentName?: string;
   /**
    * Another agent's brief, framed with `HANDOFF_BRIEF` and shown as the
    * request (M5.01). Its author is another model, not the person.
    */
   readonly handoff?: boolean;
+  /**
+   * Another agent's message that woke this run, framed with `AGENT_MESSAGE`
+   * and shown as the request (M5.03). Its author is another model.
+   */
+  readonly agentMessage?: boolean;
 }
 
 export interface ToolCallTurn {
@@ -119,7 +127,10 @@ function historyMessage(message: HistoryMessage, selfId: string): LLMMessage | n
   }
   if (message.author === "user") return { role: "user", content: message.content };
   if (message.author === "agent")
-    return { role: "user", content: `[another agent] ${message.content}` };
+    return {
+      role: "user",
+      content: `[${message.agentName ?? "another agent"}] ${message.content}`,
+    };
   return null; // System notes are for people, not the model.
 }
 
@@ -239,6 +250,7 @@ export function assembleContext(input: ContextInput, budget: ContextBudget): Ass
       AGENT_VOICE,
       TASK_STATE,
       ...(input.history.some((m) => m.handoff) ? [HANDOFF_BRIEF] : []),
+      ...(input.history.some((m) => m.agentMessage) ? [AGENT_MESSAGE] : []),
     ]
       .map(promptRef)
       .join("+"),

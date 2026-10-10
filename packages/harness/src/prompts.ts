@@ -118,6 +118,22 @@ export const HANDOFF_BRIEF: PromptTemplate<{ readonly brief: string }> = {
     ].join("\n"),
 };
 
+/**
+ * A message from another agent in a conversation, as the agent it woke reads
+ * it (M5.03). Its reply is posted in that conversation, for everyone in it.
+ */
+export const AGENT_MESSAGE: PromptTemplate<{ readonly from: string; readonly message: string }> = {
+  id: "harness.agent_message",
+  version: 1,
+  render: ({ from, message }) =>
+    [
+      `${from}, another agent in this conversation, sent you this message. Do what it asks with your own tools, then reply. Your reply is posted in this conversation, where the person and ${from} can read it.`,
+      "",
+      `${from}'s message:`,
+      message,
+    ].join("\n"),
+};
+
 /** Turns older steps of a long run into a compact summary (M2.12). */
 export const COMPACTION: PromptTemplate<{
   readonly previous: string;

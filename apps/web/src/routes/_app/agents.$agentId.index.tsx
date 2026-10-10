@@ -2,6 +2,7 @@ import {
   MOOD_LABELS,
   moodFor,
   useAgent,
+  useAgents,
   useApprovals,
   useChatThread,
   useNewThread,
@@ -631,6 +632,12 @@ function Thread(props: {
   const [behind, setBehind] = useState(false);
   const first = useRef(true);
   const last = props.messages.at(-1);
+  // Another agent can answer here when this one messaged it (M5.03): show who wrote it.
+  const { data: everyone } = useAgents();
+  const authorOf = (m: Message): Agent | undefined =>
+    m.author.type === "agent" && m.author.agentId !== props.agent.id
+      ? everyone?.find((a) => a.id === (m.author as { agentId: string }).agentId)
+      : undefined;
 
   const toBottom = (smooth: boolean) => {
     const el = scroller.current;
@@ -724,13 +731,17 @@ function Thread(props: {
                 </span>
               </div>
             ) : m.author.type === "agent" ? (
-              <Reply
-                key={m.id}
-                message={m}
-                agent={props.agent}
-                onRetry={props.onRetryFor(m)}
-                onContinue={props.continueFor(m)}
-              />
+              authorOf(m) ? (
+                <Reply key={m.id} message={m} agent={authorOf(m)!} />
+              ) : (
+                <Reply
+                  key={m.id}
+                  message={m}
+                  agent={props.agent}
+                  onRetry={props.onRetryFor(m)}
+                  onContinue={props.continueFor(m)}
+                />
+              )
             ) : (
               <Notice key={m.id}>{m.content}</Notice>
             ),

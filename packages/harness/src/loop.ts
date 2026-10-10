@@ -34,7 +34,7 @@ import {
 } from "./context";
 import { modelCallEvents, runEvent } from "./events";
 import { MiddlewareChain, type HarnessMiddleware, type RunHookContext } from "./middleware";
-import { HANDOFF_BRIEF } from "./prompts";
+import { AGENT_MESSAGE, HANDOFF_BRIEF } from "./prompts";
 import { redactJson, type RedactText } from "./redaction";
 
 // The agent loop (ARCHITECTURE.md §6.2). Every side effect happens inside a
@@ -93,6 +93,11 @@ export interface RunInput {
   readonly ctx: RunContext;
   readonly threadId: ThreadId | null;
   readonly trigger: "message" | "routine" | "delegation" | "event" | "manual";
+  /**
+   * The message that started the run. For a run woken by another agent's
+   * message (`event`, M5.03), that message is its request.
+   */
+  readonly requestId?: string;
 }
 
 export interface RunResult {
@@ -313,21 +318,43 @@ export async function runAgent(
 
     // ── Context that holds for the whole run ─────────────────────────────────
     const context = await steps.run("context", async () => {
-      const history: HistoryMessage[] = input.threadId
-        ? (
-            await deps.threads.recentMessages(ctx, input.threadId, options.historyMessages ?? 30)
-          ).map((m) =>
-            // Work handed over by another agent (M5.01) is this run's request.
-            input.trigger === "delegation" && m.author === "agent" && m.agentId !== ctx.agentId
-              ? {
-                  author: "user" as const,
-                  agentId: null,
-                  content: HANDOFF_BRIEF.render({ brief: m.content }),
-                  handoff: true,
-                }
-              : { author: m.author, agentId: m.agentId, content: m.content },
-          )
+      const messages = input.threadId
+        ? await deps.threads.recentMessages(ctx, input.threadId, options.historyMessages ?? 30)
         : [];
+      // Other agents in the thread, by name (M5.03–04): who said what.
+      const names = new Map<string, string>();
+      for (const id of new Set(messages.flatMap((m) => (m.agentId ? [m.agentId] : [])))) {
+        if (id === ctx.agentId) continue;
+        const other = await deps.agents.get(ctx, id as AgentProfile["id"]);
+        names.set(id, other?.name ?? "Another agent");
+      }
+      const history: HistoryMessage[] = messages.map((m) => {
+        const fromOther = m.author === "agent" && m.agentId !== null && m.agentId !== ctx.agentId;
+        // Work handed over by another agent (M5.01) is this run's request.
+        if (fromOther && input.trigger === "delegation") {
+          return {
+            author: "user",
+            agentId: null,
+            content: HANDOFF_BRIEF.render({ brief: m.content }),
+            handoff: true,
+          };
+        }
+        // So is the message from another agent that woke this run (M5.03).
+        if (fromOther && input.trigger === "event" && m.id === input.requestId) {
+          return {
+            author: "user",
+            agentId: null,
+            content: AGENT_MESSAGE.render({ from: names.get(m.agentId!)!, message: m.content }),
+            agentMessage: true,
+          };
+        }
+        return {
+          author: m.author,
+          agentId: m.agentId,
+          content: m.content,
+          ...(fromOther ? { agentName: names.get(m.agentId!)! } : {}),
+        };
+      });
       const lastUser = [...history].reverse().find((m) => m.author === "user")?.content ?? "";
       const memories =
         deps.memory && lastUser && agent.memoryScopes.length > 0
@@ -351,10 +378,10 @@ export async function runAgent(
       for (const url of urlsIn(text)) knownUrls.add(urlKey(url));
     };
     for (const message of context.history) {
-      // A brief was written by another model. If that run had read outside
-      // content (so this one starts tainted), addresses in it were not given
-      // by a person and must not open freely here (ADR-0027).
-      if (message.handoff && start.tainted) continue;
+      // A brief or message was written by another model. If that run had read
+      // outside content (so this one starts tainted), addresses in it were
+      // not given by a person and must not open freely here (ADR-0027).
+      if ((message.handoff || message.agentMessage) && start.tainted) continue;
       learnUrls(message.content);
     }
 
@@ -1009,9 +1036,11 @@ ${result.content}`,
       messageId: result.messageId,
       reply: result.reply,
       tainted: result.tainted,
-      // Not from a handoff: its request was written by another model, not the person.
+      // Not from a handoff or another agent's message: its request was written
+      // by another model, not the person.
       learn:
         input.trigger !== "delegation" &&
+        input.trigger !== "event" &&
         result.status === "succeeded" &&
         result.stopReason === "final_answer" &&
         result.messageId !== null &&

@@ -25,6 +25,14 @@ export interface Handoff {
   readonly agentName: string;
 }
 
+/** A message one agent posted to another, and the run that will answer it (M5.03). */
+export interface AgentMessage {
+  readonly runId: RunId;
+  readonly messageId: MessageId;
+  readonly agentId: AgentId;
+  readonly agentName: string;
+}
+
 export interface TeamDirectory {
   /**
    * The agents this run may hand work to: active ones other than its own.
@@ -42,6 +50,22 @@ export interface TeamDirectory {
     ctx: RunContext,
     input: { readonly key: string; readonly agent: string; readonly brief: string },
   ): Promise<Handoff>;
+  /**
+   * The agents this run may message (M5.03): in a group thread its other
+   * members, in a direct thread any other active agent. Empty for a run that
+   * was itself started by another agent, so messages go one hop.
+   */
+  contacts(ctx: RunContext): Promise<TeamMember[]>;
+  /**
+   * Post a message from this run's agent into its thread and wake the agent
+   * it names with a run of its own there; that run's reply lands in the same
+   * thread, later. Taint carries over as for a handoff. The same `key` posts
+   * once.
+   */
+  message(
+    ctx: RunContext,
+    input: { readonly key: string; readonly agent: string; readonly content: string },
+  ): Promise<AgentMessage>;
 }
 
 /** The member a model named, by handle or by name, ignoring case and a leading `@`. */

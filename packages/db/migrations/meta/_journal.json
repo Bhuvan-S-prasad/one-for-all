@@ -92,6 +92,13 @@
       "when": 1791609457721,
       "tag": "0012_handoff_threads",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1791612485070,
+      "tag": "0013_group_coordinator",
+      "breakpoints": true
     }
   ]
 }

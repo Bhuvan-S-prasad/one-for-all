@@ -41,6 +41,7 @@ const TOOL_DONE: Record<string, string> = {
   recall: "Checked its memory",
   "todo.write": "Made a plan",
   delegate_task: "Handed work to another agent",
+  message_agent: "Messaged another agent",
 };
 
 export function timeline(events: readonly RunEvent[]): Timeline {

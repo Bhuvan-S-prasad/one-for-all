@@ -3,6 +3,7 @@ import type {
   Agent,
   CreateAgentInput,
   CreatePolicyRuleInput,
+  CreateThreadRequest,
   FirstRunSetupRequest,
   LoginRequest,
   Message,
@@ -187,6 +188,29 @@ export function useNewThread(agentId: string) {
     mutationFn: () => api.newThread(agentId),
     onSuccess: (thread) => {
       queryClient.setQueryData(queryKeys.agentThread(agentId), thread);
+      queryClient.setQueryData(queryKeys.thread(thread.id), thread);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.threadLists });
+    },
+  });
+}
+
+/** The person's group chats with several agents (M5.04). */
+export function useGroupThreads(options: { archived?: boolean } = {}) {
+  const api = useApiClient();
+  const archived = options.archived ?? false;
+  return useQuery({
+    queryKey: queryKeys.groupThreads(archived),
+    queryFn: async () => (await api.groupThreads({ archived })).items,
+  });
+}
+
+/** Start a chat: with one agent a new direct chat, with two to six a group chat. */
+export function useCreateThread() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateThreadRequest) => api.createThread(input),
+    onSuccess: (thread) => {
       queryClient.setQueryData(queryKeys.thread(thread.id), thread);
       void queryClient.invalidateQueries({ queryKey: queryKeys.threadLists });
     },

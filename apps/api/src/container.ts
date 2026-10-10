@@ -318,8 +318,13 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
   const sandbox = config.sandbox ? createDockerSandbox(config.sandbox) : null;
   const artifacts = createArtifactStore(db);
   const approvals = createApprovalStore(db);
-  // The other agents a run can hand work to (M5.01).
-  const team = createTeamDirectory(db);
+  // The other agents a run can hand work to (M5.01) or message (M5.03). A
+  // message wakes its agent through the dispatcher, made with Inngest below.
+  const team = createTeamDirectory(db, {
+    wake: (event) => dispatcher.messageReceived(event),
+    announce: (workspaceId, threadId, messageId) =>
+      publish(workspaceId, { kind: "message.created", threadId, messageId }),
+  });
   const connections = createConnectionStore(db);
   // Apps through MCP (ADR-0011): sign-ins are sealed by the vault, so no vault, no connections.
   const mcp = fullVault
@@ -391,6 +396,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     baseUrl: config.inngest.baseUrl,
     eventKey: config.inngest.eventKey,
   });
+  const dispatcher: RunDispatcher = overrides.dispatcher ?? createRunDispatcher(inngest);
   const tokenRefresh = mcp ? createTokenRefresher(config, mcp, logger) : null;
   const functions = createFunctions(inngest, {
     harness,
@@ -420,7 +426,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     connections,
     mcp,
     toolkits,
-    dispatcher: overrides.dispatcher ?? createRunDispatcher(inngest),
+    dispatcher,
     inngest,
     functions,
     harness,

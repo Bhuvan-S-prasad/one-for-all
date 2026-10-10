@@ -20,6 +20,8 @@ export {
   useForgetMemory,
   useMemories,
   useNewThread,
+  useCreateThread,
+  useGroupThreads,
   useRetryRun,
   useRunArtifacts,
   useApiClient,

@@ -29,6 +29,7 @@ import {
   shareLoginResponseSchema,
   sessionResponseSchema,
   setupStatusSchema,
+  threadListSchema,
   threadSchema,
   threadSummaryPageSchema,
   usageTodaySchema,
@@ -69,7 +70,9 @@ import {
   type SendMessageResponse,
   type SessionResponse,
   type SetupStatus,
+  type CreateThreadRequest,
   type Thread,
+  type ThreadList,
   type ThreadSummaryPage,
   type UpdateAgentRequest,
   type UpdateThreadRequest,
@@ -250,6 +253,12 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request("GET", "/api/agents/stats", agentStatsListSchema),
 
     // ── Threads ────────────────────────────────────────────────────────────
+    /** The person's group chats, most recent first (M5.04). */
+    groupThreads: (options: { archived?: boolean } = {}): Promise<ThreadList> =>
+      request("GET", `/api/threads${options.archived ? "?archived=true" : ""}`, threadListSchema),
+    /** A group chat with two to six agents (one agent makes a direct chat). */
+    createThread: (input: CreateThreadRequest): Promise<Thread> =>
+      request("POST", "/api/threads", threadSchema, input),
     getThread: (id: string): Promise<Thread> =>
       request("GET", `/api/threads/${encodeURIComponent(id)}`, threadSchema),
     updateThread: (id: string, patch: UpdateThreadRequest): Promise<Thread> =>

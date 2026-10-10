@@ -74,6 +74,10 @@ function fakeTeam() {
         agentName: input.agent === "writer" ? "Writer" : "Researcher",
       };
     },
+    contacts: async () => [],
+    message: async () => {
+      throw new Error("not in this test");
+    },
   };
   return { team, handoffs };
 }
@@ -308,6 +312,76 @@ describe("handing work to another agent (M5.01)", () => {
     ]);
     await run();
     expect(toolResults(llm, 1)[0]).toMatch(/isn't available here/);
+  });
+});
+
+describe("a run woken by another agent's message (M5.03)", () => {
+  it("answers that message, sees who said what in the thread, and doesn't learn from it", async () => {
+    const runtime = createMemoryRuntime();
+    const woken: RunContext = { ...ctx, agentId: asId("res"), runId: asId("run_b") };
+    runtime.agents.profiles.set("res", { ...profile("res", "Researcher"), grants: [] });
+    runtime.agents.profiles.set("coord", profile("coord", "Chief"));
+    runtime.runs.records.set("run_b", {
+      id: woken.runId,
+      agentId: woken.agentId,
+      threadId,
+      trigger: "event",
+      status: "queued",
+      tainted: false,
+      usage: { inputTokens: 0, outputTokens: 0, costUsd: 0, modelCalls: 0, toolCalls: 0 },
+    });
+    const at = (n: number) => new Date(Date.UTC(2026, 9, 10, 9, n));
+    runtime.threads.messages.set(threadId, [
+      {
+        id: asId("m1"),
+        author: "user",
+        agentId: null,
+        content: "Plan the upgrade.",
+        createdAt: at(0),
+      },
+      {
+        id: asId("m2"),
+        author: "agent",
+        agentId: asId("coord"),
+        content: "On it.",
+        createdAt: at(1),
+      },
+      {
+        id: asId("m3"),
+        author: "agent",
+        agentId: asId("coord"),
+        content: "Please find the PostgreSQL 18 release date.",
+        createdAt: at(2),
+      },
+    ]);
+    const llm = createScriptedLLM([{ text: "PostgreSQL 18 came out on 25 September 2025." }]);
+    const result = await runAgent(
+      { ctx: woken, threadId, trigger: "event", requestId: "m3" },
+      {
+        llm,
+        tools: createFakeToolExecutor([]),
+        runs: runtime.runs,
+        agents: runtime.agents,
+        threads: runtime.threads,
+        memory: runtime.memory,
+      },
+      createMemoStepRunner(),
+    );
+    const request = llm.requests[0]!;
+    const contents = request.messages.map((m) => m.content);
+    // Earlier messages by another agent carry its name; the one that woke it is the request.
+    expect(contents).toContain("[Chief] On it.");
+    expect(request.messages[0]?.content).toContain(
+      "Chief, another agent in this conversation, sent you this message.",
+    );
+    expect(request.messages[0]?.content).toContain("Please find the PostgreSQL 18 release date.");
+    expect(request.promptVersion).toContain("harness.agent_message@1");
+    expect(result).toMatchObject({ status: "succeeded", learn: false });
+    expect(runtime.threads.messages.get(threadId)?.at(-1)).toMatchObject({
+      author: "agent",
+      agentId: "res",
+      content: "PostgreSQL 18 came out on 25 September 2025.",
+    });
   });
 });
 

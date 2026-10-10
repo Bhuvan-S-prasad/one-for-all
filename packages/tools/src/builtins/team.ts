@@ -9,6 +9,53 @@ import { defineTool } from "../define";
 // step run at the same time (M5.02).
 
 export const DELEGATE_TASK = "delegate_task";
+export const MESSAGE_AGENT = "message_agent";
+
+const MESSAGE_DESCRIPTION =
+  "Send another agent a message in this conversation, without waiting for an answer. It is woken to work on it with its own tools, and its reply appears in this conversation later, where the person sees it. Use it to pass on a request someone else should handle; use delegate_task instead when you need the result to finish your own answer.";
+
+/** Asynchronous messages between agents (§6.3, M5.03). Unlike a handoff, this tool does the whole job. */
+export function messageAgentTool(team: TeamDirectory | null) {
+  return defineTool({
+    name: MESSAGE_AGENT,
+    description: MESSAGE_DESCRIPTION,
+    input: z.object({
+      agent: z.string().trim().min(1).max(80).describe("The agent's handle, e.g. researcher"),
+      message: z
+        .string()
+        .trim()
+        .min(10, "Write a message the other agent can act on")
+        .max(4_000)
+        .describe("What you want it to do, with what it needs to know"),
+    }),
+    // It wakes another agent rather than changing anything outside; that
+    // agent's calls each go through policy, and it starts tainted if this run is.
+    annotations: { readOnly: false, destructive: false, outbound: false, idempotent: true },
+    editable: ["message"],
+    async listed(ctx) {
+      const contacts = team ? await team.contacts(ctx) : [];
+      if (contacts.length === 0) return null;
+      const roster = contacts.map((m) => `- ${m.slug}: ${m.name}, ${m.job}`).join("\n");
+      return { description: `${MESSAGE_DESCRIPTION}\nAgents you can message here:\n${roster}` };
+    },
+    async describe({ agent, message }) {
+      const start = message.length > 160 ? `${message.slice(0, 159)}…` : message;
+      return `Message ${agent}: “${start}”`;
+    },
+    async run({ agent, message }, ctx) {
+      if (!team) {
+        throw Object.assign(new Error("Agents can't message each other on this server."), {
+          code: "not_configured",
+        });
+      }
+      const sent = await team.message(ctx, { key: ctx.idempotencyKey, agent, content: message });
+      return {
+        content: `Sent to ${sent.agentName}. Its reply will appear in this conversation by itself when it is ready; you won't see it in this turn, so don't promise to pass it on.`,
+        untrusted: false,
+      };
+    },
+  });
+}
 
 const DESCRIPTION =
   "Hand a self-contained piece of work to another agent and get its result back. The other agent sees only your brief, never this conversation, so put in everything it needs: the goal, the facts and links to use, and what to send back. Several handoffs in one step run at the same time.";

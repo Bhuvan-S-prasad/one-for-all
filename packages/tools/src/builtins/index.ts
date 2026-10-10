@@ -4,7 +4,7 @@ import { artifactsReadTool } from "./artifacts";
 import { browserTools, fileTools, shellTool, useSavedLoginTool } from "./computer";
 import { recallTool, rememberTool, todoTool } from "./memory";
 import { loadToolkitTool } from "./toolkits";
-import { delegateTaskTool } from "./team";
+import { delegateTaskTool, messageAgentTool } from "./team";
 import { readUrlTool, webSearchTool, type Fetcher, type WebSearchProvider } from "./web";
 
 export interface BuiltinToolDeps {
@@ -13,7 +13,10 @@ export interface BuiltinToolDeps {
   readonly fetcher?: Fetcher;
   /** The agents' computer (M3); null when this server has none. */
   readonly sandbox?: SandboxProvider | null;
-  /** The other agents a run can hand work to (M5.01); without it, `delegate_task` is never listed. */
+  /**
+   * The other agents a run can hand work to (M5.01) or message (M5.03);
+   * without it, `delegate_task` and `message_agent` are never listed.
+   */
   readonly team?: TeamDirectory | null;
 }
 
@@ -35,5 +38,6 @@ export function builtinTools(deps: BuiltinToolDeps): ToolDefinition<never>[] {
     artifactsReadTool(),
     loadToolkitTool(),
     delegateTaskTool(deps.team ?? null),
+    messageAgentTool(deps.team ?? null),
   ] as unknown as ToolDefinition<never>[];
 }

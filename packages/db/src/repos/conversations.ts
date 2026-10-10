@@ -136,6 +136,135 @@ export async function newDirectThread(
   });
 }
 
+/**
+ * A group thread (M5.04): this person and two to six agents, one of them the
+ * coordinator. Members are listed coordinator first.
+ */
+export async function createGroupThread(
+  db: Database,
+  ctx: TenantContext,
+  input: { agentIds: readonly string[]; coordinatorAgentId: string; title: string | null },
+): Promise<ThreadWithMembers> {
+  return withTenant(db, ctx, async (tx) => {
+    const [created] = await tx
+      .insert(thread)
+      .values({
+        workspaceId: ctx.workspaceId,
+        kind: "group",
+        title: input.title,
+        coordinatorAgentId: input.coordinatorAgentId,
+        createdBy: ctx.userId,
+      })
+      .returning({ id: thread.id });
+    if (!created) throw new Error("thread insert returned no row");
+    const agents = [
+      input.coordinatorAgentId,
+      ...input.agentIds.filter((id) => id !== input.coordinatorAgentId),
+    ];
+    await tx.insert(threadMember).values([
+      {
+        workspaceId: ctx.workspaceId,
+        threadId: created.id,
+        memberType: "user",
+        userId: ctx.userId,
+      },
+      ...agents.map((agentId) => ({
+        workspaceId: ctx.workspaceId,
+        threadId: created.id,
+        memberType: "agent" as const,
+        agentId,
+      })),
+    ]);
+    return withMembers(tx, created.id);
+  });
+}
+
+/** This person's group threads, most recently active first. */
+export async function listGroupThreads(
+  db: Database,
+  ctx: TenantContext,
+  options: { archived?: boolean } = {},
+): Promise<ThreadWithMembers[]> {
+  return withTenant(db, ctx, async (tx) => {
+    const rows = await tx
+      .select()
+      .from(thread)
+      .where(
+        and(
+          eq(thread.kind, "group"),
+          options.archived ? sql`${thread.archivedAt} is not null` : isNull(thread.archivedAt),
+          sql`exists (select 1 from ${threadMember} m where m.thread_id = ${thread}.id and m.user_id = ${ctx.userId})`,
+        ),
+      )
+      .orderBy(desc(thread.updatedAt))
+      .limit(100);
+    const members = await membersOf(
+      tx,
+      rows.map((r) => r.id),
+    );
+    return rows.map((row) => ({ ...row, members: members.get(row.id) ?? [] }));
+  });
+}
+
+/**
+ * One agent's message to another in a thread they share (M5.03), and the
+ * queued run that will answer it there. IDs come from the caller, derived
+ * from the sending run's tool call, so a retried step posts once.
+ */
+export async function postAgentMessage(
+  db: Database,
+  ctx: TenantContext,
+  input: {
+    threadId: string;
+    runId: string;
+    parentRunId: string;
+    fromAgentId: string;
+    toAgentId: string;
+    content: string;
+    tainted: boolean;
+  },
+): Promise<{ messageId: string; created: boolean }> {
+  return withTenant(db, ctx, async (tx) => {
+    const [made] = await tx
+      .insert(run)
+      .values({
+        id: input.runId,
+        workspaceId: ctx.workspaceId,
+        agentId: input.toAgentId,
+        threadId: input.threadId,
+        parentRunId: input.parentRunId,
+        trigger: "event",
+        triggeredBy: ctx.userId,
+        tainted: input.tainted,
+      })
+      .onConflictDoNothing({ target: run.id })
+      .returning({ id: run.id });
+    if (!made) {
+      const [sent] = await tx
+        .select({ id: message.id })
+        .from(message)
+        .where(and(eq(message.runId, input.runId), eq(message.authorAgentId, input.fromAgentId)))
+        .limit(1);
+      if (!sent) throw new Error("agent message vanished");
+      return { messageId: sent.id, created: false };
+    }
+    const [sent] = await tx
+      .insert(message)
+      .values({
+        workspaceId: ctx.workspaceId,
+        threadId: input.threadId,
+        authorType: "agent",
+        authorAgentId: input.fromAgentId,
+        content: input.content,
+        runId: input.runId,
+      })
+      .returning({ id: message.id });
+    if (!sent) throw new Error("message insert returned no row");
+    await tx.update(thread).set({ updatedAt: new Date() }).where(eq(thread.id, input.threadId));
+    return { messageId: sent.id, created: true };
+  });
+}
+
 export interface ThreadSummaryRow extends ThreadWithMembers {
   /** The start of the first message the person wrote. */
   readonly preview: string | null;

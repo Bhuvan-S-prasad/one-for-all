@@ -1,11 +1,22 @@
 import {
+  createThreadRequestSchema,
   paginationQuerySchema,
   sendMessageRequestSchema,
+  groupThreadListQuerySchema,
   updateThreadRequestSchema,
   type MessagePage,
+  type ThreadList,
 } from "@ofa/contracts";
-import { NotFoundError } from "@ofa/core";
-import { getThread, listMessages, updateThread } from "@ofa/db";
+import { AppError, NotFoundError } from "@ofa/core";
+import {
+  createGroupThread,
+  getThread,
+  listAgents,
+  listGroupThreads,
+  listMessages,
+  newDirectThread,
+  updateThread,
+} from "@ofa/db";
 import { Hono } from "hono";
 import type { Container } from "../container";
 import { toMessage, toThread } from "../lib/mappers";
@@ -16,6 +27,8 @@ import type { AppEnv } from "../types";
 
 /**
  * Threads and messages (M2.19):
+ *   GET   /api/threads                group chats (M5.04), most recent first (?archived=true)
+ *   POST  /api/threads                one agent: a new direct chat; two to six: a group chat
  *   GET   /api/threads/:id
  *   PATCH /api/threads/:id            rename, archive or bring back (UX.13)
  *   GET   /api/threads/:id/messages   newest page first, oldest-first within a page
@@ -31,6 +44,35 @@ export function threadRoutes(
 
   return new Hono<AppEnv>()
     .use(requireSession(deps.sessions), requireTenant())
+    .get("/", async (c) => {
+      const query = readQuery(c, groupThreadListQuerySchema);
+      const threads = await listGroupThreads(db, c.get("tenant"), {
+        archived: query.archived === "true",
+      });
+      return c.json({ items: threads.map(toThread) } satisfies ThreadList);
+    })
+    .post("/", async (c) => {
+      const tenant = c.get("tenant");
+      const input = await readJson(c, createThreadRequestSchema);
+      const known = new Map(
+        (await listAgents(db, tenant)).filter((a) => a.status !== "archived").map((a) => [a.id, a]),
+      );
+      const missing = input.agentIds.filter((id) => !known.has(id));
+      if (missing.length > 0) throw new NotFoundError("Agent");
+      if (input.agentIds.length === 1) {
+        return c.json(toThread(await newDirectThread(db, tenant, input.agentIds[0]!)), 201);
+      }
+      const coordinator = input.coordinatorAgentId ?? input.agentIds[0]!;
+      if (known.get(coordinator)?.status !== "active") {
+        throw new AppError("conflict", "The coordinator must be an active agent");
+      }
+      const thread = await createGroupThread(db, tenant, {
+        agentIds: input.agentIds,
+        coordinatorAgentId: coordinator,
+        title: input.title ?? null,
+      });
+      return c.json(toThread(thread), 201);
+    })
     .get("/:id", async (c) => {
       const thread = await getThread(db, c.get("tenant"), c.req.param("id"));
       if (!thread) throw new NotFoundError("Thread");

@@ -23,6 +23,8 @@ export const thread = pgTable(
     workspaceId: workspaceId(),
     kind: threadKind("kind").notNull().default("direct"),
     title: text("title"),
+    /** Group threads: answers messages that `@mention` nobody, and routes them (M5.04). */
+    coordinatorAgentId: uuid("coordinator_agent_id"),
     createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
     archivedAt: timestampAt("archived_at"),
     createdAt: createdAt(),
@@ -31,6 +33,11 @@ export const thread = pgTable(
   (t) => [
     index("thread_workspace_updated_idx").on(t.workspaceId, t.updatedAt),
     unique("thread_workspace_id_uq").on(t.workspaceId, t.id),
+    foreignKey({
+      name: "thread_coordinator_fk",
+      columns: [t.workspaceId, t.coordinatorAgentId],
+      foreignColumns: [agent.workspaceId, agent.id],
+    }),
   ],
 );
 

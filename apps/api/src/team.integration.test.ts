@@ -3,6 +3,7 @@ import { loadConfig } from "@ofa/config";
 import {
   runSchema,
   sendMessageResponseSchema,
+  threadListSchema,
   threadSchema,
   type MessageReceivedEvent,
 } from "@ofa/contracts";
@@ -40,6 +41,21 @@ const hasDb = Boolean(process.env.DATABASE_URL);
 const team: ScriptedReply = (request) => {
   const system = request.messages[0]?.content ?? "";
   const toolResults = request.messages.filter((m) => m.role === "tool");
+  // The group's coordinator (M5.04): passes the question to the researcher.
+  if (system.includes("Your name is Lead")) {
+    if (toolResults.length === 0) {
+      return {
+        toolCalls: [
+          {
+            id: "m",
+            name: "message_agent",
+            args: { agent: "researcher", message: "Please find when pgvector 0.9 was released." },
+          },
+        ],
+      };
+    }
+    return { text: "I've asked Researcher; the answer will follow here." };
+  }
   if (system.includes("Your name is Coordinator")) {
     if (toolResults.length === 0) {
       return {
@@ -81,7 +97,7 @@ describe.skipIf(!hasDb)("handing work to other agents (integration)", async () =
     },
     vault: { ...base.vault, source: "env" as const, key: randomBytes(32).toString("base64") },
   };
-  const llm = createScriptedLLM(Array.from({ length: 10 }, () => team));
+  const llm = createScriptedLLM(Array.from({ length: 30 }, () => team));
   const started: MessageReceivedEvent[] = [];
   const dispatcher: RunDispatcher = {
     messageReceived: async (event) => void started.push(event),
@@ -285,5 +301,157 @@ describe.skipIf(!hasDb)("handing work to other agents (integration)", async () =
     await expect(
       directory.handoff(parent, { key: "y", agent: "Coordinator", brief: "Hand it to yourself." }),
     ).rejects.toThrow(/no agent called Coordinator/);
+  });
+
+  // ── Group chats (M5.04) and messages between agents (M5.03) ───────────────
+
+  let leadId = "";
+  let groupId = "";
+
+  it("makes a group chat with a coordinator, and refuses one that doesn't add up", async () => {
+    leadId = await hatch("Lead", [{ tool: "message_agent", mode: "auto" }]);
+    const res = await send("POST", "/api/threads", {
+      agentIds: [researcherId, leadId, writerId],
+      coordinatorAgentId: leadId,
+      title: "Database upgrade",
+    });
+    expect(res.status).toBe(201);
+    const group = threadSchema.parse(await res.json());
+    expect(group).toMatchObject({
+      kind: "group",
+      title: "Database upgrade",
+      coordinatorAgentId: leadId,
+    });
+    // The person, then the coordinator first.
+    expect(group.members.map((m) => (m.type === "agent" ? m.agentId : "you"))).toEqual([
+      "you",
+      leadId,
+      researcherId,
+      writerId,
+    ]);
+    groupId = group.id;
+    const listed = threadListSchema.parse(await (await send("GET", "/api/threads")).json());
+    expect(listed.items.map((t) => t.id)).toEqual([groupId]);
+
+    const outsider = await send("POST", "/api/threads", {
+      agentIds: [researcherId, writerId],
+      coordinatorAgentId: leadId,
+    });
+    expect(outsider.status).toBe(422);
+    const unknown = await send("POST", "/api/threads", {
+      agentIds: [researcherId, "00000000-0000-4000-8000-000000000000"],
+    });
+    expect(unknown.status).toBe(404);
+    // One agent makes a plain chat, kept out of the group list.
+    const direct = await send("POST", "/api/threads", { agentIds: [writerId] });
+    expect(threadSchema.parse(await direct.json()).kind).toBe("direct");
+  });
+
+  it("gives a message to the member it mentions, and anything else to the coordinator", async () => {
+    const post = async (content: string) => {
+      const res = await send("POST", `/api/threads/${groupId}/messages`, { content });
+      expect(res.status).toBe(201);
+      return sendMessageResponseSchema.parse(await res.json());
+    };
+    const mentioned = await post("@Writer draft one line about the upgrade, please.");
+    expect(mentioned.run?.agentId).toBe(writerId);
+    const routed = await post("When was pgvector 0.9 released?");
+    expect(routed.run?.agentId).toBe(leadId);
+    expect(started.at(-1)).toMatchObject({ agentId: leadId, trigger: "message" });
+  });
+
+  it("the coordinator passes it to a member, whose reply lands in the same chat later", async () => {
+    const event = started.at(-1)!;
+    const lead: RunContext = {
+      workspaceId: asId(event.workspaceId),
+      userId: asId(event.userId),
+      agentId: asId(leadId),
+      runId: asId(event.runId),
+    };
+    const result = await runAgent(
+      {
+        ctx: lead,
+        threadId: asId<ThreadId>(groupId),
+        trigger: "message",
+        requestId: event.messageId,
+      },
+      container.harness,
+      createMemoStepRunner(),
+    );
+    expect(result).toMatchObject({ status: "succeeded", stopReason: "final_answer" });
+    const leadCall = llm.requests.find((r) => r.messages[0]?.content.includes("Your name is Lead"));
+    const messageTool = leadCall?.tools?.find((t) => t.name === "message_agent");
+    // In a group, only its members can be messaged.
+    expect(messageTool?.description).toContain("- researcher: Researcher, Researcher");
+    expect(messageTool?.description).not.toContain("coordinator:");
+
+    // The message woke the researcher: a run of its own in the group, started by the lead's.
+    const woken = started.at(-1)!;
+    expect(woken).toMatchObject({
+      agentId: researcherId,
+      threadId: groupId,
+      trigger: "event",
+    });
+    const wokenRun = (await withTenant(db.db, lead, (tx) => tx.select().from(schema.run))).find(
+      (r) => r.id === woken.runId,
+    );
+    expect(wokenRun).toMatchObject({ trigger: "event", parentRunId: lead.runId, status: "queued" });
+
+    // What `agent-run` does with that event.
+    const answered = await runAgent(
+      {
+        ctx: { ...lead, agentId: asId<AgentId>(researcherId), runId: asId(woken.runId) },
+        threadId: asId<ThreadId>(groupId),
+        trigger: "event",
+        requestId: woken.messageId,
+      },
+      container.harness,
+      createMemoStepRunner(),
+    );
+    expect(answered).toMatchObject({ status: "succeeded", learn: false });
+    const researcherCall = llm.requests.findLast((r) =>
+      r.messages[0]?.content.includes("Your name is Researcher"),
+    );
+    expect(researcherCall?.messages[0]?.content).toContain(
+      "Lead, another agent in this conversation, sent you this message.",
+    );
+    // One hop: a woken run can't message or hand work on.
+    const names = (researcherCall?.tools ?? []).map((t) => t.name);
+    expect(names).not.toContain("message_agent");
+    expect(names).not.toContain("delegate_task");
+
+    const messages = (await withTenant(db.db, lead, (tx) => tx.select().from(schema.message)))
+      .filter((m) => m.threadId === groupId)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    const lastThree = messages.slice(-3).map((m) => [m.authorAgentId, m.content]);
+    expect(lastThree).toEqual([
+      [leadId, "@Researcher Please find when pgvector 0.9 was released."],
+      [leadId, "I've asked Researcher; the answer will follow here."],
+      [researcherId, "Released on 2026-09-12."],
+    ]);
+  });
+
+  it("in a direct chat, an agent can message any other agent of the workspace", async () => {
+    const thread = threadSchema.parse(
+      await (await send("GET", `/api/agents/${leadId}/thread`)).json(),
+    );
+    await send("POST", `/api/threads/${thread.id}/messages`, { content: "Hello there" });
+    const event = started.at(-1)!;
+    const ctx: RunContext = {
+      workspaceId: asId(event.workspaceId),
+      userId: asId(event.userId),
+      agentId: asId(leadId),
+      runId: asId(event.runId),
+    };
+    const contacts = await createTeamDirectory(container.db).contacts(ctx);
+    expect(contacts.map((c) => c.name).sort()).toEqual(["Coordinator", "Researcher", "Writer"]);
+    // Without a way to wake agents, a message is refused rather than left unanswered.
+    await expect(
+      createTeamDirectory(container.db).message(ctx, {
+        key: "k",
+        agent: "writer",
+        content: "Anything at all.",
+      }),
+    ).rejects.toThrow(/can't be woken/);
   });
 });

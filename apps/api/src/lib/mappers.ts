@@ -50,6 +50,7 @@ export function toThread(row: ThreadWithMembers): Thread {
     kind: row.kind,
     title: row.title,
     members: row.members,
+    coordinatorAgentId: row.coordinatorAgentId,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     archivedAt: row.archivedAt?.toISOString() ?? null,

@@ -1,0 +1,2 @@
+ALTER TABLE "thread" ADD COLUMN "coordinator_agent_id" uuid;--> statement-breakpoint
+ALTER TABLE "thread" ADD CONSTRAINT "thread_coordinator_fk" FOREIGN KEY ("workspace_id","coordinator_agent_id") REFERENCES "public"."agent"("workspace_id","id") ON DELETE no action ON UPDATE no action;

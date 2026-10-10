@@ -147,4 +147,10 @@ export const BUILTIN_TOOLS = [
     hint: "Give another of your agents a task and use its answer. That agent works with its own tools and permissions.",
     starter: false,
   },
+  {
+    name: "message_agent",
+    label: "Message other agents",
+    hint: "Pass a request to another agent in the chat. Its reply appears in the chat later. Lets a group's coordinator route messages.",
+    starter: false,
+  },
 ] as const;

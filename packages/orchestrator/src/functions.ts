@@ -215,7 +215,12 @@ export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
           timeout: timeoutMs,
         });
       const result = await runAgent(
-        { ctx, threadId: asId<ThreadId>(data.threadId), trigger: data.trigger },
+        {
+          ctx,
+          threadId: asId<ThreadId>(data.threadId),
+          trigger: data.trigger,
+          requestId: data.messageId,
+        },
         deps.harness,
         inngestSteps(step, invoke),
       );

@@ -22,6 +22,7 @@ import {
   defineTool,
   delegateTaskTool,
   editableTextFields,
+  messageAgentTool,
   htmlToText,
   isPrivateAddress,
   LOAD_ALL_LIMIT,
@@ -288,6 +289,10 @@ describe("delegate_task (M5.01)", () => {
       handoff: async () => {
         throw new Error("the harness makes handoffs, not the tool");
       },
+      contacts: async () => [],
+      message: async () => {
+        throw new Error("not in this test");
+      },
     };
     const agent = agentWith([{ tool: "delegate_task", mode }]);
     const agents = { get: async () => agent };
@@ -337,6 +342,54 @@ describe("delegate_task (M5.01)", () => {
       summary: "Hand work to Researcher: “Find the release date of pgvector 0.9.”",
       editable: ["brief"],
     });
+  });
+});
+
+describe("message_agent (M5.03)", () => {
+  it("lists who it can message here, and posts through the team with the call's key", async () => {
+    const sent: unknown[] = [];
+    const team: TeamDirectory = {
+      members: async () => [],
+      handoff: async () => {
+        throw new Error("not in this test");
+      },
+      contacts: async () => [
+        { id: asId<AgentId>("res"), slug: "researcher", name: "Researcher", job: "Research" },
+      ],
+      message: async (_ctx, input) => {
+        sent.push(input);
+        return {
+          runId: asId("run_b"),
+          messageId: asId("msg_b"),
+          agentId: asId<AgentId>("res"),
+          agentName: "Researcher",
+        };
+      },
+    };
+    const agent = agentWith([{ tool: "message_agent", mode: "auto" }]);
+    const agents = { get: async () => agent };
+    const run = createToolExecutor({
+      registry: createToolRegistry([messageAgentTool(team)] as unknown as ToolDefinition<never>[]),
+      policy: createPolicyEngine({ agents }),
+      calls: memoryCalls(),
+      agents,
+    });
+    const [tool] = await run.listTools(ctx);
+    expect(tool?.description).toContain(
+      "Agents you can message here:\n- researcher: Researcher, Research",
+    );
+    const args = { agent: "researcher", message: "Please check the pgvector release notes." };
+    expect(await run.execute(request("message_agent", args), ctx)).toMatchObject({
+      status: "ok",
+      content: expect.stringMatching(/^Sent to Researcher\. Its reply will appear/),
+    });
+    expect(sent).toEqual([
+      {
+        key: "r:tool-0-0",
+        agent: "researcher",
+        content: "Please check the pgvector release notes.",
+      },
+    ]);
   });
 });
 
