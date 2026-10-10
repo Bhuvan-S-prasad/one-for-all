@@ -218,14 +218,16 @@ export const COMPACTION: PromptTemplate<{
 /** Pulls durable facts out of a finished conversation (M2.16). */
 export const MEMORY_EXTRACTION: PromptTemplate<{ readonly transcript: string }> = {
   id: "memory.extract",
-  version: 3,
+  version: 4,
   render: ({ transcript }) =>
     [
       "Read the conversation below, then answer with JSON only.",
       '"episode": one sentence on the last thing the person asked and how the agent\'s last reply dealt with it, for finding this work again later.',
-      '"facts": facts worth remembering for future conversations: the person\'s preferences, stable facts about them, their team or their work, and decisions they made. Skip anything temporary, obvious, already common knowledge, or about this one task only. Never include passwords, keys, tokens or other secrets.',
-      'For each fact, "about" says whose it is: "person" (this person\'s own preferences and details, such as how they like answers), "team" (true for everyone in the workspace, such as when the team ships, the company\'s tools or its policies), or "work" (only how this agent should do its own job).',
-      'Shape: {"episode": "...", "facts": [{"text": "...", "about": "person"}]}, at most 5 facts, each one short sentence; "facts": [] if there is nothing.',
+      "Then list facts worth remembering for future conversations, each one short sentence, in three groups. Skip anything temporary, obvious, already common knowledge, or about this one task only. Never include passwords, keys, tokens or other secrets. Put each fact in one group only.",
+      '"person": this person\'s own preferences and details (how they like answers, their role).',
+      '"team": what is true for everyone in the workspace (the company\'s tools, schedules, policies, people).',
+      '"work": how this agent should do its own job, when it is not about the person or the team.',
+      'Shape: {"episode": "...", "person": ["..."], "team": ["..."], "work": ["..."]}, at most 5 facts in all; empty lists are fine.',
       "",
       transcript,
     ].join("\n"),

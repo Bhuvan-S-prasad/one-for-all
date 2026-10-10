@@ -52,30 +52,41 @@ function aboutOf(value: unknown): FactAbout {
   return "work";
 }
 
+const GROUPS: readonly FactAbout[] = ["person", "team", "work"];
+
 /**
- * Read `{"episode": "...", "facts": [{"text", "about"}]}`. Plain strings in
- * `facts` (the first version's shape) count as the agent's own.
+ * Read `{"episode", "person": [...], "team": [...], "work": [...]}` (grouped
+ * by whose they are, which small models sort better than a label on each
+ * fact), or the earlier `"facts"` list, of strings (the agent's own) or of
+ * `{"text", "about"}`. The same fact twice is kept once, in its first group.
  */
 export function parseExtraction(text: string): Extraction {
-  const parsed = lastJsonObject(text, ["facts", "episode"]);
+  const parsed = lastJsonObject(text, ["facts", "episode", ...GROUPS]);
   const said = typeof parsed?.episode === "string" ? parsed.episode.trim() : "";
   const episode = said.length >= 10 && !isPlaceholder(said) ? said.slice(0, 500) : "";
-  const raw = Array.isArray(parsed?.facts) ? parsed.facts : [];
-  const facts = raw
-    .map((f): { text: string; about: FactAbout } | null => {
-      if (typeof f === "string") return { text: f.trim(), about: "work" };
-      if (!f || typeof f !== "object") return null;
-      const { text: t, about } = f as { text?: unknown; about?: unknown };
-      if (typeof t !== "string") return null;
-      return {
-        text: t.trim(),
-        about: aboutOf(about),
-      };
-    })
-    .filter((f): f is { text: string; about: FactAbout } => !!f)
-    .filter((f) => f.text.length >= 8 && f.text.length <= 300 && !isPlaceholder(f.text))
-    .slice(0, MAX_FACTS);
-  return { episode, facts };
+  const list = (v: unknown) => (Array.isArray(v) ? v : []);
+  const raw: { text: unknown; about: FactAbout }[] = [
+    ...GROUPS.flatMap((about) => list(parsed?.[about]).map((t) => ({ text: t, about }))),
+    ...list(parsed?.facts).map((f) => {
+      if (typeof f === "string") return { text: f, about: "work" as const };
+      const { text: t, about } = (f ?? {}) as { text?: unknown; about?: unknown };
+      return { text: t, about: aboutOf(about) };
+    }),
+  ];
+  const seen = new Set<string>();
+  const facts: { text: string; about: FactAbout }[] = [];
+  for (const f of raw) {
+    if (typeof f.text !== "string") continue;
+    const t = f.text.trim();
+    const key = t
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, " ")
+      .trim();
+    if (t.length < 8 || t.length > 300 || isPlaceholder(t) || seen.has(key)) continue;
+    seen.add(key);
+    facts.push({ text: t, about: f.about });
+  }
+  return { episode, facts: facts.slice(0, MAX_FACTS) };
 }
 
 /** The facts' texts alone. */
@@ -117,8 +128,10 @@ export async function extractMemories(input: ExtractionInput) {
       messages: [{ role: "user", content: MEMORY_EXTRACTION.render({ transcript }) }],
       // The JSON itself is short, but reasoning models think aloud first:
       // 400 cut them off before any JSON (session 8), and 1,500 did when the
-      // exchange was long (M5.09 live check).
-      maxOutputTokens: 3_000,
+      // exchange was long (M5.09 live check). Asked not to think, it answered
+      // in about 130 tokens and 5 seconds; consolidation merges what it doubles.
+      maxOutputTokens: 4_000,
+      reasoning: "none",
       temperature: 0,
       promptVersion: promptRef(MEMORY_EXTRACTION),
     },

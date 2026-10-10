@@ -141,7 +141,10 @@ export function createModelGateway(options: ModelGatewayOptions): LLMGateway {
 
     const started = clock.now();
     const result = await generateText({
-      model: provider.languageModel(ref.model, { apiKey }),
+      model: provider.languageModel(ref.model, {
+        apiKey,
+        ...(request.reasoning ? { reasoning: request.reasoning } : {}),
+      }),
       messages: toModelMessages(request.messages, names),
       allowSystemInMessages: true,
       tools: request.tools?.length ? toToolSet(request.tools, names) : undefined,

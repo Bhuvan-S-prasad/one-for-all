@@ -62,6 +62,14 @@ export interface LLMRequest {
   readonly temperature?: number;
   /** Version of the prompt template, recorded on the trace. */
   readonly promptVersion?: string;
+  /**
+   * How much a reasoning model may think, for background work with a short
+   * JSON answer (M5.09): a free reasoning model otherwise spends thousands of
+   * tokens thinking first, and may run out before answering. `none`: answer
+   * straight away (learning after a run); `low`: think briefly (the nightly
+   * pass). Ignored where unsupported.
+   */
+  readonly reasoning?: "none" | "low";
 }
 
 export interface LLMUsage {

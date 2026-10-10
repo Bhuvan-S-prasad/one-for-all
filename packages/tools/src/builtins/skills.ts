@@ -55,7 +55,7 @@ export function runSkillTool(skills: SkillLibrary | null) {
 }
 
 const SAVE_DESCRIPTION =
-  "Save how you just did a task as a skill, so it can be done the same way again (the person can then ask for it with /its-name). Only for a procedure worth repeating; write steps that work without this conversation.";
+  "Save how you just did a task as a skill, so it can be done the same way again (the person can then ask for it with /its-name). Only for a multi-step procedure worth repeating, and only when the person asks for it or the procedure plainly recurs. Not for facts or preferences: those are remembered by themselves. Write steps that work without this conversation.";
 
 export function saveSkillTool(skills: SkillLibrary | null) {
   return defineTool({

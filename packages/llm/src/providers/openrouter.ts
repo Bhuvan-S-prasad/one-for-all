@@ -84,7 +84,7 @@ export function createOpenRouterProvider(options: OpenRouterOptions = {}): Model
     requiresApiKey: true,
     defaultTiers: options.defaultTiers ?? OPENROUTER_DEFAULT_TIERS,
 
-    languageModel(modelId, { apiKey }) {
+    languageModel(modelId, { apiKey, reasoning }) {
       // `apiKey` is always passed: without it the SDK would read
       // OPENROUTER_API_KEY from the environment, bypassing the vault.
       const openrouter = createOpenRouter({
@@ -93,7 +93,10 @@ export function createOpenRouterProvider(options: OpenRouterOptions = {}): Model
         compatibility: "strict",
         fetch: options.fetch,
       });
-      return openrouter.languageModel(modelId);
+      // OpenRouter passes the effort on to models that reason, and drops it for others.
+      return reasoning
+        ? openrouter.chat(modelId, { reasoning: { effort: reasoning } })
+        : openrouter.languageModel(modelId);
     },
 
     async listModels() {

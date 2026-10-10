@@ -189,6 +189,27 @@ describe("episodes (M5.09)", () => {
     expect(episodes[0]?.summary).toBe(
       "The person asked how they like summaries; agreed on bullet points.",
     );
+    // A background call: the model is asked to answer without thinking first.
+    expect(deps.llm.requests.at(-1)?.reasoning).toBe("none");
+  });
+
+  it("reads facts grouped by whose they are, each once", () => {
+    expect(
+      parseExtraction(
+        JSON.stringify({
+          episode: "Asked about design tools; noted Figma.",
+          person: ["Wants dates written as 10 Oct 2026."],
+          team: ["Everyone in the company uses Figma.", "Wants dates written as 10 Oct 2026!"],
+          work: [],
+        }),
+      ),
+    ).toEqual({
+      episode: "Asked about design tools; noted Figma.",
+      facts: [
+        { text: "Wants dates written as 10 Oct 2026.", about: "person" },
+        { text: "Everyone in the company uses Figma.", about: "team" },
+      ],
+    });
   });
 
   it("reads whose a fact is, however it is spelled", () => {
