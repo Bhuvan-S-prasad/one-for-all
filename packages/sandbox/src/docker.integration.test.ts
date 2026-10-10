@@ -68,6 +68,32 @@ describe.skipIf(!up)("Docker sandbox (integration)", { timeout: 60_000 }, () => 
     expect(entries).toContainEqual(expect.objectContaining({ name, type: "file" }));
   });
 
+  it("runs Python in the agent's own venv, with Word and Excel libraries", async () => {
+    const result = await handle.exec(
+      alice,
+      [
+        "command -v python3 pip",
+        'python3 -c "import sys; print(sys.prefix)"',
+        "python3 - <<'EOF'",
+        "import docx, openpyxl",
+        "book = openpyxl.Workbook(); book.active.append(['Model', 'GPU']); book.save('/tmp/venv-check.xlsx')",
+        "doc = docx.Document(); doc.add_heading('Report', 0); doc.save('/tmp/venv-check.docx')",
+        "print(openpyxl.load_workbook('/tmp/venv-check.xlsx').active['B1'].value)",
+        "print(docx.Document('/tmp/venv-check.docx').paragraphs[0].text)",
+        "EOF",
+        "rm -f /tmp/venv-check.xlsx /tmp/venv-check.docx",
+      ].join("\n"),
+    );
+    const home = (await handle.exec(alice, "echo $HOME")).stdout.trim();
+    expect(result.stdout.trim().split("\n")).toEqual([
+      `${home}/.venv/bin/python3`,
+      `${home}/.venv/bin/pip`,
+      `${home}/.venv`, // So `pip install` lands in the agent's private home.
+      "GPU",
+      "Report",
+    ]);
+  });
+
   it("can't write outside what the agent owns", async () => {
     await expect(handle.writeFile(alice, "/etc/evil", "x")).rejects.toBeInstanceOf(SandboxError);
     expect((await handle.exec(alice, "touch /opt/sandbox/x")).exitCode).not.toBe(0);

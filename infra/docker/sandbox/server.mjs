@@ -231,6 +231,34 @@ function killGroup(pid) {
   }
 }
 
+// ── Python ──────────────────────────────────────────────────────────────────
+
+/** agentId → its venv check, once per start of this service. */
+const venvs = new Map();
+
+/**
+ * The agent's own venv (ADR-0042), first on its PATH: made on first use, with
+ * the system's packages (openpyxl, python-docx) visible, and remade if it no
+ * longer runs (a newer image with a newer Python). Packages installed into it
+ * stay in the agent's home.
+ */
+function ensureVenv(user) {
+  if (!venvs.has(user.agentId)) {
+    const check = runAs(
+      user,
+      '"$1/bin/python" -c "" 2>/dev/null || python3 -m venv --clear --system-site-packages "$1"',
+      [`${user.home}/.venv`],
+      { timeoutMs: 120_000 },
+    ).then((result) => {
+      if (result.exitCode === 0) return;
+      venvs.delete(user.agentId);
+      log("venv failed", { agent: user.agentId, error: result.stderr.slice(0, 500) });
+    });
+    venvs.set(user.agentId, check);
+  }
+  return venvs.get(user.agentId);
+}
+
 // ── Desktops and browsers ───────────────────────────────────────────────────
 //
 // Each agent's computer is a light desktop on its own display (ADR-0040):
@@ -328,6 +356,8 @@ async function startDesktop(user) {
       ].join(" && "),
       [],
     );
+    // The terminal on the desktop finds the agent's venv too.
+    await ensureVenv(user);
     start(["openbox", "--sm-disable"]);
     start(["pcmanfm", "--desktop", "--profile", "one-for-all"]);
     start(["tint2", "-c", "/etc/xdg/tint2/one-for-all.tint2rc"]);
@@ -390,7 +420,8 @@ async function startBrowser(entry) {
     entry.wsPath = null;
   });
 
-  for (let i = 0; i < 60; i += 1) {
+  // Up to about 30 s: a busy host (or a Raspberry Pi) can take 20 s to start it.
+  for (let i = 0; i < 120; i += 1) {
     try {
       const info = await cdpVersion(user.cdpPort);
       entry.wsPath = new URL(info.webSocketDebuggerUrl).pathname;
@@ -515,6 +546,7 @@ const routes = {
       Math.max(Number(body.timeoutMs) || DEFAULT_TIMEOUT, 1_000),
       MAX_TIMEOUT,
     );
+    await ensureVenv(user);
     // `cd` happens as the agent, so it can only enter what the agent may.
     const result = await runAs(user, 'cd -- "$1" && umask 007 && eval "$2"', [cwd, command], {
       timeoutMs,

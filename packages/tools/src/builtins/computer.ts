@@ -309,7 +309,7 @@ export function shellTool(sandbox: SandboxProvider | null) {
   return defineTool({
     name: "shell.run",
     description:
-      "Run a bash command on your computer (Debian, with Python 3, git, curl and jq), in the shared /workspace folder unless you give cwd. Files there are shared with your other agents; ~ is yours alone. Returns the exit code and output.",
+      "Run a bash command on your computer (Debian, with Python 3, git, curl and jq), in the shared /workspace folder unless you give cwd. Files there are shared with your other agents; ~ is yours alone. Python runs in your own venv: `pip install` works, and openpyxl (Excel) and python-docx (Word) are already there. Returns the exit code and output.",
     input: z.object({
       command: z.string().trim().min(1).max(20_000),
       cwd: z.string().max(4_096).optional().describe("Folder to run in; /workspace by default"),
