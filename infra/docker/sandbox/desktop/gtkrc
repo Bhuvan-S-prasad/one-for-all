@@ -1,0 +1,28 @@
+# Dark colours for the desktop's GTK2 programs (PCManFM), ADR-0040. GTK3
+# programs (Mousepad, AbiWord, Gnumeric) use Adwaita's dark variant instead.
+gtk-icon-theme-name = "Adwaita"
+gtk-font-name = "Noto Sans 10"
+
+style "one-for-all" {
+  bg[NORMAL] = "#161618"
+  bg[PRELIGHT] = "#26262a"
+  bg[SELECTED] = "#d4ff3a"
+  bg[ACTIVE] = "#0e0e0f"
+  bg[INSENSITIVE] = "#161618"
+  fg[NORMAL] = "#f4f4f0"
+  fg[PRELIGHT] = "#f4f4f0"
+  fg[SELECTED] = "#0e0e0f"
+  fg[ACTIVE] = "#f4f4f0"
+  fg[INSENSITIVE] = "#5c5c61"
+  base[NORMAL] = "#0e0e0f"
+  base[PRELIGHT] = "#26262a"
+  base[SELECTED] = "#d4ff3a"
+  base[ACTIVE] = "#3b4714"
+  base[INSENSITIVE] = "#161618"
+  text[NORMAL] = "#f4f4f0"
+  text[PRELIGHT] = "#f4f4f0"
+  text[SELECTED] = "#0e0e0f"
+  text[ACTIVE] = "#f4f4f0"
+  text[INSENSITIVE] = "#5c5c61"
+}
+class "GtkWidget" style "one-for-all"

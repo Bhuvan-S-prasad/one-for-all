@@ -133,7 +133,11 @@ function agentEnv(user, extra = {}) {
     HOME: user.home,
     USER: `agent${user.slot}`,
     LOGNAME: `agent${user.slot}`,
-    PATH: "/usr/local/bin:/usr/bin:/bin",
+    // The agent's own venv first (ADR-0042): `pip install` lands in its home.
+    PATH: `${user.home}/.venv/bin:/usr/local/bin:/usr/bin:/bin`,
+    VIRTUAL_ENV: `${user.home}/.venv`,
+    PIP_DISABLE_PIP_VERSION_CHECK: "1",
+    PIP_NO_INPUT: "1",
     LANG: "C.UTF-8",
     TMPDIR: "/tmp",
     TERM: "dumb",
@@ -146,6 +150,7 @@ function agentEnv(user, extra = {}) {
     XDG_RUNTIME_DIR: run,
     DBUS_SESSION_BUS_ADDRESS: `unix:path=${run}/bus`,
     GTK_THEME: "Adwaita:dark",
+    GTK2_RC_FILES: "/etc/gtk-2.0/one-for-all.gtkrc",
     ...extra,
   };
   if (PROXY) {
@@ -310,10 +315,17 @@ async function startDesktop(user) {
     );
     if (bus.exitCode !== 0) throw httpError(503, "The computer's desktop did not start");
 
-    // Desktop icons: the shared workspace beside the agent's own files.
+    // Desktop icons: the shared workspace beside the agent's own files. The
+    // desktop reads its look from the agent's own config only, so it is
+    // copied in at every start.
     await runAs(
       user,
-      'mkdir -p -- "$HOME/Desktop" && ln -sfn /workspace "$HOME/Desktop/Workspace"',
+      [
+        'mkdir -p -- "$HOME/Desktop" && ln -sfn /workspace "$HOME/Desktop/Workspace"',
+        'conf="$HOME/.config/pcmanfm/one-for-all" && mkdir -p -- "$conf"',
+        'cp -f /etc/xdg/pcmanfm/one-for-all/desktop-items-0.conf "$conf/"',
+        '[ -e "$conf/pcmanfm.conf" ] || cp /etc/xdg/pcmanfm/one-for-all/pcmanfm.conf "$conf/"',
+      ].join(" && "),
       [],
     );
     start(["openbox", "--sm-disable"]);
@@ -359,6 +371,10 @@ async function startBrowser(entry) {
     "--disable-component-extensions-with-background-pages",
     "--renderer-process-limit=4",
     "--password-store=basic",
+    // The desktop closes the browser by stopping it: no "Restore pages?".
+    // And no bar warning about --no-sandbox to people watching (above).
+    "--hide-crash-restore-bubble",
+    "--test-type",
     "--start-maximized",
     "--window-position=0,0",
     `--window-size=${SCREEN.split("x").slice(0, 2).join(",")}`,
