@@ -6,6 +6,7 @@ import {
   updateThreadRequestSchema,
   type MessagePage,
   type ThreadList,
+  type UnreadList,
 } from "@ofa/contracts";
 import { AppError, NotFoundError } from "@ofa/core";
 import {
@@ -14,7 +15,9 @@ import {
   listAgents,
   listGroupThreads,
   listMessages,
+  markThreadRead,
   newDirectThread,
+  unreadThreads,
   updateThread,
 } from "@ofa/db";
 import { Hono } from "hono";
@@ -28,6 +31,8 @@ import type { AppEnv } from "../types";
 /**
  * Threads and messages (M2.19):
  *   GET   /api/threads                group chats (M5.04), most recent first (?archived=true)
+ *   GET   /api/threads/unread         chats with agent messages not yet seen (M5.11)
+ *   POST  /api/threads/:id/read       seen up to now
  *   POST  /api/threads                one agent: a new direct chat; two to six: a group chat
  *   GET   /api/threads/:id
  *   PATCH /api/threads/:id            rename, archive or bring back (UX.13)
@@ -72,6 +77,19 @@ export function threadRoutes(
         title: input.title ?? null,
       });
       return c.json(toThread(thread), 201);
+    })
+    .get("/unread", async (c) => {
+      const rows = await unreadThreads(db, c.get("tenant"));
+      return c.json({
+        items: rows.map((r) => ({ ...r, lastAt: r.lastAt.toISOString() })),
+      } satisfies UnreadList);
+    })
+    .post("/:id/read", async (c) => {
+      const tenant = c.get("tenant");
+      const thread = await getThread(db, tenant, c.req.param("id"));
+      if (!thread) throw new NotFoundError("Thread");
+      await markThreadRead(db, tenant, thread.id);
+      return c.body(null, 204);
     })
     .get("/:id", async (c) => {
       const thread = await getThread(db, c.get("tenant"), c.req.param("id"));

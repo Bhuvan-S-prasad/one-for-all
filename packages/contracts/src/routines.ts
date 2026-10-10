@@ -37,6 +37,13 @@ export const cronSchema = z
     }
   });
 
+/**
+ * `task`: does a job and replies each time. `check`: looks with read-only
+ * tools and replies only when something needs attention (M5.10).
+ */
+export const ROUTINE_KINDS = ["task", "check"] as const;
+export const routineKindSchema = z.enum(ROUTINE_KINDS);
+
 export const ROUTINE_STATUSES = ["active", "paused"] as const;
 export const routineStatusSchema = z.enum(ROUTINE_STATUSES);
 
@@ -51,6 +58,7 @@ export const routineSchema = z.object({
   name: z.string(),
   /** What the agent does each time, in the person's words. */
   instructions: z.string(),
+  kind: routineKindSchema,
   cron: z.string(),
   timeZone: z.string(),
   status: routineStatusSchema,
@@ -67,6 +75,7 @@ export const createRoutineRequestSchema = z.object({
   agentId: idSchema,
   name: z.string().trim().min(1).max(80),
   instructions: z.string().trim().min(1).max(4_000),
+  kind: routineKindSchema.default("task"),
   cron: cronSchema,
   /** Defaults to the workspace's time zone. */
   timeZone: timeZoneSchema.optional(),
@@ -77,6 +86,7 @@ export const updateRoutineRequestSchema = z
   .object({
     name: z.string().trim().min(1).max(80),
     instructions: z.string().trim().min(1).max(4_000),
+    kind: routineKindSchema,
     cron: cronSchema,
     timeZone: timeZoneSchema,
     /** Pause, or resume (which also clears a pause for inactivity). */

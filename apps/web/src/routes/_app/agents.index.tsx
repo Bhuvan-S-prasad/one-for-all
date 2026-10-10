@@ -10,6 +10,7 @@ import {
 import type { Agent, AgentStats, FamiliarMood, Run } from "@ofa/contracts";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { LayoutGrid, List, Play, Plus, RotateCcw, Search, Square } from "lucide-react";
+import { ImportAgentButton } from "@/components/agent-file";
 import { ComingSoon } from "@/components/coming-soon";
 import { Familiar } from "@/components/familiar";
 import { ErrorAlert } from "@/components/ui/alert";
@@ -153,12 +154,15 @@ function AgentsPage() {
         <h2 className="text-[40px] leading-[0.95] font-extrabold tracking-[-0.04em] md:text-[48px]">
           Agents <span className="text-muted-foreground/60">{agents.length}</span>
         </h2>
-        <Link
-          to="/agents/new"
-          className="flex h-11 items-center gap-2 rounded-full bg-primary px-5 text-[15px] font-semibold text-primary-foreground outline-none hover:bg-primary/85 focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <Plus className="size-[18px]" aria-hidden /> Hatch an agent
-        </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          <ImportAgentButton />
+          <Link
+            to="/agents/new"
+            className="flex h-11 items-center gap-2 rounded-full bg-primary px-5 text-[15px] font-semibold text-primary-foreground outline-none hover:bg-primary/85 focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Plus className="size-[18px]" aria-hidden /> Hatch an agent
+          </Link>
+        </div>
       </header>
 
       <div className="flex flex-wrap items-center gap-2.5">

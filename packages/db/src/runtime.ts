@@ -59,6 +59,8 @@ export function createRunStore(db: Database, options: RuntimeStoreOptions = {}):
         trigger: row.trigger,
         status: row.status,
         tainted: row.tainted,
+        proactive: row.proactive,
+        request: row.request,
         usage: {
           inputTokens: row.usage.inputTokens ?? 0,
           outputTokens: row.usage.outputTokens ?? 0,

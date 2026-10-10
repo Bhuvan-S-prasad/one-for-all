@@ -86,6 +86,7 @@ export function routineRoutes(
         agentId: agent.id,
         name: input.name,
         instructions: input.instructions,
+        kind: input.kind,
         cron: input.cron,
         timeZone,
         nextRunAt: nextTime(input.cron, timeZone),
@@ -109,6 +110,7 @@ export function routineRoutes(
       const changes: Parameters<typeof updateRoutine>[3] = {
         ...(patch.name ? { name: patch.name } : {}),
         ...(patch.instructions ? { instructions: patch.instructions } : {}),
+        ...(patch.kind ? { kind: patch.kind } : {}),
         ...(patch.cron ? { cron } : {}),
         ...(patch.timeZone ? { timeZone } : {}),
       };

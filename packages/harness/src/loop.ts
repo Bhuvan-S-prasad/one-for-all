@@ -36,7 +36,14 @@ import {
 } from "./context";
 import { modelCallEvents, runEvent } from "./events";
 import { MiddlewareChain, type HarnessMiddleware, type RunHookContext } from "./middleware";
-import { AGENT_MESSAGE, HANDOFF_BRIEF, ROUTINE_RUN, SCHEDULED_TASK } from "./prompts";
+import {
+  AGENT_MESSAGE,
+  HANDOFF_BRIEF,
+  NOTHING_TO_REPORT,
+  PROACTIVE_CHECK,
+  ROUTINE_RUN,
+  SCHEDULED_TASK,
+} from "./prompts";
 import { redactJson, type RedactText } from "./redaction";
 
 // The agent loop (ARCHITECTURE.md §6.2). Every side effect happens inside a
@@ -272,6 +279,8 @@ export async function runAgent(
   const knownUrls = new Set<string>();
   /** Sites a person allowed for the rest of this run, rebuilt on replay from memoized answers. */
   const allowedSites = new Set<string>();
+  /** A proactive check (M5.10): only tools that change nothing, listed and run. */
+  let proactive = false;
 
   try {
     // ── Start ────────────────────────────────────────────────────────────────
@@ -298,6 +307,8 @@ export async function runAgent(
         skip: false as const,
         agent,
         tainted: run.tainted,
+        proactive: run.proactive ?? false,
+        request: run.request ?? null,
         today: new Date().toISOString().slice(0, 10),
       };
     });
@@ -314,6 +325,7 @@ export async function runAgent(
     }
     const agent: AgentProfile = start.agent;
     hook = { ctx, agent };
+    proactive = start.proactive;
     let tainted = start.tainted;
 
     if (agent.status !== "active") {
@@ -413,7 +425,19 @@ export async function runAgent(
               })
             ).map((m) => m.content)
           : [];
-      const tools: ToolDescriptor[] = await deps.tools.listTools(ctx);
+      // A check's request travels on the run, not in the chat (M5.10).
+      if (start.request && !messages.some((m) => m.id === input.requestId)) {
+        history.push({
+          author: "user",
+          agentId: null,
+          content: PROACTIVE_CHECK.render({ request: start.request }),
+          scheduled: "check",
+        });
+      }
+      const tools: ToolDescriptor[] = await deps.tools.listTools(
+        ctx,
+        start.proactive ? { readOnly: true } : undefined,
+      );
       const model = await deps.llm.modelFor(agent.modelTier, ctx);
       return {
         history,
@@ -690,7 +714,10 @@ ${result.content}`,
           if (fresh.length) {
             for (const entry of fresh) loadedToolkits.add(entry);
             tools = await steps.run(`${toolCallId}-toolkit`, () =>
-              deps.tools.listTools(ctx, { toolkits: [...loadedToolkits] }),
+              deps.tools.listTools(ctx, {
+                toolkits: [...loadedToolkits],
+                ...(proactive ? { readOnly: true } : {}),
+              }),
             );
           }
         }
@@ -731,24 +758,35 @@ ${result.content}`,
       stopReason === "final_answer"
         ? finalText || "I don't have anything to add."
         : (STOP_NOTES[stopReason] ?? "I stopped before finishing.");
-    const posted = input.threadId
-      ? await steps.run("reply", async () => {
-          const content = await redact(ctx, replyText);
-          const id = await deps.threads.addAgentMessage(ctx, {
-            threadId: input.threadId as ThreadId,
-            content,
-          });
-          await log([
-            runEvent("reply", "message.created", {
-              messageId: id,
-              preview: preview(content, 280),
-            }),
-          ]);
-          // The reply as posted (redacted): a delegating run reads it back
-          // from the step's stored result (M5.01).
-          return { id: id as string, content };
-        })
-      : null;
+    // A check with nothing to report stays quiet (M5.10): no message, so the
+    // person hears from it only when something needs them.
+    const quiet =
+      proactive && stopReason === "final_answer" && NOTHING_TO_REPORT.test(finalText ?? "");
+    if (quiet) {
+      await steps.run("quiet", async () => {
+        await log([runEvent("quiet", "check.quiet", {})]);
+        return true;
+      });
+    }
+    const posted =
+      input.threadId && !quiet
+        ? await steps.run("reply", async () => {
+            const content = await redact(ctx, replyText);
+            const id = await deps.threads.addAgentMessage(ctx, {
+              threadId: input.threadId as ThreadId,
+              content,
+            });
+            await log([
+              runEvent("reply", "message.created", {
+                messageId: id,
+                preview: preview(content, 280),
+              }),
+            ]);
+            // The reply as posted (redacted): a delegating run reads it back
+            // from the step's stored result (M5.01).
+            return { id: id as string, content };
+          })
+        : null;
 
     // A run that posted before this step returned the content kept its ID only.
     const reply = typeof posted === "string" ? { id: posted, content: null } : posted;
@@ -891,6 +929,7 @@ ${result.content}`,
       knownUrls: [...knownUrls],
       allowedSites: [...allowedSites],
       ...(approved ? { approved: true } : {}),
+      ...(proactive ? { readOnly: true } : {}),
     };
     const execute = chain.tool(hook as RunHookContext, (r) => deps.tools.execute(r, ctx));
     let outcome: ToolOutcome;

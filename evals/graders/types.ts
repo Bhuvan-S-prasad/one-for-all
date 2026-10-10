@@ -19,7 +19,19 @@ export interface Transcript {
   readonly mail: MailRecord | null;
   /** Requests for a person, with the answer the case's person gave. */
   readonly approvals: readonly ApprovalRecord[];
+  /** Work handed to teammates (M5.13), one entry per handoff, in order. */
+  readonly children: readonly ChildTranscript[];
   readonly durationMs: number;
+}
+
+/** One handoff: who did it, from what brief, and what came back. */
+export interface ChildTranscript {
+  /** The teammate's handle. */
+  readonly agent: string;
+  readonly brief: string;
+  readonly reply: string | null;
+  readonly tainted: boolean;
+  readonly toolCalls: readonly { readonly name: string; readonly args: unknown }[];
 }
 
 export interface CheckResult {
@@ -56,4 +68,9 @@ export interface EvalCase {
   readonly checks: readonly Check[];
   /** Harness options for this case, e.g. a small context window to force compaction. */
   readonly harness?: HarnessOptions;
+  /**
+   * Teammates the agent under test may hand work to (M5.13); each child runs
+   * on the same harness, tools and policy, from the brief only.
+   */
+  readonly team?: readonly Omit<AgentProfile, "id">[];
 }

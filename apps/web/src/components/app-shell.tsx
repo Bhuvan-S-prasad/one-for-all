@@ -1,9 +1,18 @@
-import { useAgents, useApprovals, useHealth } from "@ofa/client";
-import type { Agent, FamiliarMood, SessionResponse } from "@ofa/contracts";
+import {
+  useAgents,
+  useApprovals,
+  useGroupThreads,
+  useHealth,
+  useSkills,
+  useUnread,
+} from "@ofa/client";
+import type { Agent, FamiliarMood, SessionResponse, Thread } from "@ofa/contracts";
 import { Link, useMatches, useNavigate } from "@tanstack/react-router";
 import {
   Activity,
   AlertTriangle,
+  BookOpen,
+  Brain,
   ChevronsUpDown,
   Ghost,
   House,
@@ -16,6 +25,8 @@ import {
   PanelLeftOpen,
   Plug,
   Plus,
+  Repeat,
+  Users,
   Search,
   ShieldCheck,
   SlidersHorizontal,
@@ -41,7 +52,16 @@ import { cn } from "@/lib/utils";
 // their own.
 
 interface NavItem {
-  readonly to: "/" | "/agents" | "/activity" | "/approvals" | "/connections" | "/settings";
+  readonly to:
+    | "/"
+    | "/agents"
+    | "/activity"
+    | "/approvals"
+    | "/routines"
+    | "/skills"
+    | "/memory"
+    | "/connections"
+    | "/settings";
   readonly label: string;
   readonly icon: LucideIcon;
   readonly exact?: boolean;
@@ -56,16 +76,40 @@ const NAV: readonly NavItem[] = [
   { to: "/agents", label: "Agents", icon: Ghost, keys: "G A" },
   { to: "/activity", label: "Activity", icon: Activity, keys: "G R" },
   { to: "/approvals", label: "Approvals", icon: ShieldCheck },
+  { to: "/routines", label: "Routines", icon: Repeat },
+  { to: "/skills", label: "Skills", icon: BookOpen },
+  { to: "/memory", label: "Memory", icon: Brain },
   { to: "/connections", label: "Connections", icon: Plug, soon: true },
   { to: "/settings", label: "Settings", icon: SlidersHorizontal, keys: "G S" },
 ];
 
-/** What needs someone: agents stuck now, and requests waiting for an answer. */
+/**
+ * What needs someone (M5.11 attention states): agents stuck now, requests
+ * waiting for an answer, skills waiting for review, and unread replies per
+ * agent (its direct chats) and per group chat. Working shows as each agent's mood.
+ */
 function useAttention(agents: readonly Agent[] | undefined) {
   const moods = useAgentMoods(agents);
   const stuck = (agents ?? []).filter((a) => moods.get(a.id)?.mood === "error").length;
   const { data: approvals } = useApprovals();
-  return { moods, stuck, waiting: approvals?.length ?? 0 };
+  const { data: skills } = useSkills();
+  const { data: unread } = useUnread();
+  const unreadByAgent = new Map<string, number>();
+  const unreadByThread = new Map<string, number>();
+  for (const t of unread ?? []) {
+    unreadByThread.set(t.threadId, t.unread);
+    if (t.kind === "direct" && t.agentIds[0]) {
+      unreadByAgent.set(t.agentIds[0], (unreadByAgent.get(t.agentIds[0]) ?? 0) + t.unread);
+    }
+  }
+  return {
+    moods,
+    stuck,
+    waiting: approvals?.length ?? 0,
+    toReview: (skills ?? []).filter((s) => s.status === "proposed").length,
+    unreadByAgent,
+    unreadByThread,
+  };
 }
 
 export function AppShell({ session, children }: { session: SessionResponse; children: ReactNode }) {
@@ -81,7 +125,8 @@ export function AppShell({ session, children }: { session: SessionResponse; chil
     setPaletteOpen(true);
   };
   const { data: agents } = useAgents();
-  const { moods, stuck, waiting } = useAttention(agents);
+  const attention = useAttention(agents);
+  const { moods, stuck, waiting } = attention;
   useApprovalAlerts(agents);
 
   useGlobalShortcuts({
@@ -121,6 +166,9 @@ export function AppShell({ session, children }: { session: SessionResponse; chil
         moods={moods}
         stuck={stuck}
         waiting={waiting}
+        toReview={attention.toReview}
+        unreadByAgent={attention.unreadByAgent}
+        unreadByThread={attention.unreadByThread}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -206,6 +254,9 @@ function Sidebar(props: {
   moods: ReturnType<typeof useAgentMoods>;
   stuck: number;
   waiting: number;
+  toReview: number;
+  unreadByAgent: ReadonlyMap<string, number>;
+  unreadByThread: ReadonlyMap<string, number>;
 }) {
   const { collapsed } = props;
   const ToggleIcon = collapsed ? PanelLeftOpen : PanelLeftClose;
@@ -276,7 +327,13 @@ function Sidebar(props: {
               ? { n: props.stuck, label: "stuck", tone: "bg-destructive text-background" }
               : item.to === "/approvals" && props.waiting > 0
                 ? { n: props.waiting, label: "waiting", tone: "bg-primary text-primary-foreground" }
-                : null;
+                : item.to === "/skills" && props.toReview > 0
+                  ? {
+                      n: props.toReview,
+                      label: "to review",
+                      tone: "bg-primary text-primary-foreground",
+                    }
+                  : null;
           return (
             <Link
               key={item.to}
@@ -314,7 +371,15 @@ function Sidebar(props: {
         })}
       </nav>
 
-      <AgentList collapsed={collapsed} agents={props.agents} moods={props.moods} />
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto border-t border-sidebar-border pt-3">
+        <AgentList
+          collapsed={collapsed}
+          agents={props.agents}
+          moods={props.moods}
+          unread={props.unreadByAgent}
+        />
+        <GroupList collapsed={collapsed} agents={props.agents} unread={props.unreadByThread} />
+      </div>
 
       {collapsed && (
         <button
@@ -332,20 +397,32 @@ function Sidebar(props: {
   );
 }
 
+/** "3 unread", as a dot on the rail and a count beside a name. */
+function UnreadBadge({ n, collapsed }: { n: number; collapsed: boolean }) {
+  if (n <= 0) return null;
+  return (
+    <span
+      aria-label={`${n} unread`}
+      className={cn(
+        "flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-info px-1 font-mono text-[10.5px] font-semibold text-background",
+        collapsed && "absolute -top-0.5 -right-0.5",
+      )}
+    >
+      {n > 99 ? "99+" : n}
+    </span>
+  );
+}
+
 function AgentList(props: {
   collapsed: boolean;
   agents: readonly Agent[];
   moods: ReturnType<typeof useAgentMoods>;
+  unread: ReadonlyMap<string, number>;
 }) {
   const { collapsed } = props;
   const shown = props.agents.slice(0, 8);
   return (
-    <div
-      className={cn(
-        "flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto border-t border-sidebar-border pt-3",
-        collapsed && "mx-4 items-center",
-      )}
-    >
+    <div className={cn("flex shrink-0 flex-col gap-0.5", collapsed && "mx-4 items-center")}>
       {!collapsed && (
         <div className="flex items-center justify-between pr-1 pb-1.5 pl-3">
           <span className="eyebrow text-[10.5px] text-[#6a6a70]">Agents</span>
@@ -362,12 +439,13 @@ function AgentList(props: {
       {shown.map((agent) => {
         const mood: FamiliarMood = props.moods.get(agent.id)?.mood ?? "idle";
         const word = MOOD_WORDS[mood];
+        const unread = props.unread.get(agent.id) ?? 0;
         return (
           <Link
             key={agent.id}
             to="/agents/$agentId"
             params={{ agentId: agent.id }}
-            aria-label={`${agent.name}${word ? `, ${word.toLowerCase()}` : ""}`}
+            aria-label={`${agent.name}${word ? `, ${word.toLowerCase()}` : ""}${unread ? `, ${unread} unread` : ""}`}
             className={cn(
               "group relative flex shrink-0 items-center rounded-[12px] text-sm outline-none hover:bg-white/5 focus-visible:ring-2 focus-visible:ring-primary data-[status=active]:bg-white/[0.07]",
               collapsed ? "size-11 justify-center" : "h-10 gap-2.5 px-2",
@@ -386,7 +464,7 @@ function AgentList(props: {
                 <span className={cn("flex-1 truncate", mood === "asleep" && "text-sidebar-muted")}>
                   {agent.name}
                 </span>
-                {word && (
+                {word ? (
                   <span
                     className={cn(
                       "font-mono text-[11px]",
@@ -401,9 +479,12 @@ function AgentList(props: {
                   >
                     {word}
                   </span>
+                ) : (
+                  <UnreadBadge n={unread} collapsed={false} />
                 )}
               </>
             )}
+            {collapsed && <UnreadBadge n={unread} collapsed />}
             {collapsed && <RailTip label={`${agent.name}${word ? ` · ${word}` : ""}`} />}
           </Link>
         );
@@ -432,6 +513,70 @@ function AgentList(props: {
           className="mx-1 rounded-[12px] border border-dashed border-sidebar-border px-3 py-3 text-[13px] text-sidebar-muted outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-primary"
         >
           No agents yet. Hatch your first one.
+        </Link>
+      )}
+    </div>
+  );
+}
+
+/** Group chats (M5.11), most recent first, with their unread counts. */
+function GroupList(props: {
+  collapsed: boolean;
+  agents: readonly Agent[];
+  unread: ReadonlyMap<string, number>;
+}) {
+  const { collapsed } = props;
+  const { data: groups } = useGroupThreads();
+  const byId = new Map(props.agents.map((a) => [a.id, a]));
+  const label = (g: Thread) =>
+    g.title ??
+    g.members
+      .flatMap((m) => (m.type === "agent" ? [byId.get(m.agentId)?.name ?? "Agent"] : []))
+      .join(", ");
+  if (collapsed && !groups?.length) return null;
+  return (
+    <div className={cn("flex shrink-0 flex-col gap-0.5", collapsed && "mx-4 items-center")}>
+      {!collapsed && (
+        <div className="flex items-center justify-between pr-1 pb-1.5 pl-3">
+          <span className="eyebrow text-[10.5px] text-[#6a6a70]">Groups</span>
+          <Link
+            to="/groups/new"
+            aria-label="New group chat"
+            title="New group chat"
+            className="flex size-7 items-center justify-center rounded-full text-sidebar-muted outline-none hover:bg-white/5 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-primary"
+          >
+            <Plus className="size-4" aria-hidden />
+          </Link>
+        </div>
+      )}
+      {(groups ?? []).slice(0, 6).map((g) => {
+        const unread = props.unread.get(g.id) ?? 0;
+        return (
+          <Link
+            key={g.id}
+            to="/groups/$threadId"
+            params={{ threadId: g.id }}
+            aria-label={`${label(g)}${unread ? `, ${unread} unread` : ""}`}
+            className={cn(
+              "group relative flex shrink-0 items-center rounded-[12px] text-sm outline-none hover:bg-white/5 focus-visible:ring-2 focus-visible:ring-primary data-[status=active]:bg-white/[0.07]",
+              collapsed ? "size-11 justify-center" : "h-10 gap-2.5 px-2",
+            )}
+          >
+            <span className="flex size-[30px] shrink-0 items-center justify-center rounded-full bg-white/[0.06]">
+              <Users className="size-4 text-sidebar-muted" aria-hidden />
+            </span>
+            {!collapsed && <span className="flex-1 truncate">{label(g)}</span>}
+            <UnreadBadge n={unread} collapsed={collapsed} />
+            {collapsed && <RailTip label={label(g)} />}
+          </Link>
+        );
+      })}
+      {!collapsed && !groups?.length && (
+        <Link
+          to="/groups/new"
+          className="mx-1 rounded-[12px] border border-dashed border-sidebar-border px-3 py-2.5 text-[13px] text-sidebar-muted outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-primary"
+        >
+          Start a group chat with several agents.
         </Link>
       )}
     </div>
@@ -614,6 +759,18 @@ function MobileTopBar({ session, onSearch }: { session: SessionResponse; onSearc
               <span className="truncate text-sm font-semibold">{session.user.name}</span>
               <span className="truncate text-xs text-muted-foreground">{session.user.email}</span>
             </div>
+            <Link to="/routines" className={item} onClick={() => setOpen(false)}>
+              <Repeat className="size-[18px]" aria-hidden /> Routines
+            </Link>
+            <Link to="/skills" className={item} onClick={() => setOpen(false)}>
+              <BookOpen className="size-[18px]" aria-hidden /> Skills
+            </Link>
+            <Link to="/memory" className={item} onClick={() => setOpen(false)}>
+              <Brain className="size-[18px]" aria-hidden /> Memory
+            </Link>
+            <Link to="/groups/new" className={item} onClick={() => setOpen(false)}>
+              <Users className="size-[18px]" aria-hidden /> New group chat
+            </Link>
             <Link to="/connections" className={item} onClick={() => setOpen(false)}>
               <Plug className="size-[18px]" aria-hidden /> Connections
             </Link>

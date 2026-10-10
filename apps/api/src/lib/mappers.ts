@@ -147,6 +147,7 @@ export function toRoutine(row: RoutineRow): Routine {
     threadId: row.threadId,
     name: row.name,
     instructions: row.instructions,
+    kind: row.kind,
     cron: row.cron,
     timeZone: row.timeZone,
     status: row.status,

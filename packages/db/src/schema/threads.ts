@@ -52,6 +52,8 @@ export const threadMember = pgTable(
     userId: text("user_id").references(() => user.id, { onDelete: "cascade" }),
     agentId: uuid("agent_id"),
     joinedAt: timestampAt("joined_at").notNull().defaultNow(),
+    /** A person's: what they have seen; later agent messages are unread (M5.11). */
+    lastReadAt: timestampAt("last_read_at"),
   },
   (t) => [
     foreignKey({

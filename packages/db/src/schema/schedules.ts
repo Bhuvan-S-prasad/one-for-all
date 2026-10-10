@@ -13,7 +13,7 @@ import {
 import { agent } from "./agents";
 import { user } from "./auth";
 import { createdAt, id, timestampAt, updatedAt } from "./columns";
-import { routineStatus, scheduleKind, scheduleStatus } from "./enums";
+import { routineKind, routineStatus, scheduleKind, scheduleStatus } from "./enums";
 import { workspaceId } from "./tenancy";
 import { thread } from "./threads";
 
@@ -31,6 +31,8 @@ export const routine = pgTable(
     threadId: uuid("thread_id").notNull(),
     name: text("name").notNull(),
     instructions: text("instructions").notNull(),
+    /** `check`: read-only tools, and a reply only when something needs attention (M5.10). */
+    kind: routineKind("kind").notNull().default("task"),
     /** Five-field cron, read in `time_zone`. */
     cron: text("cron").notNull(),
     timeZone: text("time_zone").notNull(),

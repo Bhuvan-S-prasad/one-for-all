@@ -105,6 +105,7 @@ export function createPolicyEngine(options: PolicyEngineOptions): PolicyEngine {
       knownUrls,
       site,
       allowedSites,
+      readOnly,
     }): Promise<PolicyDecision> {
       const agent = await options.agents.get(ctx, ctx.agentId);
       const grant = agent
@@ -117,6 +118,15 @@ export function createPolicyEngine(options: PolicyEngineOptions): PolicyEngine {
         return { verdict: "deny", reasons: [`${tool.name} is not granted to this agent`] };
       if (grant.mode === "blocked") {
         return { verdict: "deny", reasons: [`${tool.name} is blocked for this agent`] };
+      }
+      // A proactive check only reads (§10.3, M5.10), whatever the grant says.
+      if (readOnly && !tool.annotations.readOnly) {
+        return {
+          verdict: "deny",
+          reasons: [
+            `${tool.name} can change things, and a background check may only read; say what you would do instead`,
+          ],
+        };
       }
 
       const holds: Hold[] = [];
@@ -204,6 +214,18 @@ export function createPolicyEngine(options: PolicyEngineOptions): PolicyEngine {
           ? site
           : undefined;
 
+      // A background check never waits for a person (M5.10): nobody is
+      // watching it, so anything that would ask is refused and the check says
+      // so in its reply instead (M5.10 live check: it waited a day for one).
+      if (readOnly && verdict !== "auto") {
+        return {
+          verdict: "deny",
+          reasons: [
+            ...reasons,
+            "a background check doesn't wait for a person; mention it in your reply instead",
+          ],
+        };
+      }
       return { verdict, reasons, ...(allowSite ? { allowSite } : {}) };
     },
   };

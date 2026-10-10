@@ -94,7 +94,7 @@ export function todoTool() {
         .min(1)
         .max(20),
     }),
-    annotations: { idempotent: true },
+    annotations: { readOnly: true, idempotent: true },
     async run({ items }) {
       const left = items.filter((i) => !i.done).length;
       return { content: `Plan saved: ${items.length} items, ${left} left.`, untrusted: false };

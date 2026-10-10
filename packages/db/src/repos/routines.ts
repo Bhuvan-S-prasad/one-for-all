@@ -18,8 +18,8 @@ export function nextRoutineTime(row: Pick<RoutineRow, "cron" | "timeZone">, afte
 }
 
 /** What a routine run reads as its request, and the chat shows. */
-function requestText(row: Pick<RoutineRow, "name" | "instructions">): string {
-  return `Routine “${row.name}”: ${row.instructions}`;
+function requestText(row: Pick<RoutineRow, "name" | "instructions" | "kind">): string {
+  return `${row.kind === "check" ? "Check" : "Routine"} “${row.name}”: ${row.instructions}`;
 }
 
 export async function listRoutines(
@@ -61,6 +61,7 @@ export async function createRoutine(
     instructions: string;
     cron: string;
     timeZone: string;
+    kind?: RoutineRow["kind"];
     nextRunAt: Date | null;
     limit: number;
   },
@@ -101,6 +102,7 @@ export async function createRoutine(
         threadId: chat.id,
         name: input.name,
         instructions: input.instructions,
+        kind: input.kind ?? "task",
         cron: input.cron,
         timeZone: input.timeZone,
         nextRunAt: input.nextRunAt,
@@ -119,7 +121,14 @@ export async function updateRoutine(
   patch: Partial<
     Pick<
       RoutineRow,
-      "name" | "instructions" | "cron" | "timeZone" | "status" | "pausedReason" | "nextRunAt"
+      | "name"
+      | "instructions"
+      | "kind"
+      | "cron"
+      | "timeZone"
+      | "status"
+      | "pausedReason"
+      | "nextRunAt"
     >
   >,
 ): Promise<RoutineRow | null> {
@@ -208,7 +217,12 @@ async function activeRoutineRun(tx: Tx, routineId: string): Promise<boolean> {
   return !!busy;
 }
 
-/** The routine's run and its request message, written together. */
+/**
+ * The routine's run and its request message, written together. A check
+ * (M5.10) posts nothing as it starts: its request travels on the run, and its
+ * chat gets a message only when something needs attention. Its "message" is
+ * the run's own ID.
+ */
 async function insertRoutineRun(
   tx: Tx,
   ctx: TenantContext,
@@ -216,6 +230,24 @@ async function insertRoutineRun(
   runId: string,
   trigger: "routine" | "manual",
 ): Promise<{ runId: string; messageId: string; created: boolean }> {
+  if (row.kind === "check") {
+    const [made] = await tx
+      .insert(run)
+      .values({
+        id: runId,
+        workspaceId: ctx.workspaceId,
+        agentId: row.agentId,
+        threadId: row.threadId,
+        routineId: row.id,
+        trigger,
+        triggeredBy: ctx.userId,
+        proactive: true,
+        request: requestText(row),
+      })
+      .onConflictDoNothing({ target: run.id })
+      .returning({ id: run.id });
+    return { runId, messageId: runId, created: !!made };
+  }
   const [made] = await tx
     .insert(run)
     .values({

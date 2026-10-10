@@ -84,6 +84,10 @@ export interface RunRecord {
   readonly status: RunStatus;
   readonly tainted: boolean;
   readonly usage: RunUsageTotals;
+  /** A proactive check (M5.10): only tools that change nothing may run. */
+  readonly proactive?: boolean;
+  /** What a run without a request message was asked: a check's instructions. */
+  readonly request?: string | null;
 }
 
 export interface RunPatch {
@@ -215,6 +219,8 @@ export interface ToolExecutionRequest {
   readonly knownUrls?: readonly string[];
   /** Sites a person allowed for the rest of this run (see `PolicyInput.allowedSites`). */
   readonly allowedSites?: readonly string[];
+  /** A proactive check (see `PolicyInput.readOnly`). */
+  readonly readOnly?: boolean;
 }
 
 export type ToolOutcome =
@@ -275,7 +281,11 @@ export interface ToolExecutor {
    */
   listTools(
     ctx: RunContext,
-    options?: { readonly toolkits?: readonly string[] },
+    options?: {
+      readonly toolkits?: readonly string[];
+      /** Only tools that change nothing: a proactive check (M5.10). */
+      readonly readOnly?: boolean;
+    },
   ): Promise<ToolDescriptor[]>;
   execute(request: ToolExecutionRequest, ctx: RunContext): Promise<ToolOutcome>;
 }

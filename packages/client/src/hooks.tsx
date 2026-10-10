@@ -1,5 +1,6 @@
 import type {
   AddMcpServerInput,
+  AgentFileInput,
   Agent,
   CreateAgentInput,
   CreatePolicyRuleInput,
@@ -205,6 +206,62 @@ export function useGroupThreads(options: { archived?: boolean } = {}) {
   return useQuery({
     queryKey: queryKeys.groupThreads(archived),
     queryFn: async () => (await api.groupThreads({ archived })).items,
+  });
+}
+
+/** A new agent from an exported file (M5.12). */
+export function useImportAgent() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (file: AgentFileInput) => api.importAgent(file),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.agents });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.skillLists });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.routineLists });
+    },
+  });
+}
+
+/** Chats with agent messages the person hasn't seen (M5.11). */
+export function useUnread() {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: queryKeys.unread,
+    queryFn: async () => (await api.unreadThreads()).items,
+    staleTime: 10_000,
+  });
+}
+
+/**
+ * Mark a chat read while it is on screen: when it opens, and when a new
+ * message arrives while the tab is visible.
+ */
+export function useMarkRead(threadId: string | undefined, latestMessageId: string | undefined) {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!threadId) return;
+    const mark = () => {
+      if (document.visibilityState !== "visible") return;
+      void api
+        .markThreadRead(threadId)
+        .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.unread }))
+        .catch(() => {});
+    };
+    mark();
+    document.addEventListener("visibilitychange", mark);
+    return () => document.removeEventListener("visibilitychange", mark);
+  }, [api, queryClient, threadId, latestMessageId]);
+}
+
+/** One chat by ID, e.g. a group chat (M5.11). */
+export function useThread(threadId: string | undefined) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: queryKeys.thread(threadId ?? ""),
+    queryFn: () => api.getThread(threadId!),
+    enabled: !!threadId,
   });
 }
 
@@ -510,6 +567,12 @@ export function useDeleteSkill() {
     mutationFn: (id: string) => api.deleteSkill(id),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.skillLists }),
   });
+}
+
+/** Ask for the nightly memory tidy-up now. */
+export function useConsolidateMemory() {
+  const api = useApiClient();
+  return useMutation({ mutationFn: () => api.consolidateMemory() });
 }
 
 export function useEpisodes(agentId?: string) {

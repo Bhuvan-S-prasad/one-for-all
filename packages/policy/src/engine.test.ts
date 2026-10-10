@@ -288,3 +288,74 @@ describe("apps granted whole", () => {
     );
   });
 });
+
+describe("proactive checks (M5.10)", () => {
+  it("lets a check read and refuses anything that could change things, whatever the grant", async () => {
+    const e = engine([
+      { tool: "web.search", mode: "auto" },
+      { tool: "gmail.*", mode: "auto" },
+    ]);
+    const read = await e.evaluate({
+      ctx,
+      tool: tool("web.search", { readOnly: true }),
+      args: {},
+      tainted: false,
+      readOnly: true,
+    });
+    expect(read.verdict).toBe("auto");
+    const send = await e.evaluate({
+      ctx,
+      tool: tool("gmail.send", { outbound: true }),
+      args: {},
+      tainted: false,
+      readOnly: true,
+    });
+    expect(send).toEqual({
+      verdict: "deny",
+      reasons: [
+        "gmail.send can change things, and a background check may only read; say what you would do instead",
+      ],
+    });
+    // Unannotated tools count as able to change things.
+    expect(
+      (
+        await e.evaluate({
+          ctx,
+          tool: tool("gmail.label"),
+          args: {},
+          tainted: false,
+          readOnly: true,
+        })
+      ).verdict,
+    ).toBe("deny");
+  });
+});
+
+describe("proactive checks never wait (M5.10)", () => {
+  it("refuses what would need a person, instead of asking", async () => {
+    const e = engine([{ tool: "web.read_url", mode: "auto" }]);
+    const opens = tool("web.read_url", { readOnly: true, opensUrl: "url" });
+    // In a tainted run, an address nobody gave it would wait for a person…
+    const watched = await e.evaluate({
+      ctx,
+      tool: opens,
+      args: { url: "https://made-up.example/?q=1" },
+      tainted: true,
+      knownUrls: new Set(),
+    });
+    expect(watched.verdict).toBe("approve");
+    // …but nobody watches a check, so it is refused.
+    const check = await e.evaluate({
+      ctx,
+      tool: opens,
+      args: { url: "https://made-up.example/?q=1" },
+      tainted: true,
+      knownUrls: new Set(),
+      readOnly: true,
+    });
+    expect(check.verdict).toBe("deny");
+    expect(check.reasons.at(-1)).toBe(
+      "a background check doesn't wait for a person; mention it in your reply instead",
+    );
+  });
+});

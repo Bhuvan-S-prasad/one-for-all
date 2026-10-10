@@ -240,6 +240,16 @@ export function timeline(events: readonly RunEvent[]): Timeline {
           at: e.createdAt,
         });
         break;
+      case "check.quiet":
+        closeReads();
+        items.push({
+          id: e.id,
+          title: "Nothing needed you, so it stayed quiet",
+          detail: null,
+          state: "done",
+          at: e.createdAt,
+        });
+        break;
       case "run.steered":
         closeReads();
         items.push({

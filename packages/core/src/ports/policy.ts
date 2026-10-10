@@ -34,6 +34,11 @@ export interface PolicyInput {
    * this task"): there, taint escalation no longer asks. Nothing else relaxes.
    */
   readonly allowedSites?: ReadonlySet<string>;
+  /**
+   * A proactive check (M5.10, §10.3): background work the person didn't ask
+   * for in the moment may only read. Anything not annotated read-only is denied.
+   */
+  readonly readOnly?: boolean;
 }
 
 export interface PolicyDecision {

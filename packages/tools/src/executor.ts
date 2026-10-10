@@ -198,7 +198,9 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
         return [{ ...d, description: `${d.description}\nApps you can load:\n${apps}` }];
       });
       const loadedTools = kits.flatMap((k) => k.inList.map((t) => toDescriptor(t as never)));
-      return [...builtins, ...loadedTools];
+      const all = [...builtins, ...loadedTools];
+      // A proactive check sees only what can't change anything (M5.10).
+      return listing.readOnly ? all.filter((t) => t.annotations.readOnly) : all;
     },
 
     async execute(request, ctx): Promise<ToolOutcome> {
@@ -285,6 +287,7 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
           knownUrls: new Set(request.knownUrls ?? []),
           ...(site ? { site } : {}),
           allowedSites: new Set(request.allowedSites ?? []),
+          ...(request.readOnly ? { readOnly: true } : {}),
         });
         span.setAttributes({ "policy.verdict": decision.verdict });
         if (decision.verdict === "deny") {

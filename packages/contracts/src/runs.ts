@@ -132,6 +132,8 @@ const RUN_EVENT_PAYLOADS = {
   "run.compacted": z.object({ tokensBefore: count, tokensAfter: count }),
   /** The person wrote again while the run worked; it read their messages at a step boundary (M5.05). */
   "run.steered": z.object({ messageIds: z.array(idSchema).min(1).max(20), preview }),
+  /** A proactive check found nothing that needs the person, and posted nothing (M5.10). */
+  "check.quiet": z.object({}),
   "run.ended": z.object({
     status: z.enum(["succeeded", "failed", "cancelled"]),
     stopReason: runStopReasonSchema,
@@ -236,6 +238,7 @@ export const runEventInputSchema = z.discriminatedUnion("type", [
   body("run.tainted"),
   body("run.compacted"),
   body("run.steered"),
+  body("check.quiet"),
   body("run.ended"),
   body("model.called"),
   body("model.failed"),

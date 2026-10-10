@@ -5,6 +5,7 @@ import {
   AGENT_VOICE,
   HANDOFF_BRIEF,
   PLATFORM_RULES,
+  PROACTIVE_CHECK,
   ROUTINE_RUN,
   SCHEDULED_TASK,
   SKILL_IN_USE,
@@ -40,7 +41,7 @@ export interface HistoryMessage {
    * A routine's or a scheduled task's note, framed with `ROUTINE_RUN` or
    * `SCHEDULED_TASK` and shown as the request (M5.06–07).
    */
-  readonly scheduled?: "routine" | "task";
+  readonly scheduled?: "routine" | "task" | "check";
 }
 
 export interface ToolCallTurn {
@@ -305,6 +306,7 @@ export function assembleContext(input: ContextInput, budget: ContextBudget): Ass
       ...(input.history.some((m) => m.agentMessage) ? [AGENT_MESSAGE] : []),
       ...(input.history.some((m) => m.scheduled === "routine") ? [ROUTINE_RUN] : []),
       ...(input.history.some((m) => m.scheduled === "task") ? [SCHEDULED_TASK] : []),
+      ...(input.history.some((m) => m.scheduled === "check") ? [PROACTIVE_CHECK] : []),
       ...(input.turns.some((t) => t.kind === "user") ? [STEERING] : []),
       ...(input.skill ? [SKILL_IN_USE] : []),
     ]

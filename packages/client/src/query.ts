@@ -11,6 +11,8 @@ export const queryKeys = {
   agentThreads: (id: string, q?: string) => ["threads", "list", id, q ?? ""] as const,
   threadLists: ["threads", "list"] as const,
   groupThreads: (archived: boolean) => ["threads", "list", "groups", archived] as const,
+  /** Under the chat lists, so a new message refreshes it. */
+  unread: ["threads", "list", "unread"] as const,
   thread: (id: string) => ["threads", id] as const,
   agentStats: ["agents-stats"] as const,
   memories: (filter: MemoryFilter) => ["memories", filter] as const,

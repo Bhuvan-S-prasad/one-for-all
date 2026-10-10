@@ -591,3 +591,69 @@ export async function getMessage(
   );
   return row ?? null;
 }
+
+// ── Unread (M5.11) ───────────────────────────────────────────────────────────
+
+/** This person has seen everything in the thread up to now. */
+export async function markThreadRead(
+  db: Database,
+  ctx: TenantContext,
+  threadId: string,
+): Promise<void> {
+  await withTenant(db, ctx, (tx) =>
+    tx
+      .update(threadMember)
+      .set({ lastReadAt: new Date() })
+      .where(and(eq(threadMember.threadId, threadId), eq(threadMember.userId, ctx.userId))),
+  );
+}
+
+export interface UnreadRow {
+  readonly threadId: string;
+  readonly kind: "direct" | "group" | "handoff";
+  readonly agentIds: string[];
+  readonly unread: number;
+  readonly lastAt: Date;
+}
+
+/**
+ * Chats with agent messages this person hasn't seen: written after they last
+ * read the thread (or joined it). Handoff threads are between agents, and
+ * archived chats are put away, so neither counts.
+ */
+export async function unreadThreads(db: Database, ctx: TenantContext): Promise<UnreadRow[]> {
+  return withTenant(db, ctx, async (tx) => {
+    const rows = await tx.execute<{
+      thread_id: string;
+      kind: "direct" | "group" | "handoff";
+      unread: number;
+      last_at: string;
+    }>(sql`
+      select t.id as thread_id, t.kind, count(m.id)::int as unread, max(m.created_at) as last_at
+      from ${threadMember} me
+      join ${thread} t on t.id = me.thread_id
+      join ${message} m on m.thread_id = t.id
+      where me.user_id = ${ctx.userId}
+        and t.kind <> 'handoff'
+        and t.archived_at is null
+        and m.author_type = 'agent'
+        and m.created_at > coalesce(me.last_read_at, me.joined_at)
+      group by t.id, t.kind
+      order by max(m.created_at) desc
+      limit 200`);
+    const list = [...rows];
+    const members = await membersOf(
+      tx,
+      list.map((r) => r.thread_id),
+    );
+    return list.map((r) => ({
+      threadId: r.thread_id,
+      kind: r.kind,
+      agentIds: (members.get(r.thread_id) ?? []).flatMap((m) =>
+        m.type === "agent" ? [m.agentId] : [],
+      ),
+      unread: Number(r.unread),
+      lastAt: new Date(r.last_at),
+    }));
+  });
+}

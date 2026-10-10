@@ -182,6 +182,33 @@ export const SKILL_IN_USE: PromptTemplate<{
     ].join("\n"),
 };
 
+/** A check's answer when nothing needs the person (M5.10). */
+export const QUIET_REPLY = "NOTHING_TO_REPORT";
+
+/**
+ * The quiet answer, give or take punctuation, quotes and case, alone or
+ * opening or closing a short explanation (free models add one).
+ */
+export const NOTHING_TO_REPORT = /^\W*nothing[_ ]to[_ ]report\b|\bnothing[_ ]to[_ ]report\W*$/i;
+
+/**
+ * A proactive check (M5.10): background work the person set up but isn't
+ * watching. Policy lets it use read-only tools only; it speaks only when
+ * something needs the person.
+ */
+export const PROACTIVE_CHECK: PromptTemplate<{ readonly request: string }> = {
+  id: "harness.check",
+  version: 2,
+  render: ({ request }) =>
+    [
+      "This is one of your background checks, which the person set up to run on a schedule. Look, don't act: you can only use tools that read, and nobody is there to approve anything.",
+      "",
+      request,
+      "",
+      `HOW TO ANSWER: if nothing needs the person's attention, your whole reply is the single word ${QUIET_REPLY}, with no explanation; they won't be told. Only if something does need them, reply briefly with what and why, with links or names where they help.`,
+    ].join("\n"),
+};
+
 /** What the person wrote while the run worked, joined at a step boundary (M5.05). */
 export const STEERING: PromptTemplate<{ readonly text: string }> = {
   id: "harness.steering",

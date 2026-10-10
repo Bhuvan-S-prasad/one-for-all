@@ -1,4 +1,11 @@
 import {
+  agentFileSchema,
+  importAgentResponseSchema,
+  type AgentFile,
+  type AgentFileInput,
+  type ImportAgentResponse,
+  unreadListSchema,
+  type UnreadList,
   episodeListSchema,
   skillListSchema,
   skillSchema,
@@ -271,6 +278,12 @@ export function createApiClient(options: ApiClientOptions = {}) {
         shareLoginResponseSchema,
         { to, site },
       ),
+    /** The agent as a file (M5.12). */
+    exportAgent: (id: string): Promise<AgentFile> =>
+      request("GET", `/api/agents/${encodeURIComponent(id)}/export`, agentFileSchema),
+    /** A new agent from a file: its skills wait for approval, its routines paused. */
+    importAgent: (file: AgentFileInput): Promise<ImportAgentResponse> =>
+      request("POST", "/api/agents/import", importAgentResponseSchema, file),
     agentStats: (): Promise<AgentStatsList> =>
       request("GET", "/api/agents/stats", agentStatsListSchema),
 
@@ -281,6 +294,11 @@ export function createApiClient(options: ApiClientOptions = {}) {
     /** A group chat with two to six agents (one agent makes a direct chat). */
     createThread: (input: CreateThreadRequest): Promise<Thread> =>
       request("POST", "/api/threads", threadSchema, input),
+    /** Chats with agent messages not yet seen (M5.11). */
+    unreadThreads: (): Promise<UnreadList> =>
+      request("GET", "/api/threads/unread", unreadListSchema),
+    markThreadRead: (id: string): Promise<void> =>
+      request("POST", `/api/threads/${encodeURIComponent(id)}/read`, null),
     getThread: (id: string): Promise<Thread> =>
       request("GET", `/api/threads/${encodeURIComponent(id)}`, threadSchema),
     updateThread: (id: string, patch: UpdateThreadRequest): Promise<Thread> =>
@@ -367,6 +385,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request("PATCH", `/api/skills/${encodeURIComponent(id)}`, skillSchema, patch),
     deleteSkill: (id: string): Promise<void> =>
       request("DELETE", `/api/skills/${encodeURIComponent(id)}`, null),
+    /** Tidy the workspace's memory now, not at 3 at night (owner or admin). */
+    consolidateMemory: (): Promise<void> => request("POST", "/api/memories/consolidate", null),
     /** What runs were asked and how they ended, newest first. */
     listEpisodes: (filter: { agentId?: string; limit?: number } = {}): Promise<EpisodeList> =>
       request("GET", `/api/memories/episodes${query({ ...filter })}`, episodeListSchema),

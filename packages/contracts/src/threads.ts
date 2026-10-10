@@ -117,3 +117,19 @@ export const updateThreadRequestSchema = z
   })
   .refine((v) => v.title !== undefined || v.archived !== undefined, "Nothing to change");
 export type UpdateThreadRequest = z.infer<typeof updateThreadRequestSchema>;
+
+// ── Unread (M5.11) ───────────────────────────────────────────────────────────
+
+/** A chat with agent messages the person hasn't seen. */
+export const unreadThreadSchema = z.object({
+  threadId: idSchema,
+  kind: threadKindSchema,
+  /** Its agents: a direct chat's one, or a group's members. */
+  agentIds: z.array(idSchema),
+  unread: z.number().int().min(1),
+  lastAt: timestampSchema,
+});
+export type UnreadThread = z.infer<typeof unreadThreadSchema>;
+
+export const unreadListSchema = z.object({ items: z.array(unreadThreadSchema) });
+export type UnreadList = z.infer<typeof unreadListSchema>;

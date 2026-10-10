@@ -4,6 +4,7 @@ import {
   useAgent,
   useAgents,
   useApprovals,
+  useMarkRead,
   useSkills,
   useChatThread,
   useNewThread,
@@ -120,6 +121,8 @@ function Chat({ agent }: { agent: Agent }) {
   const { draft, thread: threadId } = Route.useSearch();
   const { data: thread, error: threadError } = useChatThread(agent.id, threadId);
   const { data: messages, isPending: loadingMessages } = useThreadMessages(thread?.id);
+  // Seen while it is on screen (M5.11 unread).
+  useMarkRead(thread?.id, messages?.at(-1)?.id);
   const { data: runs } = useRuns(agent.id);
   // The run shown in the thread is this chat's latest; the agent may be busy
   // in another chat, which the header and a notice say.

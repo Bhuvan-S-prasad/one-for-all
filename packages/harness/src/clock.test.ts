@@ -17,6 +17,7 @@ import {
   type RunInput,
   type ScriptedReply,
 } from "./index";
+import { NOTHING_TO_REPORT } from "./prompts";
 
 // Steering (M5.05), and runs on the clock: routines (M5.06) and tasks an
 // agent set for later (M5.07).
@@ -204,5 +205,85 @@ describe("runs on the clock (M5.06–07)", () => {
     });
     await run();
     expect(userTexts(llm, 0).join()).not.toContain("Summarise the news");
+  });
+});
+
+describe("proactive checks (M5.10)", () => {
+  function check(script: ScriptedReply[]) {
+    const runtime = createMemoryRuntime();
+    runtime.agents.profiles.set(ctx.agentId, profile);
+    runtime.runs.records.set(ctx.runId, {
+      id: ctx.runId,
+      agentId: ctx.agentId,
+      threadId,
+      trigger: "routine",
+      status: "queued",
+      tainted: false,
+      proactive: true,
+      request: "Check “Releases”: Look for a new pgvector release.",
+      usage: { inputTokens: 0, outputTokens: 0, costUsd: 0, modelCalls: 0, toolCalls: 0 },
+    });
+    runtime.threads.messages.set(threadId, []);
+    const listed: unknown[] = [];
+    const inner = createFakeToolExecutor([
+      { descriptor: search, run: () => okOutcome("pgvector 0.9 is out.") },
+    ]);
+    const requests: { readOnly?: boolean }[] = [];
+    const tools = {
+      ...inner,
+      async listTools(c: RunContext, options?: unknown) {
+        listed.push(options);
+        return inner.listTools(c);
+      },
+      async execute(request: Parameters<typeof inner.execute>[0], c: RunContext) {
+        requests.push(request);
+        return inner.execute(request, c);
+      },
+    };
+    const llm = createScriptedLLM(script);
+    const run = () =>
+      runAgent(
+        { ctx, threadId, trigger: "routine", requestId: ctx.runId },
+        { llm, tools, runs: runtime.runs, agents: runtime.agents, threads: runtime.threads },
+        createMemoStepRunner(),
+      );
+    return { runtime, llm, run, listed, requests };
+  }
+
+  it("stays quiet when nothing needs the person, reading with read-only tools only", async () => {
+    const { runtime, llm, run, listed, requests } = check([
+      { toolCalls: [{ name: "web.search", args: { query: "pgvector release" } }] },
+      { text: "NOTHING_TO_REPORT" },
+    ]);
+    const result = await run();
+    expect(result).toMatchObject({ status: "succeeded", messageId: null, learn: false });
+    expect(runtime.threads.messages.get(threadId)).toEqual([]);
+    expect(runtime.runs.events.some((e) => e.type === "check.quiet")).toBe(true);
+    expect(listed[0]).toEqual({ readOnly: true });
+    expect(requests[0]?.readOnly).toBe(true);
+    const asked = userTexts(llm, 0).at(-1)!;
+    expect(asked).toContain("This is one of your background checks");
+    expect(asked).toContain("Look for a new pgvector release.");
+    expect(llm.requests[0]?.promptVersion).toContain("harness.check@2");
+  });
+
+  it("takes the quiet word with an explanation around it as quiet too", () => {
+    expect(NOTHING_TO_REPORT.test("NOTHING_TO_REPORT")).toBe(true);
+    expect(NOTHING_TO_REPORT.test("Nothing to report.")).toBe(true);
+    expect(NOTHING_TO_REPORT.test("The latest is 0.8.7, a week old. NOTHING_TO_REPORT")).toBe(true);
+    expect(NOTHING_TO_REPORT.test("NOTHING_TO_REPORT: no release this week.")).toBe(true);
+    expect(
+      NOTHING_TO_REPORT.test(
+        "pgvector 0.9 is out, with nothing to report on its docs yet: read it.",
+      ),
+    ).toBe(false);
+  });
+
+  it("speaks when something needs the person", async () => {
+    const { runtime, run } = check([{ text: "pgvector 0.9 is out: it changes HNSW defaults." }]);
+    const result = await run();
+    expect(result.messageId).not.toBeNull();
+    expect(runtime.threads.messages.get(threadId)?.at(-1)?.content).toContain("pgvector 0.9");
+    expect(runtime.runs.events.some((e) => e.type === "check.quiet")).toBe(false);
   });
 });

@@ -47,6 +47,10 @@ export const run = pgTable(
     status: runStatus("status").notNull().default("queued"),
     /** Set once the run reads untrusted content (ADR-0013). Never cleared. */
     tainted: boolean("tainted").notNull().default(false),
+    /** A proactive check (M5.10): only tools that change nothing may run. */
+    proactive: boolean("proactive").notNull().default(false),
+    /** What a run without a request message was asked: a check's instructions (M5.10). */
+    request: text("request"),
     triggeredBy: text("triggered_by").references(() => user.id, { onDelete: "set null" }),
     usage: jsonb("usage")
       .$type<RunUsageJson>()

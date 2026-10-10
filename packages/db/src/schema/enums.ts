@@ -61,3 +61,6 @@ export const skillSource = pgEnum("skill_source", ["person", "agent", "consolida
 
 /** How a run ended, as its episode says (M5.09). */
 export const episodeOutcome = pgEnum("episode_outcome", ["done", "stopped", "failed"]);
+
+/** A routine that does a job, or a read-only check that speaks only when something needs attention (M5.10). */
+export const routineKind = pgEnum("routine_kind", ["task", "check"]);
