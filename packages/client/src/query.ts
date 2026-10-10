@@ -10,6 +10,9 @@ export const queryKeys = {
   agentThread: (id: string) => ["agents", id, "thread"] as const,
   agentThreads: (id: string, q?: string) => ["threads", "list", id, q ?? ""] as const,
   threadLists: ["threads", "list"] as const,
+  groupThreads: (archived: boolean) => ["threads", "list", "groups", archived] as const,
+  /** Under the chat lists, so a new message refreshes it. */
+  unread: ["threads", "list", "unread"] as const,
   thread: (id: string) => ["threads", id] as const,
   agentStats: ["agents-stats"] as const,
   memories: (filter: MemoryFilter) => ["memories", filter] as const,
@@ -32,6 +35,15 @@ export const queryKeys = {
   connections: ["connections"] as const,
   appTools: (serverId: string) => ["connections", "tools", serverId] as const,
   policyRules: ["policy-rules"] as const,
+  routines: (agentId?: string) => ["routines", "list", agentId ?? "all"] as const,
+  routineLists: ["routines", "list"] as const,
+  routineRuns: (id: string) => ["routines", id, "runs"] as const,
+  schedules: (agentId?: string) => ["schedules", agentId ?? "all"] as const,
+  scheduleLists: ["schedules"] as const,
+  workspaceSettings: ["settings", "workspace"] as const,
+  skills: (agentId?: string) => ["skills", agentId ?? "all"] as const,
+  skillLists: ["skills"] as const,
+  episodes: (agentId?: string) => ["episodes", agentId ?? "all"] as const,
 };
 
 /** Shared by hooks and router loaders, so both read the same cache entry. */

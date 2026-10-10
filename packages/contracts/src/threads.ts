@@ -2,9 +2,10 @@ import { z } from "zod";
 import { idSchema, timestampSchema } from "./common";
 import { runSchema } from "./runs";
 
-// Conversations between people and agents (ARCHITECTURE.md §6.3, §15).
+// Conversations between people and agents (ARCHITECTURE.md Â§6.3, Â§15).
 
-export const threadKindSchema = z.enum(["direct", "group"]);
+/** `handoff`: one agent handed work to another (M5.01); the brief, then the reply. */
+export const threadKindSchema = z.enum(["direct", "group", "handoff"]);
 export type ThreadKind = z.infer<typeof threadKindSchema>;
 
 /** Group threads hold two to six agents. */
@@ -21,22 +22,45 @@ export const threadSchema = z.object({
   kind: threadKindSchema,
   title: z.string().nullable(),
   members: z.array(threadMemberSchema),
+  /**
+   * In a group thread, the agent that answers a message nobody was
+   * `@mentioned` in, and routes it if another member should (M5.04).
+   */
+  coordinatorAgentId: idSchema.nullable(),
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
   archivedAt: timestampSchema.nullable(),
 });
 export type Thread = z.infer<typeof threadSchema>;
 
-/** One agent makes a direct thread; two or more make a group thread. */
-export const createThreadRequestSchema = z.object({
-  agentIds: z
-    .array(idSchema)
-    .min(1)
-    .max(MAX_THREAD_AGENTS)
-    .refine((ids) => new Set(ids).size === ids.length, "List each agent once"),
-  title: z.string().trim().min(1).max(120).optional(),
-});
+/**
+ * One agent makes a direct thread; two or more make a group thread, with a
+ * coordinator (the first agent unless one is named).
+ */
+export const createThreadRequestSchema = z
+  .object({
+    agentIds: z
+      .array(idSchema)
+      .min(1)
+      .max(MAX_THREAD_AGENTS)
+      .refine((ids) => new Set(ids).size === ids.length, "List each agent once"),
+    title: z.string().trim().min(1).max(120).optional(),
+    coordinatorAgentId: idSchema.optional(),
+  })
+  .refine((v) => v.coordinatorAgentId === undefined || v.agentIds.includes(v.coordinatorAgentId), {
+    message: "The coordinator must be one of the agents",
+    path: ["coordinatorAgentId"],
+  });
 export type CreateThreadRequest = z.infer<typeof createThreadRequestSchema>;
+
+/** `GET /api/threads`: the person's group chats, or the archived ones. */
+export const groupThreadListQuerySchema = z.object({
+  kind: z.literal("group").default("group"),
+  archived: z.enum(["true", "false"]).optional(),
+});
+
+export const threadListSchema = z.object({ items: z.array(threadSchema) });
+export type ThreadList = z.infer<typeof threadListSchema>;
 
 export const messageAuthorSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("user"), userId: idSchema.nullable() }),
@@ -71,7 +95,7 @@ export const sendMessageResponseSchema = z.object({
 });
 export type SendMessageResponse = z.infer<typeof sendMessageResponseSchema>;
 
-// ── Chat history (UX.13) ─────────────────────────────────────────────────────
+// â”€â”€ Chat history (UX.13) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /** Length of the first-message preview in a chat list. */
 export const THREAD_PREVIEW_CHARS = 160;
@@ -93,3 +117,19 @@ export const updateThreadRequestSchema = z
   })
   .refine((v) => v.title !== undefined || v.archived !== undefined, "Nothing to change");
 export type UpdateThreadRequest = z.infer<typeof updateThreadRequestSchema>;
+
+// ── Unread (M5.11) ───────────────────────────────────────────────────────────
+
+/** A chat with agent messages the person hasn't seen. */
+export const unreadThreadSchema = z.object({
+  threadId: idSchema,
+  kind: threadKindSchema,
+  /** Its agents: a direct chat's one, or a group's members. */
+  agentIds: z.array(idSchema),
+  unread: z.number().int().min(1),
+  lastAt: timestampSchema,
+});
+export type UnreadThread = z.infer<typeof unreadThreadSchema>;
+
+export const unreadListSchema = z.object({ items: z.array(unreadThreadSchema) });
+export type UnreadList = z.infer<typeof unreadListSchema>;

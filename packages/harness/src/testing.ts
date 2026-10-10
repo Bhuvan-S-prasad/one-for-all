@@ -5,6 +5,8 @@ import {
   type ApprovalRecord,
   type ApprovalStore,
   type AgentProfile,
+  type ChildRunRequest,
+  type ChildRunResult,
   type ConversationMessage,
   type LLMGateway,
   type LLMRequest,
@@ -32,7 +34,8 @@ type WaitOptions = Parameters<NonNullable<StepRunner["waitForEvent"]>>[1];
 /**
  * Runs each step once and replays stored results, like Inngest's memoization.
  * With `onWait`, runs can also wait for events: it answers each wait (an
- * event's data, or null for a timeout), once, like a memoized step.
+ * event's data, or null for a timeout), once, like a memoized step. With
+ * `onInvoke`, runs can start child runs (M5.01): it plays each child, once.
  */
 export function createMemoStepRunner(
   options: {
@@ -40,6 +43,11 @@ export function createMemoStepRunner(
       id: string,
       wait: WaitOptions,
     ) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null;
+    onInvoke?: (
+      id: string,
+      child: ChildRunRequest,
+      timeoutMs: number,
+    ) => Promise<ChildRunResult | null> | ChildRunResult | null;
   } = {},
 ): StepRunner & {
   readonly ran: string[];
@@ -47,10 +55,21 @@ export function createMemoStepRunner(
 } {
   const memo = new Map<string, unknown>();
   const ran: string[] = [];
-  const { onWait } = options;
+  const { onWait, onInvoke } = options;
   return {
     memo,
     ran,
+    ...(onInvoke
+      ? {
+          async invokeRun(id: string, child: ChildRunRequest, { timeoutMs }) {
+            if (memo.has(id)) return memo.get(id) as ChildRunResult | null;
+            ran.push(id);
+            const result = (await onInvoke(id, child, timeoutMs)) ?? null;
+            memo.set(id, result);
+            return result;
+          },
+        }
+      : {}),
     ...(onWait
       ? {
           async waitForEvent(id: string, wait: WaitOptions) {

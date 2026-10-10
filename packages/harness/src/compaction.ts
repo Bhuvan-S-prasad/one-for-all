@@ -20,7 +20,9 @@ export function transcriptOf(turns: readonly Turn[]): string {
     .map((turn) =>
       turn.kind === "assistant"
         ? `Agent: ${turn.text}${turn.toolCalls.map((c) => `\n  called ${c.name} ${JSON.stringify(c.args)}`).join("")}`
-        : `Result of ${turn.toolName}: ${truncateToTokens(turn.content, 1_500)}`,
+        : turn.kind === "user"
+          ? `The person added: ${turn.text}`
+          : `Result of ${turn.toolName}: ${truncateToTokens(turn.content, 1_500)}`,
     )
     .join("\n");
 }

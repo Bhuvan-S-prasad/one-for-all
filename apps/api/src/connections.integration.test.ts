@@ -49,6 +49,9 @@ describe.skipIf(!hasDb)("MCP connections API (integration)", async () => {
     messageReceived: async (event) => void started.push(event),
     cancelRun: async () => {},
     approvalDecided: async () => {},
+    scheduleCreated: async () => {},
+    consolidateMemory: async () => {},
+    scheduleCancelled: async () => {},
   };
   const container = createContainer(config, {
     logger: createLogger({ level: "fatal", format: "json", write: () => {} }),

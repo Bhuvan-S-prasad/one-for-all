@@ -31,6 +31,37 @@ export interface StepRunner {
       readonly timeoutMs: number;
     },
   ): Promise<Record<string, unknown> | null>;
+  /**
+   * Run a handoff's child run and wait, holding no process, for it to end
+   * (Inngest `step.invoke`, M5.01). Resolves with what it came to, or null
+   * when it failed or ran past `timeoutMs`. Several started together run at
+   * the same time. Absent where runs can't start children (then delegation is
+   * refused).
+   */
+  invokeRun?(
+    id: string,
+    child: ChildRunRequest,
+    options: { readonly timeoutMs: number },
+  ): Promise<ChildRunResult | null>;
+}
+
+/** The child run of a handoff (see `TeamDirectory.handoff`). */
+export interface ChildRunRequest {
+  readonly agentId: AgentId;
+  readonly runId: RunId;
+  readonly threadId: ThreadId;
+  /** The brief that starts it. */
+  readonly messageId: MessageId;
+}
+
+/** What a child run came to. */
+export interface ChildRunResult {
+  readonly status: "succeeded" | "failed" | "cancelled" | "skipped";
+  readonly stopReason: string | null;
+  /** Its reply, as posted to the handoff thread. */
+  readonly reply: string | null;
+  /** It read outside content, so its reply may carry someone else's words. */
+  readonly tainted: boolean;
 }
 
 // ── Runs ─────────────────────────────────────────────────────────────────────
@@ -53,6 +84,10 @@ export interface RunRecord {
   readonly status: RunStatus;
   readonly tainted: boolean;
   readonly usage: RunUsageTotals;
+  /** A proactive check (M5.10): only tools that change nothing may run. */
+  readonly proactive?: boolean;
+  /** What a run without a request message was asked: a check's instructions. */
+  readonly request?: string | null;
 }
 
 export interface RunPatch {
@@ -97,6 +132,17 @@ export interface RunStore {
    * is accepted, plus `learn-` events if it succeeded.
    */
   append(ctx: TenantContext, runId: RunId, events: readonly RunEventWrite[]): Promise<void>;
+  /** Runs this run handed work to that haven't ended, so Stop stops them too (M5.01). */
+  activeChildren?(ctx: TenantContext, runId: RunId): Promise<RunId[]>;
+  /**
+   * Steering (M5.05): what the person wrote in this run's thread since it
+   * started, still waiting for this agent. Their queued runs end as
+   * `steered`, so the messages are answered once, by this run. Oldest first.
+   */
+  claimFollowUps?(
+    ctx: RunContext,
+    threadId: ThreadId,
+  ): Promise<{ readonly id: MessageId; readonly content: string }[]>;
 }
 
 // ── Agents and threads ───────────────────────────────────────────────────────
@@ -173,6 +219,8 @@ export interface ToolExecutionRequest {
   readonly knownUrls?: readonly string[];
   /** Sites a person allowed for the rest of this run (see `PolicyInput.allowedSites`). */
   readonly allowedSites?: readonly string[];
+  /** A proactive check (see `PolicyInput.readOnly`). */
+  readonly readOnly?: boolean;
 }
 
 export type ToolOutcome =
@@ -233,7 +281,11 @@ export interface ToolExecutor {
    */
   listTools(
     ctx: RunContext,
-    options?: { readonly toolkits?: readonly string[] },
+    options?: {
+      readonly toolkits?: readonly string[];
+      /** Only tools that change nothing: a proactive check (M5.10). */
+      readonly readOnly?: boolean;
+    },
   ): Promise<ToolDescriptor[]>;
   execute(request: ToolExecutionRequest, ctx: RunContext): Promise<ToolOutcome>;
 }

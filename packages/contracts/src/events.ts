@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { idSchema } from "./common";
+import { idSchema, timestampSchema } from "./common";
 import { runTriggerSchema } from "./runs";
 
 // Durable events sent to Inngest (ADR-0006). Names follow `domain/noun.verb`.
@@ -16,6 +16,12 @@ export const INNGEST_EVENTS = {
   runSucceeded: "agent/run.succeeded",
   /** A person answered an approval request; the waiting run carries on. */
   approvalDecided: "approval/decided",
+  /** An agent set a task or reminder for later (M5.07); it sleeps until it is due. */
+  scheduleCreated: "schedule/item.created",
+  /** A person cancelled a task or reminder before it was due. */
+  scheduleCancelled: "schedule/item.cancelled",
+  /** Consolidate a workspace's memory now, not at 3 at night (M5.09). */
+  memoryConsolidationRequested: "memory/consolidation.requested",
 } as const;
 
 export const messageReceivedEventSchema = z.object({
@@ -28,7 +34,15 @@ export const messageReceivedEventSchema = z.object({
 });
 export type MessageReceivedEvent = z.infer<typeof messageReceivedEventSchema>;
 
-export const runCancelledEventSchema = z.object({ ...tenant, runId: idSchema });
+export const runCancelledEventSchema = z.object({
+  ...tenant,
+  runId: idSchema,
+  /**
+   * `stopped`: a person pressed Stop or wrote "stop" (the default);
+   * `preempted`: background work set aside for a person's message (M5.05).
+   */
+  reason: z.enum(["stopped", "preempted"]).optional(),
+});
 export type RunCancelledEvent = z.infer<typeof runCancelledEventSchema>;
 
 export const runSucceededEventSchema = z.object({
@@ -48,3 +62,19 @@ export const approvalDecidedEventSchema = z.object({
   decision: z.enum(["approved", "rejected"]),
 });
 export type ApprovalDecidedEvent = z.infer<typeof approvalDecidedEventSchema>;
+
+export const scheduleCreatedEventSchema = z.object({
+  ...tenant,
+  scheduleId: idSchema,
+  /** When it is due. */
+  dueAt: timestampSchema,
+});
+export type ScheduleCreatedEvent = z.infer<typeof scheduleCreatedEventSchema>;
+
+export const scheduleCancelledEventSchema = z.object({ ...tenant, scheduleId: idSchema });
+export type ScheduleCancelledEvent = z.infer<typeof scheduleCancelledEventSchema>;
+
+export const memoryConsolidationRequestedEventSchema = z.object({ ...tenant });
+export type MemoryConsolidationRequestedEvent = z.infer<
+  typeof memoryConsolidationRequestedEventSchema
+>;

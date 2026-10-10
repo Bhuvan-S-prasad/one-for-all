@@ -7,7 +7,18 @@ import { idSchema, timestampSchema } from "./common";
 // happened (ADR-0014). The Activity view, traces, evals and audit all read
 // these events, so their shapes are fixed here.
 
-export const RUN_TRIGGERS = ["message", "routine", "delegation", "event", "manual"] as const;
+/**
+ * `routine`: on a routine's schedule; `manual`: a routine's test run (M5.06);
+ * `schedule`: a task an agent set for later (M5.07).
+ */
+export const RUN_TRIGGERS = [
+  "message",
+  "routine",
+  "delegation",
+  "event",
+  "manual",
+  "schedule",
+] as const;
 export const runTriggerSchema = z.enum(RUN_TRIGGERS);
 
 export const RUN_STATUSES = [
@@ -31,6 +42,10 @@ export const RUN_STOP_REASONS = [
   "loop_detected",
   "user_stopped",
   "error",
+  /** A person's follow-up was answered by the run already working in that chat (M5.05). */
+  "steered",
+  /** Background work set aside because a person wrote to the agent (M5.05). */
+  "preempted",
 ] as const;
 export const runStopReasonSchema = z.enum(RUN_STOP_REASONS);
 export type RunStopReason = z.infer<typeof runStopReasonSchema>;
@@ -92,6 +107,13 @@ export type Run = z.infer<typeof runSchema>;
 // Payloads never contain credentials (hard rule 4): tool arguments and results
 // are redacted before they are appended, and results appear only as previews.
 
+/**
+ * How a handoff ended, as the delegating agent is told (M5.01): `done` with
+ * an answer, `stopped` at a budget, or no answer at all.
+ */
+export const DELEGATION_STATUSES = ["done", "stopped", "failed", "cancelled"] as const;
+export type DelegationStatus = (typeof DELEGATION_STATUSES)[number];
+
 /** Shown in the Activity view; the full output lives in an artifact. */
 const preview = z.string().max(500);
 const toolName = z.string().max(100);
@@ -108,6 +130,10 @@ const RUN_EVENT_PAYLOADS = {
   /** First untrusted read; the run stays tainted until it ends. */
   "run.tainted": z.object({ source: z.string().max(200) }),
   "run.compacted": z.object({ tokensBefore: count, tokensAfter: count }),
+  /** The person wrote again while the run worked; it read their messages at a step boundary (M5.05). */
+  "run.steered": z.object({ messageIds: z.array(idSchema).min(1).max(20), preview }),
+  /** A proactive check found nothing that needs the person, and posted nothing (M5.10). */
+  "check.quiet": z.object({}),
   "run.ended": z.object({
     status: z.enum(["succeeded", "failed", "cancelled"]),
     stopReason: runStopReasonSchema,
@@ -179,6 +205,19 @@ const RUN_EVENT_PAYLOADS = {
     scope: z.enum(MEMORY_SCOPES),
     verified: z.boolean(),
   }),
+  /** Work handed to another agent as a child run (M5.01). */
+  "delegation.started": z.object({
+    toolCallId: idSchema,
+    childRunId: idSchema,
+    agentId: idSchema,
+    agentName: z.string().max(200),
+  }),
+  "delegation.finished": z.object({
+    toolCallId: idSchema,
+    childRunId: idSchema,
+    status: z.enum(DELEGATION_STATUSES),
+    preview,
+  }),
 } as const;
 
 type Payloads = typeof RUN_EVENT_PAYLOADS;
@@ -198,6 +237,8 @@ export const runEventInputSchema = z.discriminatedUnion("type", [
   body("run.resumed"),
   body("run.tainted"),
   body("run.compacted"),
+  body("run.steered"),
+  body("check.quiet"),
   body("run.ended"),
   body("model.called"),
   body("model.failed"),
@@ -209,6 +250,8 @@ export const runEventInputSchema = z.discriminatedUnion("type", [
   body("tool.completed"),
   body("tool.failed"),
   body("memory.written"),
+  body("delegation.started"),
+  body("delegation.finished"),
 ]);
 export type RunEventInput = z.infer<typeof runEventInputSchema>;
 

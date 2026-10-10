@@ -141,4 +141,40 @@ export const BUILTIN_TOOLS = [
     hint: "Read and write files on its computer, shared with your other agents.",
     starter: false,
   },
+  {
+    name: "delegate_task",
+    label: "Hand work to other agents",
+    hint: "Give another of your agents a task and use its answer. That agent works with its own tools and permissions.",
+    starter: false,
+  },
+  {
+    name: "message_agent",
+    label: "Message other agents",
+    hint: "Pass a request to another agent in the chat. Its reply appears in the chat later. Lets a group's coordinator route messages.",
+    starter: false,
+  },
+  {
+    name: "schedule_task",
+    label: "Do tasks later",
+    hint: "Set itself a task for a later time, then wake up in the same chat to do it.",
+    starter: false,
+  },
+  {
+    name: "remind_me",
+    label: "Set reminders",
+    hint: "Post a reminder in the chat at the time you ask for.",
+    starter: true,
+  },
+  {
+    name: "run_skill",
+    label: "Use skills",
+    hint: "Follow saved step-by-step skills when a task matches one.",
+    starter: true,
+  },
+  {
+    name: "save_skill",
+    label: "Save skills",
+    hint: "Save how it did a task as a skill to reuse. Saved after reading outside content, it waits for your approval.",
+    starter: false,
+  },
 ] as const;

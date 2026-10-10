@@ -1,0 +1,20 @@
+import type { ComponentProps } from "react";
+import { cn } from "@/lib/utils";
+
+const FIELD =
+  "w-full rounded-md border border-input bg-field px-4 text-base text-foreground transition-colors placeholder:text-muted-foreground/70 outline-none focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive";
+
+/** Multi-line text, styled like `Input`. */
+export function Textarea({ className, ...props }: ComponentProps<"textarea">) {
+  return (
+    <textarea
+      className={cn(FIELD, "min-h-28 resize-y py-3 leading-relaxed", className)}
+      {...props}
+    />
+  );
+}
+
+/** A native select, styled like `Input`. */
+export function Select({ className, ...props }: ComponentProps<"select">) {
+  return <select className={cn(FIELD, "h-13 appearance-auto pr-3", className)} {...props} />;
+}

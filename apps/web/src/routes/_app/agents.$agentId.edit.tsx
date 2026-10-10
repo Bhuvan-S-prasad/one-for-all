@@ -3,6 +3,7 @@ import type { Agent } from "@ofa/contracts";
 import { useState, type FormEvent } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { AgentEditor, draftGrants, toRequest } from "@/components/agent-editor";
+import { ExportAgentCard } from "@/components/agent-file";
 import { usesBrowser } from "@/components/computer/computer-panel";
 import { ErrorAlert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -85,6 +86,7 @@ function EditAgentPage() {
         }}
       />
       {usesBrowser(agent) && <ShareLoginCard agent={agent} />}
+      <ExportAgentCard agent={agent} />
     </div>
   );
 }

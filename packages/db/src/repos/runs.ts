@@ -16,6 +16,30 @@ export async function getRun(db: Database, ctx: TenantContext, id: string) {
 }
 
 type RunStatusValue = (typeof run.$inferSelect)["status"];
+type RunTriggerValue = (typeof run.$inferSelect)["trigger"];
+
+/** Runs that haven't ended, in a thread or of an agent, oldest first (M5.05). */
+export async function listActiveRuns(
+  db: Database,
+  ctx: TenantContext,
+  options: { threadId?: string; agentId?: string; triggers?: readonly RunTriggerValue[] },
+) {
+  return withTenant(db, ctx, (tx) =>
+    tx
+      .select()
+      .from(run)
+      .where(
+        and(
+          inArray(run.status, ["queued", "running", "waiting"]),
+          options.threadId ? eq(run.threadId, options.threadId) : undefined,
+          options.agentId ? eq(run.agentId, options.agentId) : undefined,
+          options.triggers?.length ? inArray(run.trigger, [...options.triggers]) : undefined,
+        ),
+      )
+      .orderBy(asc(run.createdAt))
+      .limit(50),
+  );
+}
 
 /** `%`, `_` and `\` match literally in a search. */
 export function likePattern(text: string): string {
@@ -100,9 +124,12 @@ export async function runPreviews(
       .select({
         runId: message.runId,
         authorType: message.authorType,
+        // A handoff's brief is written by the agent handing the work over (M5.01).
+        byRunAgent: sql<boolean>`${message.authorAgentId} = ${run.agentId}`,
         text: sql<string>`left(${message.content}, ${chars})`,
       })
       .from(message)
+      .innerJoin(run, eq(run.id, message.runId))
       .where(
         and(inArray(message.runId, [...runIds]), inArray(message.authorType, ["user", "agent"])),
       )
@@ -111,7 +138,7 @@ export async function runPreviews(
   for (const row of rows) {
     if (!row.runId) continue;
     const entry = previews.get(row.runId) ?? { request: null, reply: null };
-    if (row.authorType === "user") entry.request ??= row.text;
+    if (row.authorType === "user" || !row.byRunAgent) entry.request ??= row.text;
     else entry.reply ??= row.text;
     previews.set(row.runId, entry);
   }

@@ -3,9 +3,15 @@ import {
   INNGEST_EVENTS,
   messageReceivedEventSchema,
   runCancelledEventSchema,
+  memoryConsolidationRequestedEventSchema,
+  scheduleCancelledEventSchema,
+  scheduleCreatedEventSchema,
   type ApprovalDecidedEvent,
+  type MemoryConsolidationRequestedEvent,
   type MessageReceivedEvent,
   type RunCancelledEvent,
+  type ScheduleCancelledEvent,
+  type ScheduleCreatedEvent,
 } from "@ofa/contracts";
 import { Inngest } from "inngest";
 
@@ -31,6 +37,12 @@ export interface RunDispatcher {
   cancelRun(event: RunCancelledEvent): Promise<void>;
   /** Wake a run waiting on this approval. */
   approvalDecided(event: ApprovalDecidedEvent): Promise<void>;
+  /** Start the wait of a task or reminder set for later (M5.07). */
+  scheduleCreated(event: ScheduleCreatedEvent): Promise<void>;
+  /** End that wait early: the item was cancelled. */
+  scheduleCancelled(event: ScheduleCancelledEvent): Promise<void>;
+  /** Consolidate a workspace's memory now (M5.09). */
+  consolidateMemory(event: MemoryConsolidationRequestedEvent): Promise<void>;
 }
 
 export function createRunDispatcher(inngest: Inngest): RunDispatcher {
@@ -55,6 +67,26 @@ export function createRunDispatcher(inngest: Inngest): RunDispatcher {
         name: INNGEST_EVENTS.approvalDecided,
         data: approvalDecidedEventSchema.parse(event),
         id: `approval-decided-${event.approvalId}`,
+      });
+    },
+    async scheduleCreated(event) {
+      await inngest.send({
+        name: INNGEST_EVENTS.scheduleCreated,
+        data: scheduleCreatedEventSchema.parse(event),
+        id: `schedule-created-${event.scheduleId}`,
+      });
+    },
+    async scheduleCancelled(event) {
+      await inngest.send({
+        name: INNGEST_EVENTS.scheduleCancelled,
+        data: scheduleCancelledEventSchema.parse(event),
+        id: `schedule-cancelled-${event.scheduleId}`,
+      });
+    },
+    async consolidateMemory(event) {
+      await inngest.send({
+        name: INNGEST_EVENTS.memoryConsolidationRequested,
+        data: memoryConsolidationRequestedEventSchema.parse(event),
       });
     },
   };

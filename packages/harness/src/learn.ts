@@ -58,6 +58,7 @@ export async function learnFromRun(
         .map((m) => ({ author: m.author, agentId: m.agentId, content: m.content })),
       answer: reply.content,
       verified: !run.tainted,
+      threadId: input.threadId,
       log: async (events) =>
         deps.runs.append(
           ctx,

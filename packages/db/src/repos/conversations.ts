@@ -1,7 +1,7 @@
 import { type TenantContext } from "@ofa/core";
 import { and, asc, desc, eq, inArray, isNull, lt, or, sql, type SQL } from "drizzle-orm";
 import type { Database } from "../client";
-import { message, run, thread, threadMember } from "../schema/index";
+import { message, routine, run, thread, threadMember } from "../schema/index";
 import { withTenant, type Tx } from "../tenant";
 import { likePattern } from "./runs";
 
@@ -48,11 +48,18 @@ export async function getThread(
   });
 }
 
-/** Direct threads between this person and one agent, not archived. */
-function directWith(ctx: TenantContext, agentId: string): SQL {
+/**
+ * Direct threads between this person and one agent, not archived. A
+ * routine's own chat (M5.06) is listed with them, but never becomes the
+ * person's current chat or a reused empty one (`chatsOnly`).
+ */
+function directWith(ctx: TenantContext, agentId: string, chatsOnly = false): SQL {
   return and(
     eq(thread.kind, "direct"),
     isNull(thread.archivedAt),
+    chatsOnly
+      ? sql`not exists (select 1 from ${routine} r where r.thread_id = ${thread}.id)`
+      : undefined,
     sql`exists (select 1 from ${threadMember} m where m.thread_id = ${thread}.id and m.agent_id = ${agentId})`,
     sql`exists (select 1 from ${threadMember} m where m.thread_id = ${thread}.id and m.user_id = ${ctx.userId})`,
   )!;
@@ -98,7 +105,7 @@ export async function directThread(
     const [existing] = await tx
       .select({ id: thread.id })
       .from(thread)
-      .where(directWith(ctx, agentId))
+      .where(directWith(ctx, agentId, true))
       .orderBy(desc(thread.updatedAt), desc(thread.createdAt))
       .limit(1);
     return withMembers(tx, existing?.id ?? (await insertDirectThread(tx, ctx, agentId)));
@@ -121,7 +128,7 @@ export async function newDirectThread(
       .from(thread)
       .where(
         and(
-          directWith(ctx, agentId),
+          directWith(ctx, agentId, true),
           sql`not exists (select 1 from ${message} m where m.thread_id = ${thread}.id)`,
         ),
       )
@@ -133,6 +140,135 @@ export async function newDirectThread(
       return withMembers(tx, empty.id);
     }
     return withMembers(tx, await insertDirectThread(tx, ctx, agentId));
+  });
+}
+
+/**
+ * A group thread (M5.04): this person and two to six agents, one of them the
+ * coordinator. Members are listed coordinator first.
+ */
+export async function createGroupThread(
+  db: Database,
+  ctx: TenantContext,
+  input: { agentIds: readonly string[]; coordinatorAgentId: string; title: string | null },
+): Promise<ThreadWithMembers> {
+  return withTenant(db, ctx, async (tx) => {
+    const [created] = await tx
+      .insert(thread)
+      .values({
+        workspaceId: ctx.workspaceId,
+        kind: "group",
+        title: input.title,
+        coordinatorAgentId: input.coordinatorAgentId,
+        createdBy: ctx.userId,
+      })
+      .returning({ id: thread.id });
+    if (!created) throw new Error("thread insert returned no row");
+    const agents = [
+      input.coordinatorAgentId,
+      ...input.agentIds.filter((id) => id !== input.coordinatorAgentId),
+    ];
+    await tx.insert(threadMember).values([
+      {
+        workspaceId: ctx.workspaceId,
+        threadId: created.id,
+        memberType: "user",
+        userId: ctx.userId,
+      },
+      ...agents.map((agentId) => ({
+        workspaceId: ctx.workspaceId,
+        threadId: created.id,
+        memberType: "agent" as const,
+        agentId,
+      })),
+    ]);
+    return withMembers(tx, created.id);
+  });
+}
+
+/** This person's group threads, most recently active first. */
+export async function listGroupThreads(
+  db: Database,
+  ctx: TenantContext,
+  options: { archived?: boolean } = {},
+): Promise<ThreadWithMembers[]> {
+  return withTenant(db, ctx, async (tx) => {
+    const rows = await tx
+      .select()
+      .from(thread)
+      .where(
+        and(
+          eq(thread.kind, "group"),
+          options.archived ? sql`${thread.archivedAt} is not null` : isNull(thread.archivedAt),
+          sql`exists (select 1 from ${threadMember} m where m.thread_id = ${thread}.id and m.user_id = ${ctx.userId})`,
+        ),
+      )
+      .orderBy(desc(thread.updatedAt))
+      .limit(100);
+    const members = await membersOf(
+      tx,
+      rows.map((r) => r.id),
+    );
+    return rows.map((row) => ({ ...row, members: members.get(row.id) ?? [] }));
+  });
+}
+
+/**
+ * One agent's message to another in a thread they share (M5.03), and the
+ * queued run that will answer it there. IDs come from the caller, derived
+ * from the sending run's tool call, so a retried step posts once.
+ */
+export async function postAgentMessage(
+  db: Database,
+  ctx: TenantContext,
+  input: {
+    threadId: string;
+    runId: string;
+    parentRunId: string;
+    fromAgentId: string;
+    toAgentId: string;
+    content: string;
+    tainted: boolean;
+  },
+): Promise<{ messageId: string; created: boolean }> {
+  return withTenant(db, ctx, async (tx) => {
+    const [made] = await tx
+      .insert(run)
+      .values({
+        id: input.runId,
+        workspaceId: ctx.workspaceId,
+        agentId: input.toAgentId,
+        threadId: input.threadId,
+        parentRunId: input.parentRunId,
+        trigger: "event",
+        triggeredBy: ctx.userId,
+        tainted: input.tainted,
+      })
+      .onConflictDoNothing({ target: run.id })
+      .returning({ id: run.id });
+    if (!made) {
+      const [sent] = await tx
+        .select({ id: message.id })
+        .from(message)
+        .where(and(eq(message.runId, input.runId), eq(message.authorAgentId, input.fromAgentId)))
+        .limit(1);
+      if (!sent) throw new Error("agent message vanished");
+      return { messageId: sent.id, created: false };
+    }
+    const [sent] = await tx
+      .insert(message)
+      .values({
+        workspaceId: ctx.workspaceId,
+        threadId: input.threadId,
+        authorType: "agent",
+        authorAgentId: input.fromAgentId,
+        content: input.content,
+        runId: input.runId,
+      })
+      .returning({ id: message.id });
+    if (!sent) throw new Error("message insert returned no row");
+    await tx.update(thread).set({ updatedAt: new Date() }).where(eq(thread.id, input.threadId));
+    return { messageId: sent.id, created: true };
   });
 }
 
@@ -320,6 +456,114 @@ export async function startTurn(
   });
 }
 
+/**
+ * A person's message that starts no run: "stop" while agents work (M5.05).
+ */
+export async function postUserMessage(
+  db: Database,
+  ctx: TenantContext,
+  input: { threadId: string; content: string },
+): Promise<MessageRow> {
+  return withTenant(db, ctx, async (tx) => {
+    const [row] = await tx
+      .insert(message)
+      .values({
+        workspaceId: ctx.workspaceId,
+        threadId: input.threadId,
+        authorType: "user",
+        authorUserId: ctx.userId,
+        content: input.content,
+      })
+      .returning();
+    if (!row) throw new Error("message insert returned no row");
+    await tx.update(thread).set({ updatedAt: new Date() }).where(eq(thread.id, input.threadId));
+    return row;
+  });
+}
+
+/**
+ * A handoff (M5.01): its own thread, the brief as the first message (written
+ * by the agent handing the work over), and the queued child run, together.
+ * IDs come from the caller, derived from the handing run's tool call, so a
+ * retried step finds what it made the first time instead of making another.
+ */
+export async function startHandoff(
+  db: Database,
+  ctx: TenantContext,
+  input: {
+    threadId: string;
+    runId: string;
+    parentRunId: string;
+    fromAgentId: string;
+    toAgentId: string;
+    brief: string;
+    title: string;
+    tainted: boolean;
+  },
+): Promise<{ messageId: string; created: boolean }> {
+  return withTenant(db, ctx, async (tx) => {
+    const [made] = await tx
+      .insert(thread)
+      .values({
+        id: input.threadId,
+        workspaceId: ctx.workspaceId,
+        kind: "handoff",
+        title: input.title,
+        createdBy: ctx.userId,
+      })
+      .onConflictDoNothing({ target: thread.id })
+      .returning({ id: thread.id });
+    if (!made) {
+      const [brief] = await tx
+        .select({ id: message.id })
+        .from(message)
+        .where(and(eq(message.threadId, input.threadId), eq(message.runId, input.runId)))
+        .orderBy(asc(message.createdAt))
+        .limit(1);
+      if (!brief) throw new Error("handoff thread has no brief");
+      return { messageId: brief.id, created: false };
+    }
+    await tx.insert(threadMember).values([
+      { workspaceId: ctx.workspaceId, threadId: made.id, memberType: "user", userId: ctx.userId },
+      {
+        workspaceId: ctx.workspaceId,
+        threadId: made.id,
+        memberType: "agent",
+        agentId: input.fromAgentId,
+      },
+      {
+        workspaceId: ctx.workspaceId,
+        threadId: made.id,
+        memberType: "agent",
+        agentId: input.toAgentId,
+      },
+    ]);
+    await tx.insert(run).values({
+      id: input.runId,
+      workspaceId: ctx.workspaceId,
+      agentId: input.toAgentId,
+      threadId: made.id,
+      parentRunId: input.parentRunId,
+      trigger: "delegation",
+      triggeredBy: ctx.userId,
+      tainted: input.tainted,
+    });
+    const [brief] = await tx
+      .insert(message)
+      .values({
+        workspaceId: ctx.workspaceId,
+        threadId: made.id,
+        authorType: "agent",
+        authorAgentId: input.fromAgentId,
+        content: input.brief,
+        runId: input.runId,
+      })
+      .returning({ id: message.id });
+    if (!brief) throw new Error("message insert returned no row");
+    return { messageId: brief.id, created: true };
+  });
+}
+
 /** The person's message that started a run, if a message started it. */
 export async function runRequestMessage(
   db: Database,
@@ -346,4 +590,70 @@ export async function getMessage(
     tx.select().from(message).where(eq(message.id, id)).limit(1),
   );
   return row ?? null;
+}
+
+// ── Unread (M5.11) ───────────────────────────────────────────────────────────
+
+/** This person has seen everything in the thread up to now. */
+export async function markThreadRead(
+  db: Database,
+  ctx: TenantContext,
+  threadId: string,
+): Promise<void> {
+  await withTenant(db, ctx, (tx) =>
+    tx
+      .update(threadMember)
+      .set({ lastReadAt: new Date() })
+      .where(and(eq(threadMember.threadId, threadId), eq(threadMember.userId, ctx.userId))),
+  );
+}
+
+export interface UnreadRow {
+  readonly threadId: string;
+  readonly kind: "direct" | "group" | "handoff";
+  readonly agentIds: string[];
+  readonly unread: number;
+  readonly lastAt: Date;
+}
+
+/**
+ * Chats with agent messages this person hasn't seen: written after they last
+ * read the thread (or joined it). Handoff threads are between agents, and
+ * archived chats are put away, so neither counts.
+ */
+export async function unreadThreads(db: Database, ctx: TenantContext): Promise<UnreadRow[]> {
+  return withTenant(db, ctx, async (tx) => {
+    const rows = await tx.execute<{
+      thread_id: string;
+      kind: "direct" | "group" | "handoff";
+      unread: number;
+      last_at: string;
+    }>(sql`
+      select t.id as thread_id, t.kind, count(m.id)::int as unread, max(m.created_at) as last_at
+      from ${threadMember} me
+      join ${thread} t on t.id = me.thread_id
+      join ${message} m on m.thread_id = t.id
+      where me.user_id = ${ctx.userId}
+        and t.kind <> 'handoff'
+        and t.archived_at is null
+        and m.author_type = 'agent'
+        and m.created_at > coalesce(me.last_read_at, me.joined_at)
+      group by t.id, t.kind
+      order by max(m.created_at) desc
+      limit 200`);
+    const list = [...rows];
+    const members = await membersOf(
+      tx,
+      list.map((r) => r.thread_id),
+    );
+    return list.map((r) => ({
+      threadId: r.thread_id,
+      kind: r.kind,
+      agentIds: (members.get(r.thread_id) ?? []).flatMap((m) =>
+        m.type === "agent" ? [m.agentId] : [],
+      ),
+      unread: Number(r.unread),
+      lastAt: new Date(r.last_at),
+    }));
+  });
 }

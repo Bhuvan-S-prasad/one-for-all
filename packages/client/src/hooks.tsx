@@ -1,8 +1,12 @@
 import type {
   AddMcpServerInput,
+  AgentFileInput,
   Agent,
   CreateAgentInput,
   CreatePolicyRuleInput,
+  CreateRoutineRequest,
+  CreateSkillRequest,
+  CreateThreadRequest,
   FirstRunSetupRequest,
   LoginRequest,
   Message,
@@ -12,6 +16,8 @@ import type {
   SendMessageResponse,
   Thread,
   UpdateAgentRequest,
+  UpdateRoutineRequest,
+  UpdateSkillRequest,
   UpdateThreadRequest,
 } from "@ofa/contracts";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -193,6 +199,85 @@ export function useNewThread(agentId: string) {
   });
 }
 
+/** The person's group chats with several agents (M5.04). */
+export function useGroupThreads(options: { archived?: boolean } = {}) {
+  const api = useApiClient();
+  const archived = options.archived ?? false;
+  return useQuery({
+    queryKey: queryKeys.groupThreads(archived),
+    queryFn: async () => (await api.groupThreads({ archived })).items,
+  });
+}
+
+/** A new agent from an exported file (M5.12). */
+export function useImportAgent() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (file: AgentFileInput) => api.importAgent(file),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.agents });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.skillLists });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.routineLists });
+    },
+  });
+}
+
+/** Chats with agent messages the person hasn't seen (M5.11). */
+export function useUnread() {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: queryKeys.unread,
+    queryFn: async () => (await api.unreadThreads()).items,
+    staleTime: 10_000,
+  });
+}
+
+/**
+ * Mark a chat read while it is on screen: when it opens, and when a new
+ * message arrives while the tab is visible.
+ */
+export function useMarkRead(threadId: string | undefined, latestMessageId: string | undefined) {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!threadId) return;
+    const mark = () => {
+      if (document.visibilityState !== "visible") return;
+      void api
+        .markThreadRead(threadId)
+        .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.unread }))
+        .catch(() => {});
+    };
+    mark();
+    document.addEventListener("visibilitychange", mark);
+    return () => document.removeEventListener("visibilitychange", mark);
+  }, [api, queryClient, threadId, latestMessageId]);
+}
+
+/** One chat by ID, e.g. a group chat (M5.11). */
+export function useThread(threadId: string | undefined) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: queryKeys.thread(threadId ?? ""),
+    queryFn: () => api.getThread(threadId!),
+    enabled: !!threadId,
+  });
+}
+
+/** Start a chat: with one agent a new direct chat, with two to six a group chat. */
+export function useCreateThread() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateThreadRequest) => api.createThread(input),
+    onSuccess: (thread) => {
+      queryClient.setQueryData(queryKeys.thread(thread.id), thread);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.threadLists });
+    },
+  });
+}
+
 /** Rename, archive or bring back a chat. */
 export function useUpdateThread() {
   const api = useApiClient();
@@ -341,6 +426,162 @@ export function useForgetMemory() {
 }
 
 // ── Settings ─────────────────────────────────────────────────────────────────
+
+// ── Routines (M5.06) and things set for later (M5.07) ────────────────────────
+
+export function useRoutines(agentId?: string) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: queryKeys.routines(agentId),
+    queryFn: async () => (await api.listRoutines({ agentId })).items,
+  });
+}
+
+export function useCreateRoutine() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateRoutineRequest) => api.createRoutine(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.routineLists });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.threadLists });
+    },
+  });
+}
+
+/** Rename, reschedule, pause or resume. */
+export function useUpdateRoutine() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: UpdateRoutineRequest }) =>
+      api.updateRoutine(id, patch),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.routineLists }),
+  });
+}
+
+export function useDeleteRoutine() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.deleteRoutine(id),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.routineLists }),
+  });
+}
+
+/** A test run now; it shows in the routine's history and its chat. */
+export function useRunRoutine() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.runRoutine(id),
+    onSuccess: (run, id) => {
+      queryClient.setQueryData(queryKeys.run(run.id), run);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.routineRuns(id) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runLists });
+    },
+  });
+}
+
+/** A routine's latest runs, newest first. */
+export function useRoutineRuns(id: string | undefined) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: queryKeys.routineRuns(id ?? ""),
+    queryFn: async () => (await api.routineRuns(id!)).items,
+    enabled: !!id,
+  });
+}
+
+/** What agents set for later and is still waiting, soonest first. */
+export function useSchedules(agentId?: string) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: queryKeys.schedules(agentId),
+    queryFn: async () => (await api.listSchedules({ agentId, status: "pending" })).items,
+  });
+}
+
+export function useCancelSchedule() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.cancelSchedule(id),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.scheduleLists }),
+  });
+}
+
+export function useWorkspaceSettings() {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: queryKeys.workspaceSettings,
+    queryFn: () => api.workspaceSettings(),
+  });
+}
+
+export function useSetTimeZone() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (timeZone: string) => api.setTimeZone(timeZone),
+    onSuccess: (settings) => queryClient.setQueryData(queryKeys.workspaceSettings, settings),
+  });
+}
+
+// ── Skills (M5.08) and episodes (M5.09) ──────────────────────────────────────
+
+/** All skills, or one agent's with the shared ones (for `/` in its chat). */
+export function useSkills(agentId?: string) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: queryKeys.skills(agentId),
+    queryFn: async () => (await api.listSkills({ agentId })).items,
+    staleTime: 30_000,
+  });
+}
+
+export function useCreateSkill() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateSkillRequest) => api.createSkill(input),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.skillLists }),
+  });
+}
+
+/** Edit, approve or retire a skill. */
+export function useUpdateSkill() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: UpdateSkillRequest }) =>
+      api.updateSkill(id, patch),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.skillLists }),
+  });
+}
+
+export function useDeleteSkill() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.deleteSkill(id),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.skillLists }),
+  });
+}
+
+/** Ask for the nightly memory tidy-up now. */
+export function useConsolidateMemory() {
+  const api = useApiClient();
+  return useMutation({ mutationFn: () => api.consolidateMemory() });
+}
+
+export function useEpisodes(agentId?: string) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: queryKeys.episodes(agentId),
+    queryFn: async () => (await api.listEpisodes({ agentId })).items,
+  });
+}
 
 // ── Approvals ────────────────────────────────────────────────────────────────
 

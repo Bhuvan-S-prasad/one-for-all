@@ -1,9 +1,10 @@
-import { useAgent, useMemories } from "@ofa/client";
+import { useAgent, useEpisodes, useMemories } from "@ofa/client";
 import type { Agent, MemoryItem } from "@ofa/contracts";
 import { createFileRoute } from "@tanstack/react-router";
 import { Search } from "lucide-react";
 import { useState } from "react";
 import { AgentPageHeader } from "@/components/agent-tabs";
+import { EpisodeRow } from "@/components/episode-row";
 import { FactRow, useForgetWithUndo } from "@/components/memory-review";
 import { ErrorAlert } from "@/components/ui/alert";
 
@@ -48,6 +49,7 @@ const GROUPS: { title: string; match: (m: MemoryItem) => boolean }[] = [
 
 function Memory({ agent }: { agent: Agent }) {
   const { data, isPending, error } = useMemories({ agentId: agent.id });
+  const { data: episodes } = useEpisodes(agent.id);
   const { hidden, forget } = useForgetWithUndo();
   const [text, setText] = useState("");
   const needle = text.trim().toLowerCase();
@@ -135,6 +137,18 @@ function Memory({ agent }: { agent: Agent }) {
                 </p>
               )}
             </>
+          )}
+          {(episodes?.length ?? 0) > 0 && (
+            <section aria-labelledby="recent-work" className="flex flex-col gap-1.5">
+              <h2 id="recent-work" className="eyebrow px-1 text-[11px] text-muted-foreground">
+                Recent work · {episodes!.length}
+              </h2>
+              <ul className="flex flex-col divide-y rounded-[16px] border bg-card">
+                {episodes!.slice(0, 12).map((e) => (
+                  <EpisodeRow key={e.id} agent={agent} episode={e} />
+                ))}
+              </ul>
+            </section>
           )}
         </div>
       </div>

@@ -1,3 +1,4 @@
+export * from "./agent-file";
 export * from "./agents";
 export * from "./approvals";
 export * from "./artifacts";
@@ -12,7 +13,10 @@ export * from "./logins";
 export * from "./memory";
 export * from "./policy";
 export * from "./realtime";
+export * from "./routines";
 export * from "./runs";
+export * from "./schedules";
 export * from "./screen";
+export * from "./skills";
 export * from "./settings";
 export * from "./threads";

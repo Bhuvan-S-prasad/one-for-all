@@ -1,4 +1,4 @@
-import { INNGEST_EVENTS, type RunStopReason } from "@ofa/contracts";
+import { INNGEST_EVENTS, type DelegationStatus, type RunStopReason } from "@ofa/contracts";
 import {
   APPROVAL_TIMEOUT_MS,
   toolkitToolName,
@@ -7,6 +7,7 @@ import {
   type AgentDirectory,
   type AgentProfile,
   type ApprovalStore,
+  type ChildRunResult,
   type LLMGateway,
   type LLMRequest,
   type MemoryStore,
@@ -14,7 +15,10 @@ import {
   type RunEventWrite,
   type RunStore,
   type RunUsageTotals,
+  skillReferences,
+  type SkillLibrary,
   type StepRunner,
+  type TeamDirectory,
   type ThreadId,
   type ThreadStore,
   type ToolDescriptor,
@@ -32,6 +36,14 @@ import {
 } from "./context";
 import { modelCallEvents, runEvent } from "./events";
 import { MiddlewareChain, type HarnessMiddleware, type RunHookContext } from "./middleware";
+import {
+  AGENT_MESSAGE,
+  HANDOFF_BRIEF,
+  NOTHING_TO_REPORT,
+  PROACTIVE_CHECK,
+  ROUTINE_RUN,
+  SCHEDULED_TASK,
+} from "./prompts";
 import { redactJson, type RedactText } from "./redaction";
 
 // The agent loop (ARCHITECTURE.md §6.2). Every side effect happens inside a
@@ -53,6 +65,11 @@ export interface HarnessOptions {
   readonly loopRepeatLimit?: number;
   /** How long a run waits for a person to answer an approval. Default 24 hours. */
   readonly approvalTimeoutMs?: number;
+  /**
+   * How long a run waits for work it handed to another agent. Default 25
+   * hours: the child may itself wait a day for a person's approval.
+   */
+  readonly delegationTimeoutMs?: number;
 }
 
 export interface HarnessDeps {
@@ -68,6 +85,13 @@ export interface HarnessDeps {
    */
   readonly approvals?: ApprovalStore;
   /**
+   * The agents a run can hand work to (M5.01). Without it, or a step runner
+   * that can start child runs, `delegate_task` is refused.
+   */
+  readonly team?: TeamDirectory;
+  /** Skills the agent may use (M5.08): `/slug` in the request applies one. */
+  readonly skills?: SkillLibrary;
+  /**
    * Replaces known secret values (the vault's redaction). Applied to every
    * run event, approval request and reply before it is stored (hard rule 4).
    */
@@ -79,7 +103,13 @@ export interface HarnessDeps {
 export interface RunInput {
   readonly ctx: RunContext;
   readonly threadId: ThreadId | null;
-  readonly trigger: "message" | "routine" | "delegation" | "event" | "manual";
+  readonly trigger: "message" | "routine" | "delegation" | "event" | "manual" | "schedule";
+  /**
+   * The message that started the run. For a run woken by another agent's
+   * message (`event`, M5.03), that message is its request; so is a
+   * routine's or a scheduled task's request note (M5.06–07).
+   */
+  readonly requestId?: string;
 }
 
 export interface RunResult {
@@ -87,6 +117,10 @@ export interface RunResult {
   readonly stopReason: RunStopReason | null;
   readonly usage: RunUsageTotals;
   readonly messageId: string | null;
+  /** The reply it posted; a delegating run reads it as the result (M5.01). */
+  readonly reply: string | null;
+  /** It read outside content, so the reply may carry someone else's words. */
+  readonly tainted: boolean;
   /**
    * Worth a learning pass. Memory extraction runs after the run, in its own
    * function, so the agent is free for the next message as soon as it replies.
@@ -103,6 +137,30 @@ const EMPTY_USAGE: RunUsageTotals = {
 };
 
 const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
+
+/** Runs on the clock, whose request is a note in the thread (M5.06–07). */
+const SCHEDULED = new Set<RunInput["trigger"]>(["routine", "manual", "schedule"]);
+
+/** Handing work to another agent (M5.01); the harness runs the handoff itself. */
+const DELEGATE_TASK = "delegate_task";
+const DELEGATION_TIMEOUT_MS = 25 * 60 * 60_000;
+/** Of a child's reply, what the delegating model reads. */
+const DELEGATION_ANSWER_CHARS = 8_000;
+
+/** How a child run ended, in the words the delegating model is told. */
+function delegationStatus(child: ChildRunResult | null): DelegationStatus {
+  if (!child || child.status === "failed") return "failed";
+  if (child.status === "cancelled" || child.status === "skipped") return "cancelled";
+  return child.stopReason === "final_answer" ? "done" : "stopped";
+}
+
+const DELEGATION_NOTES: Record<DelegationStatus, string> = {
+  done: "",
+  stopped: "It stopped before finishing; the answer is what it had.",
+  failed:
+    "Its run failed, so nothing came back. Tell the person, or do the work yourself if you can.",
+  cancelled: "Its run was stopped, so nothing came back.",
+};
 
 function addUsage(
   usage: RunUsageTotals,
@@ -221,6 +279,8 @@ export async function runAgent(
   const knownUrls = new Set<string>();
   /** Sites a person allowed for the rest of this run, rebuilt on replay from memoized answers. */
   const allowedSites = new Set<string>();
+  /** A proactive check (M5.10): only tools that change nothing, listed and run. */
+  let proactive = false;
 
   try {
     // ── Start ────────────────────────────────────────────────────────────────
@@ -236,6 +296,10 @@ export async function runAgent(
         startedAt: new Date(),
         onlyIfActive: true,
       });
+      // Another run may have taken this one's message as steering (M5.05)
+      // between the read above and the update: then it is already answered.
+      const now = await deps.runs.get(ctx, ctx.runId);
+      if (now && TERMINAL.has(now.status)) return { skip: true as const };
       await log([
         runEvent("start", "run.started", { trigger: input.trigger, tier: agent.modelTier }),
       ]);
@@ -243,6 +307,8 @@ export async function runAgent(
         skip: false as const,
         agent,
         tainted: run.tainted,
+        proactive: run.proactive ?? false,
+        request: run.request ?? null,
         today: new Date().toISOString().slice(0, 10),
       };
     });
@@ -252,11 +318,14 @@ export async function runAgent(
         stopReason: null,
         usage: EMPTY_USAGE,
         messageId: null,
+        reply: null,
+        tainted: false,
         learn: false,
       };
     }
     const agent: AgentProfile = start.agent;
     hook = { ctx, agent };
+    proactive = start.proactive;
     let tainted = start.tainted;
 
     if (agent.status !== "active") {
@@ -266,17 +335,86 @@ export async function runAgent(
         usage: EMPTY_USAGE,
         error: { code: "agent_inactive", message: `${agent.name} is ${agent.status}` },
         messageId: null,
+        reply: null,
+        tainted,
       });
     }
 
     // ── Context that holds for the whole run ─────────────────────────────────
     const context = await steps.run("context", async () => {
-      const history: HistoryMessage[] = input.threadId
-        ? (
-            await deps.threads.recentMessages(ctx, input.threadId, options.historyMessages ?? 30)
-          ).map((m) => ({ author: m.author, agentId: m.agentId, content: m.content }))
+      const messages = input.threadId
+        ? await deps.threads.recentMessages(ctx, input.threadId, options.historyMessages ?? 30)
         : [];
+      // Other agents in the thread, by name (M5.03–04): who said what.
+      const names = new Map<string, string>();
+      for (const id of new Set(messages.flatMap((m) => (m.agentId ? [m.agentId] : [])))) {
+        if (id === ctx.agentId) continue;
+        const other = await deps.agents.get(ctx, id as AgentProfile["id"]);
+        names.set(id, other?.name ?? "Another agent");
+      }
+      const history: HistoryMessage[] = messages.map((m) => {
+        const fromOther = m.author === "agent" && m.agentId !== null && m.agentId !== ctx.agentId;
+        // Work handed over by another agent (M5.01) is this run's request.
+        if (fromOther && input.trigger === "delegation") {
+          return {
+            author: "user",
+            agentId: null,
+            content: HANDOFF_BRIEF.render({ brief: m.content }),
+            handoff: true,
+          };
+        }
+        // A routine's or a scheduled task's note is the request of its run
+        // (M5.06–07); other notes are for people only.
+        if (m.author === "system" && m.id === input.requestId && SCHEDULED.has(input.trigger)) {
+          return {
+            author: "user",
+            agentId: null,
+            content: (input.trigger === "schedule" ? SCHEDULED_TASK : ROUTINE_RUN).render({
+              request: m.content,
+            }),
+            scheduled: input.trigger === "schedule" ? "task" : "routine",
+          };
+        }
+        // So is the message from another agent that woke this run (M5.03).
+        if (fromOther && input.trigger === "event" && m.id === input.requestId) {
+          return {
+            author: "user",
+            agentId: null,
+            content: AGENT_MESSAGE.render({ from: names.get(m.agentId!)!, message: m.content }),
+            agentMessage: true,
+          };
+        }
+        return {
+          author: m.author,
+          agentId: m.agentId,
+          content: m.content,
+          ...(fromOther ? { agentName: names.get(m.agentId!)! } : {}),
+        };
+      });
       const lastUser = [...history].reverse().find((m) => m.author === "user")?.content ?? "";
+      // The request as written, for the episode and for `/skill` references.
+      const asked =
+        (input.requestId ? messages.find((m) => m.id === input.requestId) : undefined) ??
+        [...messages].reverse().find((m) => m.author === "user");
+      const request = asked?.content ?? "";
+      let skill: { name: string; slug: string; steps: string[] } | null = null;
+      if (deps.skills && request) {
+        for (const ref of skillReferences(request)) {
+          const found = await deps.skills.find(ctx, ref);
+          if (found) {
+            skill = { name: found.name, slug: found.slug, steps: [...found.steps] };
+            break;
+          }
+        }
+      }
+      // Earlier work like this one (M5.09), as plain lines: step results are JSON.
+      const episodes =
+        deps.memory?.recallEpisodes && lastUser && agent.memoryScopes.length > 0
+          ? (await deps.memory.recallEpisodes(ctx, { query: lastUser, limit: 2 })).map(
+              (e) =>
+                `${new Date(e.createdAt).toISOString().slice(0, 10)}: ${e.summary}${e.outcome === "done" ? "" : ` (${e.outcome})`}`,
+            )
+          : [];
       const memories =
         deps.memory && lastUser && agent.memoryScopes.length > 0
           ? (
@@ -287,9 +425,30 @@ export async function runAgent(
               })
             ).map((m) => m.content)
           : [];
-      const tools: ToolDescriptor[] = await deps.tools.listTools(ctx);
+      // A check's request travels on the run, not in the chat (M5.10).
+      if (start.request && !messages.some((m) => m.id === input.requestId)) {
+        history.push({
+          author: "user",
+          agentId: null,
+          content: PROACTIVE_CHECK.render({ request: start.request }),
+          scheduled: "check",
+        });
+      }
+      const tools: ToolDescriptor[] = await deps.tools.listTools(
+        ctx,
+        start.proactive ? { readOnly: true } : undefined,
+      );
       const model = await deps.llm.modelFor(agent.modelTier, ctx);
-      return { history, memories, tools, window: model.contextWindow };
+      return {
+        history,
+        memories,
+        tools,
+        window: model.contextWindow,
+        messageIds: messages.map((m) => m.id as string),
+        request: request.slice(0, 600),
+        skill,
+        episodes,
+      };
     });
     const budget = contextBudget(context.window, options.maxContextTokens ?? 32_000);
 
@@ -298,7 +457,13 @@ export async function runAgent(
     const learnUrls = (text: string) => {
       for (const url of urlsIn(text)) knownUrls.add(urlKey(url));
     };
-    for (const message of context.history) learnUrls(message.content);
+    for (const message of context.history) {
+      // A brief or message was written by another model. If that run had read
+      // outside content (so this one starts tainted), addresses in it were
+      // not given by a person and must not open freely here (ADR-0027).
+      if ((message.handoff || message.agentMessage || message.scheduled) && start.tainted) continue;
+      learnUrls(message.content);
+    }
 
     // ── The loop ─────────────────────────────────────────────────────────────
     let usage = EMPTY_USAGE;
@@ -314,12 +479,37 @@ export async function runAgent(
     const loadedToolkits = new Set<string>();
 
     for (let i = 0; i < agent.budgets.steps; i += 1) {
+      // Steering (§6.3, M5.05): what the person wrote here while the run
+      // worked joins it at this step boundary, instead of waiting its turn.
+      if (input.threadId && deps.runs.claimFollowUps) {
+        const followUps = await steps.run(`steer-${i}`, async () => {
+          const claimed = await deps.runs.claimFollowUps!(ctx, input.threadId as ThreadId);
+          if (claimed.length === 0) return [];
+          await log([
+            runEvent(`steer-${i}`, "run.steered", {
+              messageIds: claimed.map((m) => m.id),
+              preview: preview(claimed.map((m) => m.content).join(" · "), 280),
+            }),
+          ]);
+          // Ones already in the history (written before it was read) are answered there.
+          return claimed
+            .filter((m) => !context.messageIds.includes(m.id))
+            .map((m) => ({ id: m.id as string, content: m.content }));
+        });
+        for (const message of followUps) {
+          turns.push({ kind: "user", text: message.content });
+          learnUrls(message.content);
+        }
+      }
+
       let assembled = assembleContext(
         {
           today: start.today,
           agent,
           tools,
           memories: context.memories,
+          episodes: context.episodes,
+          skill: context.skill,
           todos,
           history: context.history,
           summary,
@@ -338,6 +528,8 @@ export async function runAgent(
                 agent,
                 tools,
                 memories: context.memories,
+                episodes: context.episodes,
+                skill: context.skill,
                 todos,
                 history: context.history,
                 summary: result.summary,
@@ -376,6 +568,8 @@ export async function runAgent(
               agent,
               tools,
               memories: context.memories,
+              episodes: context.episodes,
+              skill: context.skill,
               todos,
               history: context.history,
               summary,
@@ -462,9 +656,13 @@ export async function runAgent(
         toolCalls: step.toolCalls.map(({ id, name, args }) => ({ id, name, args })),
       });
 
+      // Handoffs this step asked for, run together once its calls are checked (M5.02).
+      const handoffs: { toolCallId: string; turn: number; args: unknown }[] = [];
       for (const [j, offered] of step.toolCalls.entries()) {
         const toolCallId = `tool-${i}-${j}`;
         const call = withLoadHint(offered, tools);
+        /** The call as it ran: with the person's changes, if they made any. */
+        let ran: ToolCallTurn = call;
         let result: ToolStepResult = await steps.run(toolCallId, () =>
           runTool(toolCallId, call, tainted),
         );
@@ -477,6 +675,7 @@ export async function runAgent(
             const asApproved = edits
               ? { ...call, args: { ...(call.args as Record<string, unknown>), ...edits } }
               : call;
+            ran = asApproved;
             result = await steps.run(`${toolCallId}-approved`, () =>
               runTool(toolCallId, asApproved, tainted, true),
             );
@@ -515,9 +714,15 @@ ${result.content}`,
           if (fresh.length) {
             for (const entry of fresh) loadedToolkits.add(entry);
             tools = await steps.run(`${toolCallId}-toolkit`, () =>
-              deps.tools.listTools(ctx, { toolkits: [...loadedToolkits] }),
+              deps.tools.listTools(ctx, {
+                toolkits: [...loadedToolkits],
+                ...(proactive ? { readOnly: true } : {}),
+              }),
             );
           }
+        }
+        if (result.ok && call.name === DELEGATE_TASK) {
+          handoffs.push({ toolCallId, turn: turns.length, args: ran.args });
         }
         turns.push({
           kind: "tool",
@@ -528,6 +733,24 @@ ${result.content}`,
         });
         learnUrls(result.content);
       }
+
+      // Fork-join (§6.3): every handoff from this step runs at once, and the
+      // run carries on when all of them have come back.
+      if (handoffs.length > 0) {
+        const taintedBefore = tainted;
+        const results = await Promise.all(
+          handoffs.map((h) => delegate(h.toolCallId, h.args, taintedBefore)),
+        );
+        for (const [n, h] of handoffs.entries()) {
+          const done = results[n]!;
+          const turn = turns[h.turn];
+          if (turn?.kind === "tool") {
+            turns[h.turn] = { ...turn, content: done.content, untrusted: done.untrusted };
+          }
+          if (done.untrusted) tainted = true;
+          learnUrls(done.content);
+        }
+      }
     }
 
     // ── Reply ────────────────────────────────────────────────────────────────
@@ -535,24 +758,47 @@ ${result.content}`,
       stopReason === "final_answer"
         ? finalText || "I don't have anything to add."
         : (STOP_NOTES[stopReason] ?? "I stopped before finishing.");
-    const messageId = input.threadId
-      ? await steps.run("reply", async () => {
-          const content = await redact(ctx, replyText);
-          const id = await deps.threads.addAgentMessage(ctx, {
-            threadId: input.threadId as ThreadId,
-            content,
-          });
-          await log([
-            runEvent("reply", "message.created", {
-              messageId: id,
-              preview: preview(content, 280),
-            }),
-          ]);
-          return id as string;
-        })
-      : null;
+    // A check with nothing to report stays quiet (M5.10): no message, so the
+    // person hears from it only when something needs them.
+    const quiet =
+      proactive && stopReason === "final_answer" && NOTHING_TO_REPORT.test(finalText ?? "");
+    if (quiet) {
+      await steps.run("quiet", async () => {
+        await log([runEvent("quiet", "check.quiet", {})]);
+        return true;
+      });
+    }
+    const posted =
+      input.threadId && !quiet
+        ? await steps.run("reply", async () => {
+            const content = await redact(ctx, replyText);
+            const id = await deps.threads.addAgentMessage(ctx, {
+              threadId: input.threadId as ThreadId,
+              content,
+            });
+            await log([
+              runEvent("reply", "message.created", {
+                messageId: id,
+                preview: preview(content, 280),
+              }),
+            ]);
+            // The reply as posted (redacted): a delegating run reads it back
+            // from the step's stored result (M5.01).
+            return { id: id as string, content };
+          })
+        : null;
 
-    return await finish({ status: "succeeded", stopReason, usage, messageId });
+    // A run that posted before this step returned the content kept its ID only.
+    const reply = typeof posted === "string" ? { id: posted, content: null } : posted;
+    return await finish({
+      status: "succeeded",
+      stopReason,
+      usage,
+      messageId: reply?.id ?? null,
+      reply: reply?.content ?? null,
+      tainted,
+      request: context.request,
+    });
   } catch (error) {
     await chain.error(hook, error);
     throw error;
@@ -683,6 +929,7 @@ ${result.content}`,
       knownUrls: [...knownUrls],
       allowedSites: [...allowedSites],
       ...(approved ? { approved: true } : {}),
+      ...(proactive ? { readOnly: true } : {}),
     };
     const execute = chain.tool(hook as RunHookContext, (r) => deps.tools.execute(r, ctx));
     let outcome: ToolOutcome;
@@ -789,12 +1036,106 @@ ${result.content}`,
     };
   }
 
+  /**
+   * Hand work to another agent and wait for the result (§6.3): make the child
+   * run, run it, and turn what came back into the call's result. The brief is
+   * the call as it ran, with any change a person made. A child of a tainted
+   * run starts tainted; a child that read outside content returns its reply
+   * as outside content, so this run is tainted from here (ADR-0013).
+   */
+  async function delegate(
+    toolCallId: string,
+    args: unknown,
+    taintedBefore: boolean,
+  ): Promise<{ content: string; untrusted: boolean }> {
+    const { team } = deps;
+    if (!team || !steps.invokeRun) {
+      return {
+        content: "Not done: handing work to another agent isn't available here. Do it yourself.",
+        untrusted: false,
+      };
+    }
+    const { agent, brief } = args as { agent: string; brief: string };
+    const started = await steps.run(`${toolCallId}-handoff`, async () => {
+      try {
+        const handoff = await team.handoff(ctx, {
+          key: `${ctx.runId}:${toolCallId}`,
+          agent,
+          brief: await redact(ctx, brief),
+        });
+        await log([
+          runEvent(`${toolCallId}-handoff`, "delegation.started", {
+            toolCallId,
+            childRunId: handoff.runId,
+            agentId: handoff.agentId,
+            agentName: handoff.agentName,
+          }),
+        ]);
+        return { ok: true as const, handoff };
+      } catch (error) {
+        return { ok: false as const, message: errorMessage(error) };
+      }
+    });
+    if (!started.ok) return { content: `Not done: ${started.message}`, untrusted: false };
+    const { handoff } = started;
+
+    const child = await steps.invokeRun(
+      `${toolCallId}-delegate`,
+      {
+        agentId: handoff.agentId,
+        runId: handoff.runId,
+        threadId: handoff.threadId,
+        messageId: handoff.messageId,
+      },
+      { timeoutMs: options.delegationTimeoutMs ?? DELEGATION_TIMEOUT_MS },
+    );
+
+    return steps.run(`${toolCallId}-delegated`, async () => {
+      const status = delegationStatus(child);
+      const reply = child?.reply?.trim() ?? "";
+      const answer =
+        status === "done" || status === "stopped"
+          ? reply.length > DELEGATION_ANSWER_CHARS
+            ? `${reply.slice(0, DELEGATION_ANSWER_CHARS)}\n…[cut at ${DELEGATION_ANSWER_CHARS} characters]`
+            : reply
+          : "";
+      const untrusted = answer !== "" && (child?.tainted ?? false);
+      const note = DELEGATION_NOTES[status];
+      const content = JSON.stringify({
+        agent: handoff.agentName,
+        status,
+        ...(answer ? { answer } : {}),
+        ...(note ? { note } : {}),
+      });
+      const events: RunEventWrite[] = [
+        runEvent(`${toolCallId}-delegated`, "delegation.finished", {
+          toolCallId,
+          childRunId: handoff.runId,
+          status,
+          preview: preview(answer || note, 500),
+        }),
+      ];
+      if (untrusted && !taintedBefore) {
+        events.push(
+          runEvent(`${toolCallId}-delegated-taint`, "run.tainted", { source: DELEGATE_TASK }),
+        );
+      }
+      await log(events);
+      if (untrusted && !taintedBefore) await deps.runs.update(ctx, ctx.runId, { tainted: true });
+      return { content, untrusted };
+    });
+  }
+
   async function finish(result: {
     status: "succeeded" | "failed";
     stopReason: RunStopReason;
     usage: RunUsageTotals;
     messageId: string | null;
+    reply: string | null;
+    tainted: boolean;
     error?: { code: string; message: string };
+    /** What was asked, for the run's episode. */
+    request?: string;
   }): Promise<RunResult> {
     await steps.run("finish", async () => {
       if (hook) await chain.runEnd(hook, { status: result.status, stopReason: result.stopReason });
@@ -813,6 +1154,21 @@ ${result.content}`,
           ...(result.error ? { error: result.error } : {}),
         }),
       ]);
+      // Its episode (M5.09): what was asked and what came of it. The learning
+      // pass may replace the summary with a better one. Memory is a bonus, so
+      // a failure here never fails the run.
+      if (result.reply !== null && deps.memory?.writeEpisode) {
+        const done = result.stopReason === "final_answer";
+        const asked = result.request ? `Asked: ${preview(result.request, 200)} — ` : "";
+        await deps.memory
+          .writeEpisode(ctx, {
+            threadId: input.threadId,
+            summary: `${asked}${done ? "Answered" : "Stopped"}: ${preview(result.reply, 300)}`,
+            outcome: done ? "done" : "stopped",
+            tainted: result.tainted,
+          })
+          .catch(() => {});
+      }
       return true;
     });
     return {
@@ -820,7 +1176,13 @@ ${result.content}`,
       stopReason: result.stopReason,
       usage: result.usage,
       messageId: result.messageId,
+      reply: result.reply,
+      tainted: result.tainted,
+      // Only a person's own request is learned from: a handoff or another
+      // agent's message was written by another model, and a routine or a
+      // scheduled task has nobody talking in it (M5.06–07).
       learn:
+        input.trigger === "message" &&
         result.status === "succeeded" &&
         result.stopReason === "final_answer" &&
         result.messageId !== null &&

@@ -31,6 +31,10 @@ export const TENANT_TABLES = [
   "mcp_server",
   "connection",
   "policy_rule",
+  "routine",
+  "schedule",
+  "skill",
+  "episode",
 ] as const;
 
 /**

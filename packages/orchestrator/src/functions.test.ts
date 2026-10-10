@@ -1,7 +1,24 @@
-import type { TenantContext, TokenRefresher } from "@ofa/core";
+import {
+  asId,
+  type AgentId,
+  type MessageId,
+  type RunId,
+  type TenantContext,
+  type ThreadId,
+  type TokenRefresher,
+  type MemoryMaintenance,
+  type RoutineRunner,
+} from "@ofa/core";
 import { NonRetriableError, RetryAfterError } from "inngest";
 import { describe, expect, it } from "vitest";
-import { inngestSteps, refreshDue, TOKEN_REFRESH_AHEAD_MS } from "./functions";
+import { createScriptedLLM } from "@ofa/harness";
+import {
+  consolidateDue,
+  fireDueRoutines,
+  inngestSteps,
+  refreshDue,
+  TOKEN_REFRESH_AHEAD_MS,
+} from "./functions";
 
 // A stand-in for Inngest's `step.run`: runs the function, passes errors through.
 const step = { run: (_id: string, fn: () => Promise<unknown>) => fn() };
@@ -66,6 +83,42 @@ describe("inngestSteps", () => {
     ]);
     await expect(wait("x' || true || '")).rejects.toThrow(/Unsafe/);
   });
+
+  it("runs a handoff's child through invoke and reads back what it came to (M5.01)", async () => {
+    const child = {
+      agentId: asId<AgentId>("res"),
+      runId: asId<RunId>("child_1"),
+      threadId: asId<ThreadId>("handoff_1"),
+      messageId: asId<MessageId>("brief_1"),
+    };
+    const calls: unknown[] = [];
+    const steps = inngestSteps(step, async (id, request, timeoutMs) => {
+      calls.push({ id, request, timeoutMs });
+      return {
+        status: "succeeded",
+        stopReason: "final_answer",
+        usage: {},
+        messageId: "m",
+        reply: "Done: 3 papers.",
+        tainted: false,
+        learn: false,
+      };
+    });
+    expect(await steps.invokeRun!("tool-0-0-delegate", child, { timeoutMs: 500 })).toEqual({
+      status: "succeeded",
+      stopReason: "final_answer",
+      reply: "Done: 3 papers.",
+      tainted: false,
+    });
+    // Durable waits round up to a second.
+    expect(calls).toEqual([{ id: "tool-0-0-delegate", request: child, timeoutMs: 1_000 }]);
+
+    // A child that failed after its retries, or ran out of time, comes back as nothing.
+    const failing = inngestSteps(step, () => Promise.reject(new Error("function failed")));
+    expect(await failing.invokeRun!("x", child, { timeoutMs: 60_000 })).toBeNull();
+    // Without invoke, runs can't hand work over.
+    expect(inngestSteps(step).invokeRun).toBeUndefined();
+  });
 });
 
 describe("token refresh (M4.06)", () => {
@@ -113,6 +166,110 @@ describe("token refresh (M4.06)", () => {
       "refresh-server-2-user-2",
       "refresh-server-3-user-3",
       "refresh-server-4-user-4",
+    ]);
+  });
+});
+
+describe("routine tick (M5.06)", () => {
+  it("fires each due routine in its own step and collects the runs to start", async () => {
+    const due = (n: number) => ({
+      workspaceId: `ws-${n}`,
+      userId: `user-${n}`,
+      routineId: `routine-${n}`,
+      dueAt: "2026-10-12T07:00:00.000Z",
+    });
+    const fired: string[] = [];
+    const routines: RoutineRunner = {
+      listDue: async () => [due(1), due(2), due(3)],
+      fire: async (ctx, routineId, dueAt) => {
+        fired.push(`${ctx.userId}:${routineId}:${dueAt.toISOString()}`);
+        if (routineId === "routine-2") return { outcome: "busy", run: null };
+        if (routineId === "routine-3") throw new Error("database blip");
+        return {
+          outcome: "started",
+          run: {
+            workspaceId: ctx.workspaceId,
+            userId: ctx.userId,
+            agentId: "agent-1",
+            threadId: "thread-1",
+            messageId: "msg-1",
+            runId: "run-1",
+            trigger: "routine",
+          },
+        };
+      },
+    };
+    const ids: string[] = [];
+    const steps = inngestSteps({ run: (id, fn) => (ids.push(id), fn()) });
+    const result = await fireDueRoutines(routines, steps);
+    expect(result.counts).toEqual({ started: 1, busy: 1, failed: 1 });
+    expect(result.started.map((r) => r.runId)).toEqual(["run-1"]);
+    expect(fired).toEqual([
+      "user-1:routine-1:2026-10-12T07:00:00.000Z",
+      "user-2:routine-2:2026-10-12T07:00:00.000Z",
+      "user-3:routine-3:2026-10-12T07:00:00.000Z",
+    ]);
+    // One step per due time: a retried tick finds each one memoized.
+    expect(ids).toEqual([
+      "list-due",
+      "fire-routine-1-2026-10-12T07:00:00.000Z",
+      "fire-routine-2-2026-10-12T07:00:00.000Z",
+      "fire-routine-3-2026-10-12T07:00:00.000Z",
+    ]);
+  });
+});
+
+describe("nightly memory consolidation (M5.09)", () => {
+  it("runs each due workspace's agents and shared facts, expires, and records the pass", async () => {
+    const calls: string[] = [];
+    const memory: MemoryMaintenance = {
+      listDue: async () => [
+        { workspaceId: "ws-1", userId: "owner-1" },
+        { workspaceId: "ws-2", userId: "owner-2" },
+      ],
+      agents: async (ctx) => (ctx.workspaceId === "ws-1" ? ["a1", "a2"] : []),
+      facts: async (ctx, agentId) => {
+        if (agentId === "a2") throw new Error("database blip");
+        return [];
+      },
+      newEpisodes: async () => [],
+      merge: async () => false,
+      addFact: async () => {},
+      proposeSkill: async () => false,
+      expireStale: async (ctx) => (calls.push(`expire ${ctx.workspaceId}`), 3),
+      closeEpisodes: async (ctx, agentId) => void calls.push(`close ${ctx.workspaceId} ${agentId}`),
+      finish: async (ctx) => void calls.push(`finish ${ctx.workspaceId}`),
+    };
+    const ids: string[] = [];
+    const steps = inngestSteps({ run: (id, fn) => (ids.push(id), fn()) });
+    const now = new Date("2026-10-11T21:30:00Z");
+    const result = await consolidateDue(createScriptedLLM([]), memory, steps, () => now);
+    expect(result).toEqual({
+      "ws-1": { merged: 0, added: 0, expired: 3, proposedSkills: 0, modelCalls: 0, agents: 2 },
+      "ws-2": { merged: 0, added: 0, expired: 3, proposedSkills: 0, modelCalls: 0, agents: 0 },
+    });
+    // One agent failing didn't stop the others or the workspace's pass.
+    expect(calls).toEqual([
+      "close ws-1 a1",
+      "expire ws-1",
+      "finish ws-1",
+      "expire ws-2",
+      "finish ws-2",
+    ]);
+    expect(ids).toEqual([
+      "list-due",
+      "ws-1-started",
+      "ws-1-agents",
+      "ws-1-consolidate-a1",
+      "ws-1-consolidate-a2",
+      "ws-1-consolidate-workspace",
+      "ws-1-expire",
+      "ws-1-finish",
+      "ws-2-started",
+      "ws-2-agents",
+      "ws-2-consolidate-workspace",
+      "ws-2-expire",
+      "ws-2-finish",
     ]);
   });
 });

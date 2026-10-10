@@ -116,8 +116,9 @@ const TRIGGERS: Record<Run["trigger"], string> = {
   message: "Chat",
   routine: "Routine",
   delegation: "Asked by another agent",
-  event: "An event",
-  manual: "Started by hand",
+  event: "Messaged by another agent",
+  manual: "Routine test run",
+  schedule: "Task it set for later",
 };
 
 function ActivityPage() {

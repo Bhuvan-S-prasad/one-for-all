@@ -1,5 +1,18 @@
 import type { LLMMessage, ToolDescriptor } from "@ofa/core";
-import { AGENT_IDENTITY, AGENT_VOICE, PLATFORM_RULES, TASK_STATE, promptRef } from "./prompts";
+import {
+  AGENT_IDENTITY,
+  AGENT_MESSAGE,
+  AGENT_VOICE,
+  HANDOFF_BRIEF,
+  PLATFORM_RULES,
+  PROACTIVE_CHECK,
+  ROUTINE_RUN,
+  SCHEDULED_TASK,
+  SKILL_IN_USE,
+  STEERING,
+  TASK_STATE,
+  promptRef,
+} from "./prompts";
 import { estimateMessages, estimateTokens, estimateTools, truncateToTokens } from "./tokens";
 
 // Context assembly (ARCHITECTURE.md §7): the prompt is built from typed
@@ -12,6 +25,23 @@ export interface HistoryMessage {
   /** The agent that wrote it, for agent messages. */
   readonly agentId: string | null;
   readonly content: string;
+  /** The writing agent's name, so a shared thread says who said what (M5.04). */
+  readonly agentName?: string;
+  /**
+   * Another agent's brief, framed with `HANDOFF_BRIEF` and shown as the
+   * request (M5.01). Its author is another model, not the person.
+   */
+  readonly handoff?: boolean;
+  /**
+   * Another agent's message that woke this run, framed with `AGENT_MESSAGE`
+   * and shown as the request (M5.03). Its author is another model.
+   */
+  readonly agentMessage?: boolean;
+  /**
+   * A routine's or a scheduled task's note, framed with `ROUTINE_RUN` or
+   * `SCHEDULED_TASK` and shown as the request (M5.06–07).
+   */
+  readonly scheduled?: "routine" | "task" | "check";
 }
 
 export interface ToolCallTurn {
@@ -20,7 +50,10 @@ export interface ToolCallTurn {
   readonly args: unknown;
 }
 
-/** One step of the current run: what the model said, or what a tool returned. */
+/**
+ * One step of the current run: what the model said, what a tool returned, or
+ * what the person added while it worked (steering, M5.05).
+ */
 export type Turn =
   | {
       readonly kind: "assistant";
@@ -33,6 +66,10 @@ export type Turn =
       readonly toolName: string;
       readonly content: string;
       readonly untrusted: boolean;
+    }
+  | {
+      readonly kind: "user";
+      readonly text: string;
     };
 
 export interface ContextInput {
@@ -46,6 +83,14 @@ export interface ContextInput {
   };
   readonly tools: readonly ToolDescriptor[];
   readonly memories: readonly string[];
+  /** Earlier work like this request, from episodic memory (M5.09). */
+  readonly episodes?: readonly string[];
+  /** A skill the request named with `/slug` (M5.08); its steps join the task. */
+  readonly skill?: {
+    readonly name: string;
+    readonly slug: string;
+    readonly steps: readonly string[];
+  } | null;
   readonly todos: readonly { readonly text: string; readonly done: boolean }[] | null;
   readonly history: readonly HistoryMessage[];
   /** Compacted summary of earlier steps in this run. */
@@ -107,21 +152,27 @@ function historyMessage(message: HistoryMessage, selfId: string): LLMMessage | n
   }
   if (message.author === "user") return { role: "user", content: message.content };
   if (message.author === "agent")
-    return { role: "user", content: `[another agent] ${message.content}` };
+    return {
+      role: "user",
+      content: `[${message.agentName ?? "another agent"}] ${message.content}`,
+    };
   return null; // System notes are for people, not the model.
 }
 
 export function turnMessages(turns: readonly Turn[]): LLMMessage[] {
-  return turns.map((turn): LLMMessage =>
-    turn.kind === "assistant"
-      ? { role: "assistant", content: turn.text, toolCalls: turn.toolCalls }
-      : {
-          role: "tool",
-          toolCallId: turn.toolCallId,
-          toolName: turn.toolName,
-          content: turn.untrusted ? wrapUntrusted(turn.toolName, turn.content) : turn.content,
-        },
-  );
+  return turns.map((turn): LLMMessage => {
+    if (turn.kind === "assistant") {
+      return { role: "assistant", content: turn.text, toolCalls: turn.toolCalls };
+    }
+    if (turn.kind === "user")
+      return { role: "user", content: STEERING.render({ text: turn.text }) };
+    return {
+      role: "tool",
+      toolCallId: turn.toolCallId,
+      toolName: turn.toolName,
+      content: turn.untrusted ? wrapUntrusted(turn.toolName, turn.content) : turn.content,
+    };
+  });
 }
 
 export function assembleContext(input: ContextInput, budget: ContextBudget): AssembledContext {
@@ -161,16 +212,40 @@ export function assembleContext(input: ContextInput, budget: ContextBudget): Ass
     memoryLines.push(`- ${fact}`);
     memoryTokens += cost;
   }
-  const memory = memoryLines.length
-    ? `What you remember (may be out of date; check sources for anything important):\n${memoryLines.join("\n")}`
+  const episodeLines: string[] = [];
+  for (const line of input.episodes ?? []) {
+    const cost = estimateTokens(line) + 2;
+    if (memoryTokens + cost > budget.memory) break;
+    episodeLines.push(`- ${line}`);
+    memoryTokens += cost;
+  }
+  const memory = [
+    memoryLines.length
+      ? `What you remember (may be out of date; check sources for anything important):\n${memoryLines.join("\n")}`
+      : "",
+    episodeLines.length ? `Earlier work like this:\n${episodeLines.join("\n")}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  // A skill the person named (M5.08): its steps, within the plan budget.
+  const skill = input.skill
+    ? truncateToTokens(
+        SKILL_IN_USE.render({
+          name: input.skill.name,
+          slug: input.skill.slug,
+          steps: input.skill.steps,
+        }),
+        budget.plan,
+      )
     : "";
   // Task and plan, restated every step (§7): the latest request, the agent's
   // todo list, and its notes from compacted steps. Half the plan budget goes
   // to the request, half to the todo list; the notes count against history.
   const latestRequest = [...input.history].reverse().find((m) => m.author === "user");
-  const task = latestRequest
-    ? truncateToTokens(latestRequest.content, Math.floor(budget.plan / 2))
-    : "";
+  // What the person added while the run worked belongs to the task too (M5.05).
+  const added = input.turns.flatMap((t) => (t.kind === "user" ? [`Then: ${t.text}`] : []));
+  const requestText = [latestRequest?.content ?? "", ...added].filter(Boolean).join("\n");
+  const task = requestText ? truncateToTokens(requestText, Math.floor(budget.plan / 2)) : "";
   const plan = input.todos?.length
     ? truncateToTokens(
         `Your plan:\n${input.todos.map((t) => `- [${t.done ? "x" : " "}] ${t.text}`).join("\n")}`,
@@ -182,12 +257,13 @@ export function assembleContext(input: ContextInput, budget: ContextBudget): Ass
     : "";
   const taskBlock = TASK_STATE.render({ task, plan, notes });
   blocks.memory = estimateTokens(memory);
+  blocks.skill = skill ? estimateTokens(skill) : 0;
   blocks.notes = notes ? estimateTokens(notes) : 0;
   blocks.plan = estimateTokens(taskBlock) - blocks.notes;
 
   const system: LLMMessage = {
     role: "system",
-    content: [platform, identity, memory, taskBlock].filter(Boolean).join("\n\n"),
+    content: [platform, identity, memory, skill, taskBlock].filter(Boolean).join("\n\n"),
   };
 
   // Volatile: the thread (newest kept, oldest dropped), then this run's steps.
@@ -221,7 +297,19 @@ export function assembleContext(input: ContextInput, budget: ContextBudget): Ass
     messages,
     tools,
     maxOutputTokens: budget.output,
-    promptVersion: [PLATFORM_RULES, AGENT_IDENTITY, AGENT_VOICE, TASK_STATE]
+    promptVersion: [
+      PLATFORM_RULES,
+      AGENT_IDENTITY,
+      AGENT_VOICE,
+      TASK_STATE,
+      ...(input.history.some((m) => m.handoff) ? [HANDOFF_BRIEF] : []),
+      ...(input.history.some((m) => m.agentMessage) ? [AGENT_MESSAGE] : []),
+      ...(input.history.some((m) => m.scheduled === "routine") ? [ROUTINE_RUN] : []),
+      ...(input.history.some((m) => m.scheduled === "task") ? [SCHEDULED_TASK] : []),
+      ...(input.history.some((m) => m.scheduled === "check") ? [PROACTIVE_CHECK] : []),
+      ...(input.turns.some((t) => t.kind === "user") ? [STEERING] : []),
+      ...(input.skill ? [SKILL_IN_USE] : []),
+    ]
       .map(promptRef)
       .join("+"),
     tokens: { total, blocks },

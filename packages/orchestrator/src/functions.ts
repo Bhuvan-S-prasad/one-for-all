@@ -1,22 +1,38 @@
 import {
   EMPTY_RUN_USAGE,
   INNGEST_EVENTS,
+  memoryConsolidationRequestedEventSchema,
   messageReceivedEventSchema,
   runCancelledEventSchema,
   runSucceededEventSchema,
+  scheduleCreatedEventSchema,
 } from "@ofa/contracts";
 import {
   asId,
   type ApprovalStore,
+  type ChildRunRequest,
+  type ConsolidationResult,
+  type LLMGateway,
+  type MemoryMaintenance,
+  type ChildRunResult,
+  type RoutineRunner,
   type RunContext,
+  type RunStart,
   type RunStore,
+  type ScheduleRunner,
   type StepRunner,
   type TenantContext,
   type ThreadId,
   type TokenRefresher,
   type TokenRefreshOutcome,
 } from "@ofa/core";
-import { learnFromRun, runAgent, runEvent, type HarnessDeps } from "@ofa/harness";
+import {
+  consolidateMemory,
+  learnFromRun,
+  runAgent,
+  runEvent,
+  type HarnessDeps,
+} from "@ofa/harness";
 import { NonRetriableError, RetryAfterError, type Inngest, type InngestFunction } from "inngest";
 
 // Durable functions (ADR-0006). The orchestrator decides when and how often an
@@ -29,6 +45,27 @@ export interface OrchestratorDeps {
   readonly approvals?: ApprovalStore;
   /** Keeps idle app sign-ins working (M4.06); absent without the MCP client. */
   readonly tokenRefresh?: TokenRefresher;
+  /** Starts routines when they are due (M5.06). */
+  readonly routines?: RoutineRunner;
+  /** Fires tasks and reminders agents set for later (M5.07). */
+  readonly schedules?: ScheduleRunner;
+  /** Nightly memory consolidation (M5.09). */
+  readonly memory?: MemoryMaintenance;
+}
+
+/** Hourly: each workspace is consolidated when it is 3 at night there. */
+export const MEMORY_CONSOLIDATION_CRON = "15 * * * *";
+
+/** How often due routines are looked for: every minute. */
+export const ROUTINE_TICK_CRON = "* * * * *";
+
+/** A run started on the clock, as the event that starts it. */
+function startEvent(run: RunStart) {
+  return {
+    name: INNGEST_EVENTS.messageReceived,
+    id: `message-received-${run.runId}`,
+    data: messageReceivedEventSchema.parse(run),
+  };
 }
 
 /** How often sign-ins are checked, and how far ahead of expiry they are refreshed. */
@@ -39,18 +76,58 @@ export const TOKEN_REFRESH_AHEAD_MS = 15 * 60_000;
 const NOT_RETRYABLE = new Set(["auth", "bad_request", "context_length"]);
 
 /**
+ * Starts a child run and waits for what it returns (Inngest `step.invoke` on
+ * the `agent-run` function); throws if it failed or ran out of time.
+ */
+export type InvokeChildRun = (
+  id: string,
+  child: ChildRunRequest,
+  timeoutMs: number,
+) => Promise<unknown>;
+
+/**
  * Adapt Inngest's `step.run` to the harness's `StepRunner`, and turn model
  * errors into Inngest's retry signals: wait for capacity, or stop retrying.
+ * With `invoke`, runs can hand work to other agents (M5.01).
  */
-export function inngestSteps(step: {
-  run: (id: string, fn: () => Promise<unknown>) => Promise<unknown>;
-  waitForEvent?: (
-    id: string,
-    opts: { event: string; timeout: number; if: string },
-  ) => Promise<{ data?: unknown } | null>;
-}): StepRunner {
+export function inngestSteps(
+  step: {
+    run: (id: string, fn: () => Promise<unknown>) => Promise<unknown>;
+    waitForEvent?: (
+      id: string,
+      opts: { event: string; timeout: number; if: string },
+    ) => Promise<{ data?: unknown } | null>;
+  },
+  invoke?: InvokeChildRun,
+): StepRunner {
   const waitForEvent = step.waitForEvent?.bind(step);
   return {
+    ...(invoke
+      ? {
+          async invokeRun(id, child, { timeoutMs }) {
+            try {
+              const result = (await invoke(id, child, Math.max(1_000, timeoutMs))) as {
+                status?: ChildRunResult["status"];
+                stopReason?: string | null;
+                reply?: string | null;
+                tainted?: boolean;
+              } | null;
+              if (!result?.status) return null;
+              return {
+                status: result.status,
+                stopReason: result.stopReason ?? null,
+                reply: result.reply ?? null,
+                // Not knowing is treated as having read outside content.
+                tainted: result.tainted ?? true,
+              };
+            } catch {
+              // The child failed after its retries, or ran past the timeout;
+              // its own run says why.
+              return null;
+            }
+          },
+        }
+      : {}),
     ...(waitForEvent
       ? {
           async waitForEvent(id, { event, field, value, timeoutMs }) {
@@ -101,6 +178,10 @@ function failureText(error: unknown): string {
 }
 
 export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
+  // A handoff's child is another `agent-run` (M5.01). The function invokes
+  // itself, so it is reached through this holder rather than by name.
+  const self: { agentRun?: InngestFunction.Any } = {};
+
   const agentRun = inngest.createFunction(
     {
       id: "agent-run",
@@ -108,6 +189,9 @@ export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
       triggers: [{ event: INNGEST_EVENTS.messageReceived }],
       // One run at a time per agent; more messages wait their turn.
       concurrency: [{ key: "event.data.agentId", limit: 1 }],
+      // A person's message outranks queued background work (§6.3, M5.05):
+      // it starts up to ten minutes ahead of routines and scheduled tasks.
+      priority: { run: "event.data.trigger == 'message' ? 600 : 0" },
       // Stop pressed: cancel at the next step boundary. Finished steps stay done.
       cancelOn: [
         { event: INNGEST_EVENTS.runCancelled, if: "async.data.runId == event.data.runId" },
@@ -154,10 +238,29 @@ export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
         agentId: asId(data.agentId),
         runId: asId(data.runId),
       };
+      const invoke: InvokeChildRun = (id, child, timeoutMs) =>
+        step.invoke(id, {
+          function: self.agentRun!,
+          data: messageReceivedEventSchema.parse({
+            workspaceId: data.workspaceId,
+            userId: data.userId,
+            agentId: child.agentId,
+            threadId: child.threadId,
+            messageId: child.messageId,
+            runId: child.runId,
+            trigger: "delegation",
+          }),
+          timeout: timeoutMs,
+        });
       const result = await runAgent(
-        { ctx, threadId: asId<ThreadId>(data.threadId), trigger: data.trigger },
+        {
+          ctx,
+          threadId: asId<ThreadId>(data.threadId),
+          trigger: data.trigger,
+          requestId: data.messageId,
+        },
         deps.harness,
-        inngestSteps(step),
+        inngestSteps(step, invoke),
       );
       if (result.learn && result.messageId) {
         // Learning runs as its own function, so this agent's next message
@@ -178,6 +281,7 @@ export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
       return result;
     },
   );
+  self.agentRun = agentRun;
 
   // Memory extraction after an answered run (ARCHITECTURE.md §8). Learning is
   // a bonus: a failure here is logged by Inngest and never reaches the person.
@@ -217,6 +321,26 @@ export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
     async ({ event, step }) => {
       const data = runCancelledEventSchema.parse(event.data);
       const ctx: TenantContext = { workspaceId: asId(data.workspaceId), userId: asId(data.userId) };
+      // Work it handed to other agents stops too (M5.01); each child stops
+      // its own children the same way.
+      const children = await step.run(
+        "find-children",
+        async () => (await deps.runs.activeChildren?.(ctx, asId(data.runId))) ?? [],
+      );
+      if (children.length > 0) {
+        await step.sendEvent(
+          "cancel-children",
+          children.map((childId) => ({
+            name: INNGEST_EVENTS.runCancelled,
+            data: runCancelledEventSchema.parse({
+              workspaceId: data.workspaceId,
+              userId: data.userId,
+              runId: childId,
+            }),
+          })),
+        );
+      }
+      const preempted = data.reason === "preempted";
       await step.run("mark-cancelled", async () => {
         const run = await deps.runs.get(ctx, asId(data.runId));
         if (!run || ["succeeded", "failed", "cancelled"].includes(run.status)) return false;
@@ -229,10 +353,18 @@ export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
         await deps.runs.append(ctx, run.id, [
           runEvent("end-cancelled", "run.ended", {
             status: "cancelled",
-            stopReason: "user_stopped",
+            stopReason: preempted ? "preempted" : "user_stopped",
             usage: run.usage,
           }),
         ]);
+        // Set aside for a person (M5.05): its chat says so, rather than the
+        // run ending without a word.
+        if (preempted && run.threadId) {
+          await deps.harness.threads.addAgentMessage(
+            { ...ctx, agentId: run.agentId, runId: run.id },
+            { threadId: run.threadId, content: PREEMPTED_NOTE },
+          );
+        }
         return true;
       });
     },
@@ -240,7 +372,182 @@ export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
 
   const functions: InngestFunction.Any[] = [agentRun, agentRunCancelled, agentLearn];
   if (deps.tokenRefresh) functions.push(tokenRefreshFunction(inngest, deps.tokenRefresh));
+  if (deps.routines) functions.push(routineTickFunction(inngest, deps.routines));
+  if (deps.schedules) functions.push(scheduleFireFunction(inngest, deps.schedules));
+  if (deps.memory) {
+    functions.push(memoryConsolidationFunction(inngest, deps.harness.llm, deps.memory));
+  }
   return functions;
+}
+
+/**
+ * Nightly memory consolidation (ARCHITECTURE.md §8, M5.09). Every hour, the
+ * workspaces where it is now 3 at night get their pass, as their owner, one
+ * at a time so the shared model quota is spared.
+ */
+function memoryConsolidationFunction(
+  inngest: Inngest.Any,
+  llm: LLMGateway,
+  memory: MemoryMaintenance,
+) {
+  return inngest.createFunction(
+    {
+      id: "memory-consolidate",
+      name: "Consolidate memory overnight",
+      // Nightly, or now for one workspace when asked.
+      triggers: [
+        { cron: MEMORY_CONSOLIDATION_CRON },
+        { event: INNGEST_EVENTS.memoryConsolidationRequested },
+      ],
+      concurrency: [{ limit: 1 }],
+      retries: 2,
+    },
+    async ({ event, step }) => {
+      const asked =
+        event.name === INNGEST_EVENTS.memoryConsolidationRequested
+          ? memoryConsolidationRequestedEventSchema.parse(event.data)
+          : null;
+      return consolidateDue(
+        llm,
+        memory,
+        inngestSteps(step),
+        undefined,
+        asked ? [asked] : undefined,
+      );
+    },
+  );
+}
+
+/** One hourly tick: each due workspace's agents, its shared facts, then the rules that need no model. */
+export async function consolidateDue(
+  llm: LLMGateway,
+  memory: MemoryMaintenance,
+  steps: StepRunner,
+  now: () => Date = () => new Date(),
+  /** These workspaces now, whatever their local time. */
+  only?: readonly { readonly workspaceId: string; readonly userId: string }[],
+): Promise<Record<string, ConsolidationResult & { agents: number }>> {
+  const due = only ?? (await steps.run("list-due", async () => memory.listDue(now())));
+  const results: Record<string, ConsolidationResult & { agents: number }> = {};
+  for (const w of due) {
+    const ctx: TenantContext = { workspaceId: asId(w.workspaceId), userId: asId(w.userId) };
+    // Step IDs must be unique in the function: prefix them with the workspace.
+    const scoped: StepRunner = {
+      run: (id, fn) => steps.run(`${w.workspaceId}-${id}`, fn),
+    };
+    const at = await scoped.run("started", async () => now().toISOString());
+    const when = new Date(at);
+    const agents = await scoped.run("agents", async () => memory.agents(ctx));
+    const total = { merged: 0, added: 0, expired: 0, proposedSkills: 0, modelCalls: 0 };
+    for (const agentId of [...agents, null]) {
+      try {
+        const r = await consolidateMemory(
+          { ctx, agentId, now: when },
+          { llm, maintenance: memory },
+          scoped,
+        );
+        total.merged += r.merged;
+        total.added += r.added;
+        total.proposedSkills += r.proposedSkills;
+        total.modelCalls += r.modelCalls;
+      } catch {
+        // One agent's pass failing (a model error after retries) doesn't stop the rest.
+      }
+    }
+    total.expired = await scoped.run("expire", async () => memory.expireStale(ctx, when));
+    await scoped.run("finish", async () => {
+      await memory.finish(ctx, when);
+      return true;
+    });
+    results[w.workspaceId] = { ...total, agents: agents.length };
+  }
+  return results;
+}
+
+const PREEMPTED_NOTE =
+  "I set this aside to answer your message. Anything I had already done stays done; it runs again at its next time.";
+
+/**
+ * Routines on their schedules (M5.06). Every minute: find due routines and
+ * fire each in its own step, as its owner. A routine moves on to its next
+ * time as it fires, so a tick that runs twice starts nothing twice.
+ */
+function routineTickFunction(inngest: Inngest.Any, routines: RoutineRunner) {
+  return inngest.createFunction(
+    {
+      id: "routine-tick",
+      name: "Start due routines",
+      triggers: [{ cron: ROUTINE_TICK_CRON }],
+      concurrency: [{ limit: 1 }],
+      retries: 1,
+    },
+    async ({ step }) => {
+      const result = await fireDueRoutines(routines, inngestSteps(step));
+      if (result.started.length > 0) {
+        await step.sendEvent("start-runs", result.started.map(startEvent));
+      }
+      return result.counts;
+    },
+  );
+}
+
+/** One routine tick: what each due routine came to, and the runs to start. */
+export async function fireDueRoutines(
+  routines: RoutineRunner,
+  steps: StepRunner,
+): Promise<{ started: RunStart[]; counts: Record<string, number> }> {
+  const due = await steps.run("list-due", async () => routines.listDue(new Date()));
+  const started: RunStart[] = [];
+  const counts: Record<string, number> = {};
+  for (const r of due) {
+    const fired = await steps.run(`fire-${r.routineId}-${r.dueAt}`, async () => {
+      const ctx: TenantContext = { workspaceId: asId(r.workspaceId), userId: asId(r.userId) };
+      try {
+        return await routines.fire(ctx, r.routineId, new Date(r.dueAt), new Date());
+      } catch {
+        // Tried again at the next tick: the routine is still due.
+        return { outcome: "failed" as const, run: null };
+      }
+    });
+    counts[fired.outcome] = (counts[fired.outcome] ?? 0) + 1;
+    if (fired.run) started.push(fired.run);
+  }
+  return { started, counts };
+}
+
+/**
+ * A task or reminder an agent set for later (M5.07): sleep until it is due,
+ * holding no process, then fire it. Cancelling it ends the sleep; the row is
+ * checked when it fires too, so a cancel that raced the wake-up still holds.
+ */
+function scheduleFireFunction(inngest: Inngest.Any, schedules: ScheduleRunner) {
+  return inngest.createFunction(
+    {
+      id: "schedule-fire",
+      name: "Fire a scheduled task or reminder",
+      triggers: [{ event: INNGEST_EVENTS.scheduleCreated }],
+      cancelOn: [
+        {
+          event: INNGEST_EVENTS.scheduleCancelled,
+          if: "async.data.scheduleId == event.data.scheduleId",
+        },
+      ],
+      retries: 3,
+    },
+    async ({ event, step }) => {
+      const data = scheduleCreatedEventSchema.parse(event.data);
+      await step.sleepUntil("wait", new Date(data.dueAt));
+      const fired = await step.run("fire", async () => {
+        const ctx: TenantContext = {
+          workspaceId: asId(data.workspaceId),
+          userId: asId(data.userId),
+        };
+        return schedules.fire(ctx, data.scheduleId, new Date());
+      });
+      if (fired.run) await step.sendEvent("start-run", startEvent(fired.run));
+      return fired.outcome;
+    },
+  );
 }
 
 /**

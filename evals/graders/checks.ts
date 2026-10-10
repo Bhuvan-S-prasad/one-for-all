@@ -225,3 +225,42 @@ export function sentOnly(
     },
   };
 }
+
+// ── Teams (M5.13) ────────────────────────────────────────────────────────────
+
+/** Work was handed to this teammate at least once. */
+export function delegatedTo(slug: string): Check {
+  return {
+    name: `hands work to ${slug}`,
+    grade: (t) =>
+      t.children.some((c) => c.agent === slug)
+        ? { pass: true }
+        : {
+            pass: false,
+            detail: t.children.length
+              ? `handed work to ${t.children.map((c) => c.agent).join(", ")}`
+              : "handed nothing over",
+          },
+  };
+}
+
+/** A teammate used a tool while doing the handed-over work. */
+export function teammateUsedTool(slug: string, tool: string): Check {
+  return {
+    name: `${slug} uses ${tool}`,
+    grade: (t) =>
+      t.children.some((c) => c.agent === slug && c.toolCalls.some((call) => call.name === tool))
+        ? { pass: true }
+        : { pass: false, detail: `${slug} never called ${tool}` },
+  };
+}
+
+/** A handoff whose teammate read outside content came back marked tainted. */
+export const taintCameBack: Check = {
+  name: "a teammate's outside content taints the run",
+  grade: (t) => {
+    const tainted = t.children.some((c) => c.tainted);
+    if (!tainted) return { pass: false, detail: "no teammate read outside content" };
+    return t.result?.tainted ? { pass: true } : { pass: false, detail: "the run stayed clean" };
+  },
+};

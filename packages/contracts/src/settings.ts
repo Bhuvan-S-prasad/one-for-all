@@ -2,6 +2,7 @@ import { z } from "zod";
 import { agentSchema, modelTierSchema } from "./agents";
 import { idSchema, pageSchema, paginationQuerySchema, timestampSchema } from "./common";
 import { RUN_STATUSES, runEventSchema, runSchema, runStatusSchema } from "./runs";
+import { timeZoneSchema } from "./routines";
 import { messageSchema, threadSummarySchema } from "./threads";
 
 // Response envelopes and settings (M2.19).
@@ -82,3 +83,10 @@ export type ThreadListQuery = z.infer<typeof threadListQuerySchema>;
 
 export const threadSummaryPageSchema = pageSchema(threadSummarySchema);
 export type ThreadSummaryPage = z.infer<typeof threadSummaryPageSchema>;
+
+/** Workspace-wide settings (M5.06): the time zone routines and reminders use by default. */
+export const workspaceSettingsSchema = z.object({ timeZone: z.string() });
+export type WorkspaceSettings = z.infer<typeof workspaceSettingsSchema>;
+
+export const updateWorkspaceSettingsRequestSchema = z.object({ timeZone: timeZoneSchema });
+export type UpdateWorkspaceSettingsRequest = z.infer<typeof updateWorkspaceSettingsRequestSchema>;

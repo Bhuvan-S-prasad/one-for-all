@@ -20,7 +20,10 @@ import { loginRoutes } from "./routes/logins";
 import { memoryRoutes } from "./routes/memories";
 import { runRoutes } from "./routes/runs";
 import { sessionRoutes } from "./routes/session";
+import { routineRoutes } from "./routes/routines";
 import { settingsRoutes } from "./routes/settings";
+import { scheduleRoutes } from "./routes/schedules";
+import { skillRoutes } from "./routes/skills";
 import { setupRoutes } from "./routes/setup";
 import { threadRoutes } from "./routes/threads";
 import type { AppEnv } from "./types";
@@ -101,6 +104,9 @@ export function createApp(container: Container): App {
   app.route("/api/artifacts", artifactRoutes(container));
   app.route("/api/logins", loginRoutes(container));
   app.route("/api/settings", settingsRoutes(container));
+  app.route("/api/routines", routineRoutes(container));
+  app.route("/api/schedules", scheduleRoutes(container));
+  app.route("/api/skills", skillRoutes(container));
   app.get(
     "/api/ws",
     requireSession(container.sessions),

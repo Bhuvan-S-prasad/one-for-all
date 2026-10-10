@@ -1,10 +1,14 @@
 import {
   asId,
+  type AgentId,
   type AgentProfile,
   type MemoryRecord,
   type MemoryStore,
   type PolicyEngine,
   type RunContext,
+  type Scheduler,
+  type SkillLibrary,
+  type TeamDirectory,
   type ToolCallRecord,
   type ToolCallStore,
 } from "@ofa/core";
@@ -18,7 +22,13 @@ import {
   createToolRegistry,
   defineJsonSchemaTool,
   defineTool,
+  delegateTaskTool,
   editableTextFields,
+  messageAgentTool,
+  remindMeTool,
+  runSkillTool,
+  saveSkillTool,
+  scheduleTaskTool,
   htmlToText,
   isPrivateAddress,
   LOAD_ALL_LIMIT,
@@ -272,6 +282,319 @@ describe("tool executor", () => {
       properties: { text: { type: "string", minLength: 1 } },
       required: ["text"],
     });
+  });
+});
+
+describe("delegate_task (M5.01)", () => {
+  function withTeam(
+    members: Awaited<ReturnType<TeamDirectory["members"]>>,
+    mode: "auto" | "approve",
+  ) {
+    const team: TeamDirectory = {
+      members: async () => members,
+      handoff: async () => {
+        throw new Error("the harness makes handoffs, not the tool");
+      },
+      contacts: async () => [],
+      message: async () => {
+        throw new Error("not in this test");
+      },
+    };
+    const agent = agentWith([{ tool: "delegate_task", mode }]);
+    const agents = { get: async () => agent };
+    return createToolExecutor({
+      registry: createToolRegistry([delegateTaskTool(team)] as unknown as ToolDefinition<never>[]),
+      policy: createPolicyEngine({ agents }),
+      calls: memoryCalls(),
+      agents,
+    });
+  }
+  const researcher = {
+    id: asId<AgentId>("res"),
+    slug: "researcher",
+    name: "Researcher",
+    job: "Research",
+  };
+  const brief = { agent: "Researcher", brief: "Find the release date of pgvector 0.9." };
+
+  it("names the agents a run can hand work to, and is left out when there are none", async () => {
+    const [tool] = await withTeam([researcher], "auto").listTools(ctx);
+    expect(tool?.name).toBe("delegate_task");
+    expect(tool?.description).toContain(
+      "Agents you can hand work to:\n- researcher: Researcher, Research",
+    );
+    // A run that was itself handed work gets no members: one level deep.
+    expect(await withTeam([], "auto").listTools(ctx)).toEqual([]);
+  });
+
+  it("checks the agent it names, and lets a person reword a held brief", async () => {
+    const run = withTeam([researcher], "auto");
+    expect(await run.execute(request("delegate_task", brief), ctx)).toMatchObject({
+      status: "ok",
+      content: "Handing the work to Researcher. Its result comes back here when it is done.",
+    });
+    expect(
+      await run.execute(request("delegate_task", { ...brief, agent: "nobody" }, "r:tool-1-0"), ctx),
+    ).toMatchObject({
+      status: "error",
+      code: "unknown_agent",
+      message: "There is no agent called nobody to hand work to. You can hand work to: researcher.",
+    });
+    expect(
+      await withTeam([researcher], "approve").execute(request("delegate_task", brief), ctx),
+    ).toMatchObject({
+      status: "blocked",
+      verdict: "approve",
+      summary: "Hand work to Researcher: “Find the release date of pgvector 0.9.”",
+      editable: ["brief"],
+    });
+  });
+});
+
+describe("message_agent (M5.03)", () => {
+  it("lists who it can message here, and posts through the team with the call's key", async () => {
+    const sent: unknown[] = [];
+    const team: TeamDirectory = {
+      members: async () => [],
+      handoff: async () => {
+        throw new Error("not in this test");
+      },
+      contacts: async () => [
+        { id: asId<AgentId>("res"), slug: "researcher", name: "Researcher", job: "Research" },
+      ],
+      message: async (_ctx, input) => {
+        sent.push(input);
+        return {
+          runId: asId("run_b"),
+          messageId: asId("msg_b"),
+          agentId: asId<AgentId>("res"),
+          agentName: "Researcher",
+        };
+      },
+    };
+    const agent = agentWith([{ tool: "message_agent", mode: "auto" }]);
+    const agents = { get: async () => agent };
+    const run = createToolExecutor({
+      registry: createToolRegistry([messageAgentTool(team)] as unknown as ToolDefinition<never>[]),
+      policy: createPolicyEngine({ agents }),
+      calls: memoryCalls(),
+      agents,
+    });
+    const [tool] = await run.listTools(ctx);
+    expect(tool?.description).toContain(
+      "Agents you can message here:\n- researcher: Researcher, Research",
+    );
+    const args = { agent: "researcher", message: "Please check the pgvector release notes." };
+    expect(await run.execute(request("message_agent", args), ctx)).toMatchObject({
+      status: "ok",
+      content: expect.stringMatching(/^Sent to Researcher\. Its reply will appear/),
+    });
+    expect(sent).toEqual([
+      {
+        key: "r:tool-0-0",
+        agent: "researcher",
+        content: "Please check the pgvector release notes.",
+      },
+    ]);
+  });
+});
+
+describe("schedule_task and remind_me (M5.07)", () => {
+  function setup() {
+    const set: unknown[] = [];
+    const scheduler: Scheduler = {
+      timeZone: async () => "Europe/Paris",
+      schedule: async (_ctx, input) => {
+        set.push(input);
+        return { id: "s1", kind: input.kind, content: input.content, dueAt: input.dueAt };
+      },
+    };
+    const agent = agentWith([
+      { tool: "schedule_task", mode: "auto" },
+      { tool: "remind_me", mode: "auto" },
+    ]);
+    const agents = { get: async () => agent };
+    const run = createToolExecutor({
+      registry: createToolRegistry([
+        scheduleTaskTool(scheduler),
+        remindMeTool(scheduler),
+      ] as unknown as ToolDefinition<never>[]),
+      policy: createPolicyEngine({ agents }),
+      calls: memoryCalls(),
+      agents,
+    });
+    return { run, set };
+  }
+
+  it("tells the model the time now, in the person's zone", async () => {
+    const { run } = setup();
+    const tools = await run.listTools(ctx);
+    expect(tools.map((t) => t.name).sort()).toEqual(["remind_me", "schedule_task"]);
+    expect(tools[0]?.description).toMatch(
+      /It is now \d{4}-\d{2}-\d{2} \d{2}:\d{2} in the person's time zone \(Europe\/Paris\)/,
+    );
+  });
+
+  it("sets a reminder at a clock time read in the workspace zone, with the call's key", async () => {
+    const { run, set } = setup();
+    const year = new Date().getUTCFullYear() + 1;
+    const outcome = await run.execute(
+      request("remind_me", { at: `${year}-01-15 09:30`, message: "Call the dentist" }),
+      ctx,
+    );
+    expect(outcome).toMatchObject({
+      status: "ok",
+      content: `Reminder set for ${year}-01-15 09:30 (Europe/Paris). It will be posted in this conversation then.`,
+    });
+    expect(set).toEqual([
+      {
+        key: "r:tool-0-0",
+        kind: "reminder",
+        content: "Call the dentist",
+        dueAt: new Date(`${year}-01-15T08:30:00Z`),
+      },
+    ]);
+  });
+
+  it("schedules a task some minutes from now", async () => {
+    const { run, set } = setup();
+    const before = Date.now();
+    const outcome = await run.execute(
+      request("schedule_task", { in_minutes: 90, task: "Check whether the pricing page changed." }),
+      ctx,
+    );
+    expect(outcome).toMatchObject({ status: "ok", content: expect.stringContaining("woken") });
+    const due = (set[0] as { dueAt: Date }).dueAt.getTime();
+    expect(due - before).toBeGreaterThanOrEqual(90 * 60_000);
+    expect(due - before).toBeLessThan(91 * 60_000);
+  });
+
+  it("refuses a time that has passed, can't be read, or is given twice", async () => {
+    const { run, set } = setup();
+    const call = (args: unknown) => run.execute(request("remind_me", args), ctx);
+    expect(await call({ at: "2020-01-01 09:00", message: "Too late" })).toMatchObject({
+      status: "error",
+      code: "bad_time",
+      message: expect.stringContaining("That time has passed"),
+    });
+    expect(await call({ at: "next friday", message: "Unclear" })).toMatchObject({
+      status: "error",
+      code: "bad_time",
+    });
+    expect(await call({ at: "2099-01-01 09:00", in_minutes: 5, message: "Both" })).toMatchObject({
+      status: "error",
+      code: "bad_time",
+    });
+    expect(set).toEqual([]);
+  });
+
+  it("isn't listed without a scheduler", async () => {
+    const agent = agentWith([{ tool: "remind_me", mode: "auto" }]);
+    const agents = { get: async () => agent };
+    const run = createToolExecutor({
+      registry: createToolRegistry([remindMeTool(null)] as unknown as ToolDefinition<never>[]),
+      policy: createPolicyEngine({ agents }),
+      calls: memoryCalls(),
+      agents,
+    });
+    expect(await run.listTools(ctx)).toEqual([]);
+  });
+});
+
+describe("run_skill and save_skill (M5.08)", () => {
+  function setup() {
+    const saved: unknown[] = [];
+    const skills: SkillLibrary = {
+      list: async () => [{ slug: "brief", name: "Brief", description: "A three-point brief." }],
+      find: async (_ctx, name) =>
+        name.replace(/^\//, "") === "brief"
+          ? {
+              slug: "brief",
+              name: "Brief",
+              description: "A three-point brief.",
+              steps: ["Search", "Write three points"],
+            }
+          : null,
+      save: async (_ctx, input) => {
+        saved.push(input);
+        return { slug: "weekly-report", status: input.tainted ? "proposed" : "active" };
+      },
+    };
+    const agent = agentWith([
+      { tool: "run_skill", mode: "auto" },
+      { tool: "save_skill", mode: "auto" },
+    ]);
+    const agents = { get: async () => agent };
+    const run = createToolExecutor({
+      registry: createToolRegistry([
+        runSkillTool(skills),
+        saveSkillTool(skills),
+      ] as unknown as ToolDefinition<never>[]),
+      policy: createPolicyEngine({ agents }),
+      calls: memoryCalls(),
+      agents,
+    });
+    return { run, saved };
+  }
+
+  it("lists the agent's skills and hands back a skill's steps", async () => {
+    const { run } = setup();
+    const tools = await run.listTools(ctx);
+    expect(tools.find((t) => t.name === "run_skill")?.description).toContain(
+      "Your skills:\n- brief: Brief. A three-point brief.",
+    );
+    expect(await run.execute(request("run_skill", { skill: "/brief" }), ctx)).toMatchObject({
+      status: "ok",
+      content: expect.stringContaining("1. Search\n2. Write three points"),
+      untrusted: false,
+    });
+    expect(
+      await run.execute(request("run_skill", { skill: "nope" }, "tool-0-1"), ctx),
+    ).toMatchObject({
+      status: "error",
+      code: "unknown_skill",
+      message: expect.stringContaining("Your skills: brief."),
+    });
+  });
+
+  it("saves a skill, as a proposal when the run read outside content", async () => {
+    const { run, saved } = setup();
+    const args = {
+      name: "Weekly report",
+      description: "Every Friday",
+      steps: ["Collect", "Write"],
+    };
+    expect(await run.execute(request("save_skill", args), ctx)).toMatchObject({
+      status: "ok",
+      content: expect.stringContaining("Saved as your skill /weekly-report"),
+    });
+    const tainted = await run.execute(
+      { ...request("save_skill", args, "tool-1-0"), tainted: true },
+      ctx,
+    );
+    expect(tainted).toMatchObject({
+      status: "ok",
+      content: expect.stringContaining("as a proposal"),
+    });
+    expect(saved).toMatchObject([{ tainted: false }, { tainted: true }]);
+  });
+
+  it("aren't listed without a skill library", async () => {
+    const agent = agentWith([
+      { tool: "run_skill", mode: "auto" },
+      { tool: "save_skill", mode: "auto" },
+    ]);
+    const agents = { get: async () => agent };
+    const run = createToolExecutor({
+      registry: createToolRegistry([
+        runSkillTool(null),
+        saveSkillTool(null),
+      ] as unknown as ToolDefinition<never>[]),
+      policy: createPolicyEngine({ agents }),
+      calls: memoryCalls(),
+      agents,
+    });
+    expect(await run.listTools(ctx)).toEqual([]);
   });
 });
 

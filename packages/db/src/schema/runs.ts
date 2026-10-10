@@ -16,6 +16,7 @@ import { user } from "./auth";
 import { createdAt, id, timestampAt } from "./columns";
 import { policyVerdict, runStatus, runTrigger, toolCallStatus } from "./enums";
 import { workspaceId } from "./tenancy";
+import { routine } from "./schedules";
 import { thread } from "./threads";
 
 /** Token and cost totals for a run, filled in by the model gateway (M2). */
@@ -40,10 +41,16 @@ export const run = pgTable(
     threadId: uuid("thread_id"),
     /** Set when this run was delegated by another run (M5). */
     parentRunId: uuid("parent_run_id"),
+    /** The routine it ran for (M5.06): its history lists these runs. */
+    routineId: uuid("routine_id").references(() => routine.id, { onDelete: "set null" }),
     trigger: runTrigger("trigger").notNull(),
     status: runStatus("status").notNull().default("queued"),
     /** Set once the run reads untrusted content (ADR-0013). Never cleared. */
     tainted: boolean("tainted").notNull().default(false),
+    /** A proactive check (M5.10): only tools that change nothing may run. */
+    proactive: boolean("proactive").notNull().default(false),
+    /** What a run without a request message was asked: a check's instructions (M5.10). */
+    request: text("request"),
     triggeredBy: text("triggered_by").references(() => user.id, { onDelete: "set null" }),
     usage: jsonb("usage")
       .$type<RunUsageJson>()
@@ -72,6 +79,7 @@ export const run = pgTable(
     }),
     index("run_workspace_agent_created_idx").on(t.workspaceId, t.agentId, t.createdAt),
     index("run_thread_idx").on(t.threadId),
+    index("run_routine_idx").on(t.routineId, t.createdAt),
     unique("run_workspace_id_uq").on(t.workspaceId, t.id),
   ],
 );

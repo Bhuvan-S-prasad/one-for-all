@@ -1,7 +1,11 @@
 import {
   asId,
+  findMember,
+  type AgentId,
+  type ChildRunResult,
   type LLMGateway,
   type RunContext,
+  type TeamDirectory,
   type StepRunner,
   type ThreadId,
   type ToolCallRecord,
@@ -18,7 +22,7 @@ import { builtinTools, createToolExecutor, createToolRegistry } from "@ofa/tools
 import { fixtureMailbox } from "../fixtures/mailbox";
 import { fixtureBrowser, fixtureComputer } from "../fixtures/site";
 import { fixtureFetcher, fixtureSearch } from "../fixtures/web";
-import type { EvalCase, Transcript } from "./types";
+import type { ChildTranscript, EvalCase, Transcript } from "./types";
 
 // One attempt at a case: a fresh, in-memory world around the real harness,
 // tool executor and policy engine. Only the model is live; the web comes from
@@ -51,6 +55,7 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 function patientSteps(inner: StepRunner, wait: (ms: number) => Promise<void>): StepRunner {
   return {
     ...(inner.waitForEvent ? { waitForEvent: inner.waitForEvent.bind(inner) } : {}),
+    ...(inner.invokeRun ? { invokeRun: inner.invokeRun.bind(inner) } : {}),
     async run<T>(id: string, fn: () => Promise<T>): Promise<T> {
       for (let attempt = 0; ; attempt += 1) {
         try {
@@ -99,6 +104,72 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
     },
   ]);
 
+  // Teammates (M5.13): profiles by handle, and the handoffs the run makes.
+  const teammates = (evalCase.team ?? []).map((t) => ({
+    ...t,
+    id: asId<AgentId>(`agent_${t.slug}`),
+  }));
+  for (const t of teammates) runtime.agents.profiles.set(t.id, t);
+  const handoffs: {
+    runId: string;
+    threadId: string;
+    agentId: string;
+    slug: string;
+    brief: string;
+  }[] = [];
+  const team: TeamDirectory | undefined = teammates.length
+    ? {
+        // One level deep, as in the app: only the run under test hands work on.
+        members: async (c) =>
+          c.runId === ctx.runId
+            ? teammates.map((t) => ({ id: t.id, slug: t.slug, name: t.name, job: t.job }))
+            : [],
+        async handoff(c, input) {
+          const member = findMember(await team!.members(c), input.agent);
+          if (!member) throw new Error(`There is no agent called ${input.agent} to hand work to.`);
+          const n = handoffs.length + 1;
+          const runId = `run_child_${n}`;
+          const childThread = `thread_child_${n}`;
+          runtime.runs.records.set(runId, {
+            id: asId(runId),
+            agentId: member.id,
+            threadId: asId(childThread),
+            trigger: "delegation",
+            status: "queued",
+            tainted: runtime.runs.records.get(c.runId)?.tainted ?? false,
+            usage: { inputTokens: 0, outputTokens: 0, costUsd: 0, modelCalls: 0, toolCalls: 0 },
+          });
+          runtime.threads.messages.set(childThread, [
+            {
+              id: asId(`brief_${n}`),
+              author: "agent",
+              agentId: c.agentId,
+              content: input.brief,
+              createdAt: new Date(),
+            },
+          ]);
+          handoffs.push({
+            runId,
+            threadId: childThread,
+            agentId: member.id,
+            slug: member.slug,
+            brief: input.brief,
+          });
+          return {
+            runId: asId(runId),
+            threadId: asId(childThread),
+            messageId: asId(`brief_${n}`),
+            agentId: member.id,
+            agentName: member.name,
+          };
+        },
+        contacts: async () => [],
+        message: async () => {
+          throw new Error("Messages between agents aren't part of the eval world yet.");
+        },
+      }
+    : undefined;
+
   const browser = evalCase.site ? fixtureBrowser(evalCase.site) : null;
   const mailbox = evalCase.mailbox ? fixtureMailbox(evalCase.mailbox) : null;
   const tools = createToolExecutor({
@@ -108,6 +179,7 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
         search: fixtureSearch(evalCase.web),
         fetcher: fixtureFetcher(evalCase.web),
         sandbox: browser ? fixtureComputer(browser) : null,
+        team: team ?? null,
       }),
       ...((mailbox?.tools ?? []) as unknown as ReturnType<typeof builtinTools>),
     ]),
@@ -120,13 +192,43 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
   // watching. Their answer arrives as the event the run waits for.
   const approvals = createMemoryApprovals();
   const person = evalCase.person ?? (() => true);
+  const onWait = async (_id: string, wait: { value: string }) => {
+    const approval = await approvals.get(ctx, wait.value);
+    if (!approval || approval.status !== "pending") return null;
+    const status = person(approval) ? "approved" : "rejected";
+    await approvals.decide(ctx, approval.id, { status, decidedBy: "usr_eval" });
+    return { approvalId: approval.id, decision: status };
+  };
+  const deps = {
+    llm: options.llm,
+    tools,
+    runs: runtime.runs,
+    agents: runtime.agents,
+    threads: runtime.threads,
+    memory: runtime.memory,
+    approvals,
+    ...(team ? { team } : {}),
+    ...(evalCase.harness ? { options: evalCase.harness } : {}),
+  };
   const steps = createMemoStepRunner({
-    onWait: async (_id, wait) => {
-      const approval = await approvals.get(ctx, wait.value);
-      if (!approval || approval.status !== "pending") return null;
-      const status = person(approval) ? "approved" : "rejected";
-      await approvals.decide(ctx, approval.id, { status, decidedBy: "usr_eval" });
-      return { approvalId: approval.id, decision: status };
+    onWait,
+    // What Inngest's step.invoke does: run the child, from its brief, to the end.
+    onInvoke: async (_id, child): Promise<ChildRunResult> => {
+      const result = await runAgent(
+        {
+          ctx: { ...ctx, agentId: child.agentId, runId: child.runId },
+          threadId: child.threadId,
+          trigger: "delegation",
+        },
+        deps,
+        patientSteps(createMemoStepRunner({ onWait }), options.wait ?? sleep),
+      );
+      return {
+        status: result.status,
+        stopReason: result.stopReason,
+        reply: result.reply,
+        tainted: result.tainted,
+      };
     },
   });
 
@@ -136,23 +238,31 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
   try {
     result = await runAgent(
       { ctx, threadId, trigger: "message" },
-      {
-        llm: options.llm,
-        tools,
-        runs: runtime.runs,
-        agents: runtime.agents,
-        threads: runtime.threads,
-        memory: runtime.memory,
-        approvals,
-        ...(evalCase.harness ? { options: evalCase.harness } : {}),
-      },
+      deps,
       patientSteps(steps, options.wait ?? sleep),
     );
   } catch (thrown) {
     error = thrown instanceof Error ? thrown.message : String(thrown);
   }
 
-  const events = runtime.runs.events.map((e) => ({ type: e.type, payload: e.payload }));
+  // The run under test's own log; each teammate's is in `children`.
+  const logOf = (runId: string) =>
+    runtime.runs.events
+      .filter((e) => e.runId === runId)
+      .map((e) => ({ type: e.type, payload: e.payload }));
+  const events = logOf(ctx.runId);
+  const children: ChildTranscript[] = handoffs.map((h) => ({
+    agent: h.slug,
+    brief: h.brief,
+    reply:
+      (runtime.threads.messages.get(h.threadId) ?? [])
+        .filter((m) => m.author === "agent" && m.agentId === h.agentId)
+        .at(-1)?.content ?? null,
+    tainted: runtime.runs.records.get(h.runId)?.tainted ?? false,
+    toolCalls: logOf(h.runId)
+      .filter((e) => e.type === "tool.called")
+      .map((e) => ({ name: String(e.payload.tool), args: e.payload.args })),
+  }));
   const replies = (runtime.threads.messages.get(threadId) ?? []).filter(
     (m) => m.author === "agent",
   );
@@ -168,6 +278,7 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
     site: browser ? browser.record : null,
     mail: mailbox ? mailbox.record : null,
     approvals: [...approvals.records],
+    children,
     durationMs: Date.now() - started,
   };
 }

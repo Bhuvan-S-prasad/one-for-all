@@ -1,6 +1,12 @@
-import { setLlmKeyRequestSchema, type LlmSettings, type UsageToday } from "@ofa/contracts";
+import {
+  setLlmKeyRequestSchema,
+  updateWorkspaceSettingsRequestSchema,
+  type LlmSettings,
+  type UsageToday,
+  type WorkspaceSettings,
+} from "@ofa/contracts";
 import { ForbiddenError, MODEL_TIERS, type TenantContext } from "@ofa/core";
-import { modelCallsSince, recordAudit } from "@ofa/db";
+import { getWorkspace, modelCallsSince, recordAudit, setWorkspaceTimeZone } from "@ofa/db";
 import { Hono, type Context } from "hono";
 import { llmKeySecretName, type Container } from "../container";
 import { requestMeta } from "../lib/request";
@@ -14,6 +20,8 @@ import type { AppEnv } from "../types";
  *   PUT    /api/settings/llm/key   save this workspace's key in the vault (owner or admin)
  *   DELETE /api/settings/llm/key   remove it
  *   GET    /api/settings/usage     model requests today against the provider's daily quota (UX.11)
+ *   GET    /api/settings/workspace the workspace time zone, for routines and reminders (M5.06)
+ *   PUT    /api/settings/workspace change it (owner or admin)
  */
 export function settingsRoutes(
   deps: Pick<Container, "db" | "sessions" | "vault" | "llmProvider" | "tiers" | "config">,
@@ -21,10 +29,10 @@ export function settingsRoutes(
   const provider = deps.llmProvider;
   const secretName = llmKeySecretName(provider.id);
 
-  function requireAdmin(c: Context<AppEnv>): TenantContext {
+  function requireAdmin(c: Context<AppEnv>, what = "the model key"): TenantContext {
     const role = c.get("session").membership?.role;
     if (role !== "owner" && role !== "admin") {
-      throw new ForbiddenError("Only an owner or admin can change the model key");
+      throw new ForbiddenError(`Only an owner or admin can change ${what}`);
     }
     return c.get("tenant");
   }
@@ -73,6 +81,16 @@ export function settingsRoutes(
     .use(requireSession(deps.sessions), requireTenant())
     .get("/llm", async (c) => c.json(await settings(c.get("tenant"))))
     .get("/usage", async (c) => c.json(await usage(c.get("tenant"))))
+    .get("/workspace", async (c) => {
+      const workspace = await getWorkspace(deps.db, c.get("tenant"));
+      return c.json({ timeZone: workspace.timeZone } satisfies WorkspaceSettings);
+    })
+    .put("/workspace", async (c) => {
+      const tenant = requireAdmin(c, "workspace settings");
+      const { timeZone } = await readJson(c, updateWorkspaceSettingsRequestSchema);
+      await setWorkspaceTimeZone(deps.db, tenant, timeZone);
+      return c.json({ timeZone } satisfies WorkspaceSettings);
+    })
     .put("/llm/key", async (c) => {
       const tenant = requireAdmin(c);
       const { apiKey } = await readJson(c, setLlmKeyRequestSchema);

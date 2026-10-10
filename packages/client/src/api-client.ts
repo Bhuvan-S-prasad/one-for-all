@@ -1,4 +1,33 @@
 import {
+  agentFileSchema,
+  importAgentResponseSchema,
+  type AgentFile,
+  type AgentFileInput,
+  type ImportAgentResponse,
+  unreadListSchema,
+  type UnreadList,
+  episodeListSchema,
+  skillListSchema,
+  skillSchema,
+  type CreateSkillRequest,
+  type EpisodeList,
+  type Skill,
+  type SkillList,
+  type UpdateSkillRequest,
+  routineListSchema,
+  routineRunsSchema,
+  routineSchema,
+  scheduleListSchema,
+  scheduleSchema,
+  workspaceSettingsSchema,
+  type CreateRoutineRequest,
+  type Routine,
+  type RoutineList,
+  type RoutineRuns,
+  type Schedule,
+  type ScheduleList,
+  type UpdateRoutineRequest,
+  type WorkspaceSettings,
   agentListResponseSchema,
   agentSchema,
   agentStatsListSchema,
@@ -29,6 +58,7 @@ import {
   shareLoginResponseSchema,
   sessionResponseSchema,
   setupStatusSchema,
+  threadListSchema,
   threadSchema,
   threadSummaryPageSchema,
   usageTodaySchema,
@@ -69,7 +99,9 @@ import {
   type SendMessageResponse,
   type SessionResponse,
   type SetupStatus,
+  type CreateThreadRequest,
   type Thread,
+  type ThreadList,
   type ThreadSummaryPage,
   type UpdateAgentRequest,
   type UpdateThreadRequest,
@@ -246,10 +278,27 @@ export function createApiClient(options: ApiClientOptions = {}) {
         shareLoginResponseSchema,
         { to, site },
       ),
+    /** The agent as a file (M5.12). */
+    exportAgent: (id: string): Promise<AgentFile> =>
+      request("GET", `/api/agents/${encodeURIComponent(id)}/export`, agentFileSchema),
+    /** A new agent from a file: its skills wait for approval, its routines paused. */
+    importAgent: (file: AgentFileInput): Promise<ImportAgentResponse> =>
+      request("POST", "/api/agents/import", importAgentResponseSchema, file),
     agentStats: (): Promise<AgentStatsList> =>
       request("GET", "/api/agents/stats", agentStatsListSchema),
 
     // ── Threads ────────────────────────────────────────────────────────────
+    /** The person's group chats, most recent first (M5.04). */
+    groupThreads: (options: { archived?: boolean } = {}): Promise<ThreadList> =>
+      request("GET", `/api/threads${options.archived ? "?archived=true" : ""}`, threadListSchema),
+    /** A group chat with two to six agents (one agent makes a direct chat). */
+    createThread: (input: CreateThreadRequest): Promise<Thread> =>
+      request("POST", "/api/threads", threadSchema, input),
+    /** Chats with agent messages not yet seen (M5.11). */
+    unreadThreads: (): Promise<UnreadList> =>
+      request("GET", "/api/threads/unread", unreadListSchema),
+    markThreadRead: (id: string): Promise<void> =>
+      request("POST", `/api/threads/${encodeURIComponent(id)}/read`, null),
     getThread: (id: string): Promise<Thread> =>
       request("GET", `/api/threads/${encodeURIComponent(id)}`, threadSchema),
     updateThread: (id: string, patch: UpdateThreadRequest): Promise<Thread> =>
@@ -299,6 +348,48 @@ export function createApiClient(options: ApiClientOptions = {}) {
     /** Ask again: the run's message, in the same chat, as a new run (UX.12). */
     retryRun: (id: string): Promise<SendMessageResponse> =>
       request("POST", `/api/runs/${encodeURIComponent(id)}/retry`, sendMessageResponseSchema),
+
+    // ── Routines (M5.06) and things set for later (M5.07) ─────────────────
+    listRoutines: (filter: { agentId?: string } = {}): Promise<RoutineList> =>
+      request("GET", `/api/routines${query({ ...filter })}`, routineListSchema),
+    createRoutine: (input: CreateRoutineRequest): Promise<Routine> =>
+      request("POST", "/api/routines", routineSchema, input),
+    updateRoutine: (id: string, patch: UpdateRoutineRequest): Promise<Routine> =>
+      request("PATCH", `/api/routines/${encodeURIComponent(id)}`, routineSchema, patch),
+    deleteRoutine: (id: string): Promise<void> =>
+      request("DELETE", `/api/routines/${encodeURIComponent(id)}`, null),
+    /** A test run now, outside the schedule. */
+    runRoutine: (id: string): Promise<Run> =>
+      request("POST", `/api/routines/${encodeURIComponent(id)}/run`, runSchema),
+    routineRuns: (id: string): Promise<RoutineRuns> =>
+      request("GET", `/api/routines/${encodeURIComponent(id)}/runs`, routineRunsSchema),
+    listSchedules: (
+      filter: { agentId?: string; status?: Schedule["status"] } = {},
+    ): Promise<ScheduleList> =>
+      request("GET", `/api/schedules${query({ ...filter })}`, scheduleListSchema),
+    cancelSchedule: (id: string): Promise<Schedule> =>
+      request("DELETE", `/api/schedules/${encodeURIComponent(id)}`, scheduleSchema),
+    workspaceSettings: (): Promise<WorkspaceSettings> =>
+      request("GET", "/api/settings/workspace", workspaceSettingsSchema),
+    setTimeZone: (timeZone: string): Promise<WorkspaceSettings> =>
+      request("PUT", "/api/settings/workspace", workspaceSettingsSchema, { timeZone }),
+
+    // ── Skills (M5.08) and episodes (M5.09) ───────────────────────────────
+    /** All skills, or one agent's with the shared ones. */
+    listSkills: (filter: { agentId?: string; status?: Skill["status"] } = {}): Promise<SkillList> =>
+      request("GET", `/api/skills${query({ ...filter })}`, skillListSchema),
+    createSkill: (input: CreateSkillRequest): Promise<Skill> =>
+      request("POST", "/api/skills", skillSchema, input),
+    /** Edit, approve (`status: "active"`) or retire a skill. */
+    updateSkill: (id: string, patch: UpdateSkillRequest): Promise<Skill> =>
+      request("PATCH", `/api/skills/${encodeURIComponent(id)}`, skillSchema, patch),
+    deleteSkill: (id: string): Promise<void> =>
+      request("DELETE", `/api/skills/${encodeURIComponent(id)}`, null),
+    /** Tidy the workspace's memory now, not at 3 at night (owner or admin). */
+    consolidateMemory: (): Promise<void> => request("POST", "/api/memories/consolidate", null),
+    /** What runs were asked and how they ended, newest first. */
+    listEpisodes: (filter: { agentId?: string; limit?: number } = {}): Promise<EpisodeList> =>
+      request("GET", `/api/memories/episodes${query({ ...filter })}`, episodeListSchema),
 
     // ── Approvals ──────────────────────────────────────────────────────────
     /** Waiting for an answer, newest first. */

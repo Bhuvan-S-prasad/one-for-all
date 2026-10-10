@@ -48,7 +48,14 @@ export interface ModelProvider {
    * An AI SDK language model for one call. The key is passed per call because
    * each workspace brings its own and can change it in Settings.
    */
-  languageModel(modelId: string, options: { readonly apiKey: string | undefined }): LanguageModel;
+  languageModel(
+    modelId: string,
+    options: {
+      readonly apiKey: string | undefined;
+      /** Ask for brief reasoning (`LLMRequest.reasoning`); ignored where unsupported. */
+      readonly reasoning?: "none" | "low";
+    },
+  ): LanguageModel;
 
   /** Metadata for the models this provider offers. The gateway caches it. */
   listModels(): Promise<ModelDetails[]>;

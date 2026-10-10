@@ -23,10 +23,16 @@ import {
 import { injectionSuite } from "../redteam/injection";
 import { operatorSuite } from "../suites/operator";
 import { researcherSuite } from "../suites/researcher";
+import { teamSuite } from "../suites/team";
 import { runCases, type AttemptReport } from "./runner";
 import type { EvalCase } from "./types";
 
-const ALL_CASES: readonly EvalCase[] = [...researcherSuite, ...operatorSuite, ...injectionSuite];
+const ALL_CASES: readonly EvalCase[] = [
+  ...researcherSuite,
+  ...operatorSuite,
+  ...teamSuite,
+  ...injectionSuite,
+];
 
 /** Providers this runner can use; mirrors the composition root (ADR-0022). */
 const MODEL_PROVIDERS: Record<string, () => ModelProvider> = {

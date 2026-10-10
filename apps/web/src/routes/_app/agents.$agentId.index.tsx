@@ -2,7 +2,10 @@ import {
   MOOD_LABELS,
   moodFor,
   useAgent,
+  useAgents,
   useApprovals,
+  useMarkRead,
+  useSkills,
   useChatThread,
   useNewThread,
   useRun,
@@ -41,6 +44,12 @@ import { AgentTabs } from "@/components/agent-tabs";
 import { LiveRun, WorkingRing } from "@/components/chat/live-run";
 import { Reply } from "@/components/chat/reply";
 import { RunPanel } from "@/components/chat/run-panel";
+import {
+  insertSkill,
+  matchSkills,
+  SkillSuggestions,
+  skillQuery,
+} from "@/components/chat/skill-picker";
 import { ComputerOverlay, ComputerPanel, usesBrowser } from "@/components/computer/computer-panel";
 import { Familiar } from "@/components/familiar";
 import { ErrorAlert } from "@/components/ui/alert";
@@ -112,11 +121,17 @@ function Chat({ agent }: { agent: Agent }) {
   const { draft, thread: threadId } = Route.useSearch();
   const { data: thread, error: threadError } = useChatThread(agent.id, threadId);
   const { data: messages, isPending: loadingMessages } = useThreadMessages(thread?.id);
+  // Seen while it is on screen (M5.11 unread).
+  useMarkRead(thread?.id, messages?.at(-1)?.id);
   const { data: runs } = useRuns(agent.id);
   // The run shown in the thread is this chat's latest; the agent may be busy
   // in another chat, which the header and a notice say.
   const latest = runs?.[0];
-  const threadRun = thread ? runs?.find((r) => r.threadId === thread.id) : undefined;
+  // A follow-up that the working run read (steering, M5.05) ends without a
+  // run of its own; the run that read it is the one to show.
+  const threadRun = thread
+    ? runs?.find((r) => r.threadId === thread.id && r.error?.code !== "steered")
+    : undefined;
   const { run: liveRun, events } = useRun(threadRun?.id);
   const run: Run | undefined = liveRun.data ?? threadRun;
   const active = !!run && ACTIVE.has(run.status);
@@ -631,6 +646,12 @@ function Thread(props: {
   const [behind, setBehind] = useState(false);
   const first = useRef(true);
   const last = props.messages.at(-1);
+  // Another agent can answer here when this one messaged it (M5.03): show who wrote it.
+  const { data: everyone } = useAgents();
+  const authorOf = (m: Message): Agent | undefined =>
+    m.author.type === "agent" && m.author.agentId !== props.agent.id
+      ? everyone?.find((a) => a.id === (m.author as { agentId: string }).agentId)
+      : undefined;
 
   const toBottom = (smooth: boolean) => {
     const el = scroller.current;
@@ -724,13 +745,17 @@ function Thread(props: {
                 </span>
               </div>
             ) : m.author.type === "agent" ? (
-              <Reply
-                key={m.id}
-                message={m}
-                agent={props.agent}
-                onRetry={props.onRetryFor(m)}
-                onContinue={props.continueFor(m)}
-              />
+              authorOf(m) ? (
+                <Reply key={m.id} message={m} agent={authorOf(m)!} />
+              ) : (
+                <Reply
+                  key={m.id}
+                  message={m}
+                  agent={props.agent}
+                  onRetry={props.onRetryFor(m)}
+                  onContinue={props.continueFor(m)}
+                />
+              )
             ) : (
               <Notice key={m.id}>{m.content}</Notice>
             ),
@@ -773,6 +798,19 @@ function Composer(props: {
   const [text, setText] = useState(props.initial ?? "");
   const local = useRef<HTMLTextAreaElement | null>(null);
   const { initial, onDraftUsed } = props;
+  // `/` names one of the agent's skills (M5.08).
+  const { data: skills } = useSkills(props.agent.id);
+  const typed = skillQuery(text);
+  const matches = typed === null ? [] : matchSkills(skills ?? [], typed);
+  const [dismissedAt, setDismissedAt] = useState<string | null>(null);
+  const [picked, setPicked] = useState(0);
+  const picking = matches.length > 0 && dismissedAt !== text;
+  const activeSkill = Math.min(picked, Math.max(0, matches.length - 1));
+  const pickSkill = (slug: string) => {
+    setText((current) => insertSkill(current, slug));
+    setPicked(0);
+    local.current?.focus();
+  };
 
   // A message started elsewhere (⌘K "Ask …") arrives ready to send.
   useEffect(() => {
@@ -823,6 +861,25 @@ function Composer(props: {
     }
   };
   const onKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (picking) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        setPicked((activeSkill + step + matches.length) % matches.length);
+        return;
+      }
+      if ((event.key === "Enter" && !event.shiftKey) || event.key === "Tab") {
+        event.preventDefault();
+        pickSkill(matches[activeSkill]!.slug);
+        return;
+      }
+      if (event.key === "Escape") {
+        // Closes the list; it doesn't stop the agent.
+        event.preventDefault();
+        setDismissedAt(text);
+        return;
+      }
+    }
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing)
       void submit(event);
   };
@@ -833,7 +890,16 @@ function Composer(props: {
       <label htmlFor="message" className="sr-only">
         Message {props.agent.name}
       </label>
-      <div className="flex items-end gap-2 rounded-[26px] border border-input bg-card p-2 pl-4 focus-within:border-ring/60">
+      <div className="relative flex items-end gap-2 rounded-[26px] border border-input bg-card p-2 pl-4 focus-within:border-ring/60">
+        {picking && (
+          <SkillSuggestions
+            id="skill-suggestions"
+            items={matches}
+            active={activeSkill}
+            onPick={(skill) => pickSkill(skill.slug)}
+            onHover={setPicked}
+          />
+        )}
         <textarea
           id="message"
           ref={(el) => {
@@ -843,13 +909,18 @@ function Composer(props: {
               (props.ref as React.RefObject<HTMLTextAreaElement | null>).current = el;
           }}
           rows={1}
+          role="combobox"
+          aria-expanded={picking}
+          aria-controls={picking ? "skill-suggestions" : undefined}
+          aria-activedescendant={picking ? `skill-suggestions-${activeSkill}` : undefined}
+          aria-autocomplete="list"
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKey}
           disabled={props.disabled}
           placeholder={
             props.active
-              ? `Add to the conversation. ${props.agent.name} reads it when this run ends`
+              ? `Add to the conversation. ${props.agent.name} reads it at its next step`
               : `Message ${props.agent.name}`
           }
           className="max-h-[220px] min-h-10 flex-1 resize-none bg-transparent py-2 text-[15.5px] leading-relaxed outline-none placeholder:text-muted-foreground disabled:opacity-60"
@@ -880,6 +951,7 @@ function Composer(props: {
         <span>↵ send</span>
         <span>⇧↵ new line</span>
         <span>/ to write from anywhere</span>
+        {(skills?.length ?? 0) > 0 && <span>/name for a skill</span>}
         {props.active && <span className="ml-auto">Esc stops {props.agent.name}</span>}
       </div>
     </form>
