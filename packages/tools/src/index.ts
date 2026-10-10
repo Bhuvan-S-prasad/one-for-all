@@ -19,6 +19,7 @@ export { createToolExecutor, type ToolExecutorOptions } from "./executor";
 export { builtinTools, type BuiltinToolDeps } from "./builtins/index";
 export { artifactsReadTool } from "./builtins/artifacts";
 export { LOAD_ALL_LIMIT, LOAD_TOOLKIT, loadToolkitTool } from "./builtins/toolkits";
+export { DELEGATE_TASK, delegateTaskTool } from "./builtins/team";
 export {
   browserTools,
   fileTools,

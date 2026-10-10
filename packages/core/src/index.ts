@@ -12,6 +12,7 @@ export * from "./ports/artifacts";
 export * from "./ports/approvals";
 export * from "./ports/connections";
 export * from "./ports/sandbox";
+export * from "./ports/team";
 export * from "./ports/telemetry";
 export * from "./ports/tools";
 export * from "./ports/vault";

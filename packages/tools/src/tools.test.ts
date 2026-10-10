@@ -1,10 +1,12 @@
 import {
   asId,
+  type AgentId,
   type AgentProfile,
   type MemoryRecord,
   type MemoryStore,
   type PolicyEngine,
   type RunContext,
+  type TeamDirectory,
   type ToolCallRecord,
   type ToolCallStore,
 } from "@ofa/core";
@@ -18,6 +20,7 @@ import {
   createToolRegistry,
   defineJsonSchemaTool,
   defineTool,
+  delegateTaskTool,
   editableTextFields,
   htmlToText,
   isPrivateAddress,
@@ -271,6 +274,58 @@ describe("tool executor", () => {
       type: "object",
       properties: { text: { type: "string", minLength: 1 } },
       required: ["text"],
+    });
+  });
+});
+
+describe("delegate_task (M5.01)", () => {
+  function withTeam(members: Awaited<ReturnType<TeamDirectory["members"]>>, mode: "auto" | "approve") {
+    const team: TeamDirectory = {
+      members: async () => members,
+      handoff: async () => {
+        throw new Error("the harness makes handoffs, not the tool");
+      },
+    };
+    const agent = agentWith([{ tool: "delegate_task", mode }]);
+    const agents = { get: async () => agent };
+    return createToolExecutor({
+      registry: createToolRegistry([delegateTaskTool(team)] as unknown as ToolDefinition<never>[]),
+      policy: createPolicyEngine({ agents }),
+      calls: memoryCalls(),
+      agents,
+    });
+  }
+  const researcher = { id: asId<AgentId>("res"), slug: "researcher", name: "Researcher", job: "Research" };
+  const brief = { agent: "Researcher", brief: "Find the release date of pgvector 0.9." };
+
+  it("names the agents a run can hand work to, and is left out when there are none", async () => {
+    const [tool] = await withTeam([researcher], "auto").listTools(ctx);
+    expect(tool?.name).toBe("delegate_task");
+    expect(tool?.description).toContain("Agents you can hand work to:\n- researcher: Researcher, Research");
+    // A run that was itself handed work gets no members: one level deep.
+    expect(await withTeam([], "auto").listTools(ctx)).toEqual([]);
+  });
+
+  it("checks the agent it names, and lets a person reword a held brief", async () => {
+    const run = withTeam([researcher], "auto");
+    expect(await run.execute(request("delegate_task", brief), ctx)).toMatchObject({
+      status: "ok",
+      content: "Handing the work to Researcher. Its result comes back here when it is done.",
+    });
+    expect(
+      await run.execute(request("delegate_task", { ...brief, agent: "nobody" }, "r:tool-1-0"), ctx),
+    ).toMatchObject({
+      status: "error",
+      code: "unknown_agent",
+      message: "There is no agent called nobody to hand work to. You can hand work to: researcher.",
+    });
+    expect(
+      await withTeam([researcher], "approve").execute(request("delegate_task", brief), ctx),
+    ).toMatchObject({
+      status: "blocked",
+      verdict: "approve",
+      summary: "Hand work to Researcher: “Find the release date of pgvector 0.9.”",
+      editable: ["brief"],
     });
   });
 });

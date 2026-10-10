@@ -21,6 +21,7 @@ const TOOL_LABELS: Record<string, [doing: string, done: string]> = {
   "files.read": ["Reading a file", "Read a file"],
   "files.write": ["Writing a file", "Wrote a file"],
   "files.list": ["Looking in a folder", "Looked in a folder"],
+  delegate_task: ["Handing work to another agent", "Handed work to another agent"],
 };
 
 export interface RunStep {

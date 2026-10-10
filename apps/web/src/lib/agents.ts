@@ -141,4 +141,10 @@ export const BUILTIN_TOOLS = [
     hint: "Read and write files on its computer, shared with your other agents.",
     starter: false,
   },
+  {
+    name: "delegate_task",
+    label: "Hand work to other agents",
+    hint: "Give another of your agents a task and use its answer. That agent works with its own tools and permissions.",
+    starter: false,
+  },
 ] as const;

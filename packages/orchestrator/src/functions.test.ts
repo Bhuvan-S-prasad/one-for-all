@@ -1,4 +1,12 @@
-import type { TenantContext, TokenRefresher } from "@ofa/core";
+import {
+  asId,
+  type AgentId,
+  type MessageId,
+  type RunId,
+  type TenantContext,
+  type ThreadId,
+  type TokenRefresher,
+} from "@ofa/core";
 import { NonRetriableError, RetryAfterError } from "inngest";
 import { describe, expect, it } from "vitest";
 import { inngestSteps, refreshDue, TOKEN_REFRESH_AHEAD_MS } from "./functions";
@@ -65,6 +73,42 @@ describe("inngestSteps", () => {
       },
     ]);
     await expect(wait("x' || true || '")).rejects.toThrow(/Unsafe/);
+  });
+
+  it("runs a handoff's child through invoke and reads back what it came to (M5.01)", async () => {
+    const child = {
+      agentId: asId<AgentId>("res"),
+      runId: asId<RunId>("child_1"),
+      threadId: asId<ThreadId>("handoff_1"),
+      messageId: asId<MessageId>("brief_1"),
+    };
+    const calls: unknown[] = [];
+    const steps = inngestSteps(step, async (id, request, timeoutMs) => {
+      calls.push({ id, request, timeoutMs });
+      return {
+        status: "succeeded",
+        stopReason: "final_answer",
+        usage: {},
+        messageId: "m",
+        reply: "Done: 3 papers.",
+        tainted: false,
+        learn: false,
+      };
+    });
+    expect(await steps.invokeRun!("tool-0-0-delegate", child, { timeoutMs: 500 })).toEqual({
+      status: "succeeded",
+      stopReason: "final_answer",
+      reply: "Done: 3 papers.",
+      tainted: false,
+    });
+    // Durable waits round up to a second.
+    expect(calls).toEqual([{ id: "tool-0-0-delegate", request: child, timeoutMs: 1_000 }]);
+
+    // A child that failed after its retries, or ran out of time, comes back as nothing.
+    const failing = inngestSteps(step, () => Promise.reject(new Error("function failed")));
+    expect(await failing.invokeRun!("x", child, { timeoutMs: 60_000 })).toBeNull();
+    // Without invoke, runs can't hand work over.
+    expect(inngestSteps(step).invokeRun).toBeUndefined();
   });
 });
 

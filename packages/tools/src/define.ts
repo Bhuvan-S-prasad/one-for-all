@@ -115,6 +115,12 @@ export interface ToolDefinition<Input = unknown> {
   readonly editable?: readonly string[];
   /** The approval card lists the arguments, because `describe` doesn't say them. */
   readonly showArgs?: boolean;
+  /**
+   * Called when a run's tool list is made: the description for this run,
+   * naming what is there now (the agents it can hand work to), or null to
+   * leave the tool out of this run's list. Without it the tool is listed as is.
+   */
+  listed?(ctx: RunContext): Promise<{ readonly description: string } | null>;
 }
 
 /** Argument names that hold words a person writes: a message, a title, a comment. */

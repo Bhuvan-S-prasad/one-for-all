@@ -92,6 +92,13 @@ export type Run = z.infer<typeof runSchema>;
 // Payloads never contain credentials (hard rule 4): tool arguments and results
 // are redacted before they are appended, and results appear only as previews.
 
+/**
+ * How a handoff ended, as the delegating agent is told (M5.01): `done` with
+ * an answer, `stopped` at a budget, or no answer at all.
+ */
+export const DELEGATION_STATUSES = ["done", "stopped", "failed", "cancelled"] as const;
+export type DelegationStatus = (typeof DELEGATION_STATUSES)[number];
+
 /** Shown in the Activity view; the full output lives in an artifact. */
 const preview = z.string().max(500);
 const toolName = z.string().max(100);
@@ -179,6 +186,19 @@ const RUN_EVENT_PAYLOADS = {
     scope: z.enum(MEMORY_SCOPES),
     verified: z.boolean(),
   }),
+  /** Work handed to another agent as a child run (M5.01). */
+  "delegation.started": z.object({
+    toolCallId: idSchema,
+    childRunId: idSchema,
+    agentId: idSchema,
+    agentName: z.string().max(200),
+  }),
+  "delegation.finished": z.object({
+    toolCallId: idSchema,
+    childRunId: idSchema,
+    status: z.enum(DELEGATION_STATUSES),
+    preview,
+  }),
 } as const;
 
 type Payloads = typeof RUN_EVENT_PAYLOADS;
@@ -209,6 +229,8 @@ export const runEventInputSchema = z.discriminatedUnion("type", [
   body("tool.completed"),
   body("tool.failed"),
   body("memory.written"),
+  body("delegation.started"),
+  body("delegation.finished"),
 ]);
 export type RunEventInput = z.infer<typeof runEventInputSchema>;
 

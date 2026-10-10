@@ -7,7 +7,7 @@ export const devicePlatform = pgEnum("device_platform", ["ios", "android", "web"
 
 export const agentStatus = pgEnum("agent_status", ["active", "paused", "archived"]);
 
-export const threadKind = pgEnum("thread_kind", ["direct", "group"]);
+export const threadKind = pgEnum("thread_kind", ["direct", "group", "handoff"]);
 
 /** Who can be in a thread. */
 export const participantType = pgEnum("participant_type", ["user", "agent"]);

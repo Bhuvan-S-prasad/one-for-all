@@ -1,5 +1,12 @@
 import type { LLMMessage, ToolDescriptor } from "@ofa/core";
-import { AGENT_IDENTITY, AGENT_VOICE, PLATFORM_RULES, TASK_STATE, promptRef } from "./prompts";
+import {
+  AGENT_IDENTITY,
+  AGENT_VOICE,
+  HANDOFF_BRIEF,
+  PLATFORM_RULES,
+  TASK_STATE,
+  promptRef,
+} from "./prompts";
 import { estimateMessages, estimateTokens, estimateTools, truncateToTokens } from "./tokens";
 
 // Context assembly (ARCHITECTURE.md §7): the prompt is built from typed
@@ -12,6 +19,11 @@ export interface HistoryMessage {
   /** The agent that wrote it, for agent messages. */
   readonly agentId: string | null;
   readonly content: string;
+  /**
+   * Another agent's brief, framed with `HANDOFF_BRIEF` and shown as the
+   * request (M5.01). Its author is another model, not the person.
+   */
+  readonly handoff?: boolean;
 }
 
 export interface ToolCallTurn {
@@ -221,7 +233,13 @@ export function assembleContext(input: ContextInput, budget: ContextBudget): Ass
     messages,
     tools,
     maxOutputTokens: budget.output,
-    promptVersion: [PLATFORM_RULES, AGENT_IDENTITY, AGENT_VOICE, TASK_STATE]
+    promptVersion: [
+      PLATFORM_RULES,
+      AGENT_IDENTITY,
+      AGENT_VOICE,
+      TASK_STATE,
+      ...(input.history.some((m) => m.handoff) ? [HANDOFF_BRIEF] : []),
+    ]
       .map(promptRef)
       .join("+"),
     tokens: { total, blocks },

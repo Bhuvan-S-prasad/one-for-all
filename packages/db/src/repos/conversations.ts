@@ -320,6 +320,89 @@ export async function startTurn(
   });
 }
 
+/**
+ * A handoff (M5.01): its own thread, the brief as the first message (written
+ * by the agent handing the work over), and the queued child run, together.
+ * IDs come from the caller, derived from the handing run's tool call, so a
+ * retried step finds what it made the first time instead of making another.
+ */
+export async function startHandoff(
+  db: Database,
+  ctx: TenantContext,
+  input: {
+    threadId: string;
+    runId: string;
+    parentRunId: string;
+    fromAgentId: string;
+    toAgentId: string;
+    brief: string;
+    title: string;
+    tainted: boolean;
+  },
+): Promise<{ messageId: string; created: boolean }> {
+  return withTenant(db, ctx, async (tx) => {
+    const [made] = await tx
+      .insert(thread)
+      .values({
+        id: input.threadId,
+        workspaceId: ctx.workspaceId,
+        kind: "handoff",
+        title: input.title,
+        createdBy: ctx.userId,
+      })
+      .onConflictDoNothing({ target: thread.id })
+      .returning({ id: thread.id });
+    if (!made) {
+      const [brief] = await tx
+        .select({ id: message.id })
+        .from(message)
+        .where(and(eq(message.threadId, input.threadId), eq(message.runId, input.runId)))
+        .orderBy(asc(message.createdAt))
+        .limit(1);
+      if (!brief) throw new Error("handoff thread has no brief");
+      return { messageId: brief.id, created: false };
+    }
+    await tx.insert(threadMember).values([
+      { workspaceId: ctx.workspaceId, threadId: made.id, memberType: "user", userId: ctx.userId },
+      {
+        workspaceId: ctx.workspaceId,
+        threadId: made.id,
+        memberType: "agent",
+        agentId: input.fromAgentId,
+      },
+      {
+        workspaceId: ctx.workspaceId,
+        threadId: made.id,
+        memberType: "agent",
+        agentId: input.toAgentId,
+      },
+    ]);
+    await tx.insert(run).values({
+      id: input.runId,
+      workspaceId: ctx.workspaceId,
+      agentId: input.toAgentId,
+      threadId: made.id,
+      parentRunId: input.parentRunId,
+      trigger: "delegation",
+      triggeredBy: ctx.userId,
+      tainted: input.tainted,
+    });
+    const [brief] = await tx
+      .insert(message)
+      .values({
+        workspaceId: ctx.workspaceId,
+        threadId: made.id,
+        authorType: "agent",
+        authorAgentId: input.fromAgentId,
+        content: input.brief,
+        runId: input.runId,
+      })
+      .returning({ id: message.id });
+    if (!brief) throw new Error("message insert returned no row");
+    return { messageId: brief.id, created: true };
+  });
+}
+
 /** The person's message that started a run, if a message started it. */
 export async function runRequestMessage(
   db: Database,

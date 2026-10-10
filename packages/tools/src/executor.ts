@@ -173,8 +173,18 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
       if (!agent) return [];
       const kits = await grantedKits(ctx, agent, new Set(listing.toolkits ?? []));
       const waiting = kits.filter((k) => !k.summary.loaded).map((k) => k.summary);
+      // Tools that describe themselves per run (the agents a run can hand work to).
+      const listed = new Map<string, { readonly description: string } | null>();
+      for (const d of registry.descriptors()) {
+        const tool = registry.get(d.name);
+        if (tool?.listed && visible(agent, d.name)) listed.set(d.name, await tool.listed(ctx));
+      }
       const builtins = registry.descriptors().flatMap((d) => {
         if (!visible(agent, d.name)) return [];
+        if (listed.has(d.name)) {
+          const own = listed.get(d.name);
+          return own ? [{ ...d, description: own.description }] : [];
+        }
         if (d.name !== LOAD_TOOLKIT) return [d];
         // Only when something is waiting, naming what is and its tools, so the
         // agent can pick from a large app in one call.

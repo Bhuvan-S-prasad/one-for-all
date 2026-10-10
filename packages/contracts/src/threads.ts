@@ -4,7 +4,8 @@ import { runSchema } from "./runs";
 
 // Conversations between people and agents (ARCHITECTURE.md §6.3, §15).
 
-export const threadKindSchema = z.enum(["direct", "group"]);
+/** `handoff`: one agent handed work to another (M5.01); the brief, then the reply. */
+export const threadKindSchema = z.enum(["direct", "group", "handoff"]);
 export type ThreadKind = z.infer<typeof threadKindSchema>;
 
 /** Group threads hold two to six agents. */

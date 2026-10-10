@@ -143,6 +143,16 @@ export function createRunStore(db: Database, options: RuntimeStoreOptions = {}):
         inserted.map((row) => ({ kind: "run.event" as const, runId, seq: row.seq })),
       );
     },
+
+    async activeChildren(ctx, runId) {
+      const rows = await withTenant(db, ctx, (tx) =>
+        tx
+          .select({ id: run.id })
+          .from(run)
+          .where(and(eq(run.parentRunId, runId), notInArray(run.status, [...TERMINAL]))),
+      );
+      return rows.map((row) => asId<RunId>(row.id));
+    },
   };
 }
 
@@ -214,11 +224,19 @@ export function createThreadStore(db: Database, options: RuntimeStoreOptions = {
 
     async addAgentMessage(ctx, input) {
       const { id, created } = await withTenant(db, ctx, async (tx) => {
-        // A run posts one reply. A retried step finds it instead of posting twice.
+        // A run posts one reply. A retried step finds it instead of posting
+        // twice. By its own agent: a handoff's brief, written by the agent
+        // handing the work over, carries the child run's ID too (M5.01).
         const [existing] = await tx
           .select({ id: message.id })
           .from(message)
-          .where(and(eq(message.runId, ctx.runId), eq(message.authorType, "agent")))
+          .where(
+            and(
+              eq(message.runId, ctx.runId),
+              eq(message.authorType, "agent"),
+              eq(message.authorAgentId, ctx.agentId),
+            ),
+          )
           .limit(1);
         if (existing) return { id: existing.id, created: false };
         const [row] = await tx

@@ -1,4 +1,4 @@
-import { INNGEST_EVENTS, type RunStopReason } from "@ofa/contracts";
+import { INNGEST_EVENTS, type DelegationStatus, type RunStopReason } from "@ofa/contracts";
 import {
   APPROVAL_TIMEOUT_MS,
   toolkitToolName,
@@ -7,6 +7,7 @@ import {
   type AgentDirectory,
   type AgentProfile,
   type ApprovalStore,
+  type ChildRunResult,
   type LLMGateway,
   type LLMRequest,
   type MemoryStore,
@@ -15,6 +16,7 @@ import {
   type RunStore,
   type RunUsageTotals,
   type StepRunner,
+  type TeamDirectory,
   type ThreadId,
   type ThreadStore,
   type ToolDescriptor,
@@ -32,6 +34,7 @@ import {
 } from "./context";
 import { modelCallEvents, runEvent } from "./events";
 import { MiddlewareChain, type HarnessMiddleware, type RunHookContext } from "./middleware";
+import { HANDOFF_BRIEF } from "./prompts";
 import { redactJson, type RedactText } from "./redaction";
 
 // The agent loop (ARCHITECTURE.md §6.2). Every side effect happens inside a
@@ -53,6 +56,11 @@ export interface HarnessOptions {
   readonly loopRepeatLimit?: number;
   /** How long a run waits for a person to answer an approval. Default 24 hours. */
   readonly approvalTimeoutMs?: number;
+  /**
+   * How long a run waits for work it handed to another agent. Default 25
+   * hours: the child may itself wait a day for a person's approval.
+   */
+  readonly delegationTimeoutMs?: number;
 }
 
 export interface HarnessDeps {
@@ -67,6 +75,11 @@ export interface HarnessDeps {
    * wait, calls that need a person are refused.
    */
   readonly approvals?: ApprovalStore;
+  /**
+   * The agents a run can hand work to (M5.01). Without it, or a step runner
+   * that can start child runs, `delegate_task` is refused.
+   */
+  readonly team?: TeamDirectory;
   /**
    * Replaces known secret values (the vault's redaction). Applied to every
    * run event, approval request and reply before it is stored (hard rule 4).
@@ -87,6 +100,10 @@ export interface RunResult {
   readonly stopReason: RunStopReason | null;
   readonly usage: RunUsageTotals;
   readonly messageId: string | null;
+  /** The reply it posted; a delegating run reads it as the result (M5.01). */
+  readonly reply: string | null;
+  /** It read outside content, so the reply may carry someone else's words. */
+  readonly tainted: boolean;
   /**
    * Worth a learning pass. Memory extraction runs after the run, in its own
    * function, so the agent is free for the next message as soon as it replies.
@@ -103,6 +120,27 @@ const EMPTY_USAGE: RunUsageTotals = {
 };
 
 const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
+
+/** Handing work to another agent (M5.01); the harness runs the handoff itself. */
+const DELEGATE_TASK = "delegate_task";
+const DELEGATION_TIMEOUT_MS = 25 * 60 * 60_000;
+/** Of a child's reply, what the delegating model reads. */
+const DELEGATION_ANSWER_CHARS = 8_000;
+
+/** How a child run ended, in the words the delegating model is told. */
+function delegationStatus(child: ChildRunResult | null): DelegationStatus {
+  if (!child || child.status === "failed") return "failed";
+  if (child.status === "cancelled" || child.status === "skipped") return "cancelled";
+  return child.stopReason === "final_answer" ? "done" : "stopped";
+}
+
+const DELEGATION_NOTES: Record<DelegationStatus, string> = {
+  done: "",
+  stopped: "It stopped before finishing; the answer is what it had.",
+  failed:
+    "Its run failed, so nothing came back. Tell the person, or do the work yourself if you can.",
+  cancelled: "Its run was stopped, so nothing came back.",
+};
 
 function addUsage(
   usage: RunUsageTotals,
@@ -252,6 +290,8 @@ export async function runAgent(
         stopReason: null,
         usage: EMPTY_USAGE,
         messageId: null,
+        reply: null,
+        tainted: false,
         learn: false,
       };
     }
@@ -266,6 +306,8 @@ export async function runAgent(
         usage: EMPTY_USAGE,
         error: { code: "agent_inactive", message: `${agent.name} is ${agent.status}` },
         messageId: null,
+        reply: null,
+        tainted,
       });
     }
 
@@ -274,7 +316,17 @@ export async function runAgent(
       const history: HistoryMessage[] = input.threadId
         ? (
             await deps.threads.recentMessages(ctx, input.threadId, options.historyMessages ?? 30)
-          ).map((m) => ({ author: m.author, agentId: m.agentId, content: m.content }))
+          ).map((m) =>
+            // Work handed over by another agent (M5.01) is this run's request.
+            input.trigger === "delegation" && m.author === "agent" && m.agentId !== ctx.agentId
+              ? {
+                  author: "user" as const,
+                  agentId: null,
+                  content: HANDOFF_BRIEF.render({ brief: m.content }),
+                  handoff: true,
+                }
+              : { author: m.author, agentId: m.agentId, content: m.content },
+          )
         : [];
       const lastUser = [...history].reverse().find((m) => m.author === "user")?.content ?? "";
       const memories =
@@ -298,7 +350,13 @@ export async function runAgent(
     const learnUrls = (text: string) => {
       for (const url of urlsIn(text)) knownUrls.add(urlKey(url));
     };
-    for (const message of context.history) learnUrls(message.content);
+    for (const message of context.history) {
+      // A brief was written by another model. If that run had read outside
+      // content (so this one starts tainted), addresses in it were not given
+      // by a person and must not open freely here (ADR-0027).
+      if (message.handoff && start.tainted) continue;
+      learnUrls(message.content);
+    }
 
     // ── The loop ─────────────────────────────────────────────────────────────
     let usage = EMPTY_USAGE;
@@ -462,9 +520,13 @@ export async function runAgent(
         toolCalls: step.toolCalls.map(({ id, name, args }) => ({ id, name, args })),
       });
 
+      // Handoffs this step asked for, run together once its calls are checked (M5.02).
+      const handoffs: { toolCallId: string; turn: number; args: unknown }[] = [];
       for (const [j, offered] of step.toolCalls.entries()) {
         const toolCallId = `tool-${i}-${j}`;
         const call = withLoadHint(offered, tools);
+        /** The call as it ran: with the person's changes, if they made any. */
+        let ran: ToolCallTurn = call;
         let result: ToolStepResult = await steps.run(toolCallId, () =>
           runTool(toolCallId, call, tainted),
         );
@@ -477,6 +539,7 @@ export async function runAgent(
             const asApproved = edits
               ? { ...call, args: { ...(call.args as Record<string, unknown>), ...edits } }
               : call;
+            ran = asApproved;
             result = await steps.run(`${toolCallId}-approved`, () =>
               runTool(toolCallId, asApproved, tainted, true),
             );
@@ -519,6 +582,9 @@ ${result.content}`,
             );
           }
         }
+        if (result.ok && call.name === DELEGATE_TASK) {
+          handoffs.push({ toolCallId, turn: turns.length, args: ran.args });
+        }
         turns.push({
           kind: "tool",
           toolCallId: call.id,
@@ -528,6 +594,24 @@ ${result.content}`,
         });
         learnUrls(result.content);
       }
+
+      // Fork-join (§6.3): every handoff from this step runs at once, and the
+      // run carries on when all of them have come back.
+      if (handoffs.length > 0) {
+        const taintedBefore = tainted;
+        const results = await Promise.all(
+          handoffs.map((h) => delegate(h.toolCallId, h.args, taintedBefore)),
+        );
+        for (const [n, h] of handoffs.entries()) {
+          const done = results[n]!;
+          const turn = turns[h.turn];
+          if (turn?.kind === "tool") {
+            turns[h.turn] = { ...turn, content: done.content, untrusted: done.untrusted };
+          }
+          if (done.untrusted) tainted = true;
+          learnUrls(done.content);
+        }
+      }
     }
 
     // ── Reply ────────────────────────────────────────────────────────────────
@@ -535,7 +619,7 @@ ${result.content}`,
       stopReason === "final_answer"
         ? finalText || "I don't have anything to add."
         : (STOP_NOTES[stopReason] ?? "I stopped before finishing.");
-    const messageId = input.threadId
+    const posted = input.threadId
       ? await steps.run("reply", async () => {
           const content = await redact(ctx, replyText);
           const id = await deps.threads.addAgentMessage(ctx, {
@@ -548,11 +632,22 @@ ${result.content}`,
               preview: preview(content, 280),
             }),
           ]);
-          return id as string;
+          // The reply as posted (redacted): a delegating run reads it back
+          // from the step's stored result (M5.01).
+          return { id: id as string, content };
         })
       : null;
 
-    return await finish({ status: "succeeded", stopReason, usage, messageId });
+    // A run that posted before this step returned the content kept its ID only.
+    const reply = typeof posted === "string" ? { id: posted, content: null } : posted;
+    return await finish({
+      status: "succeeded",
+      stopReason,
+      usage,
+      messageId: reply?.id ?? null,
+      reply: reply?.content ?? null,
+      tainted,
+    });
   } catch (error) {
     await chain.error(hook, error);
     throw error;
@@ -789,11 +884,103 @@ ${result.content}`,
     };
   }
 
+  /**
+   * Hand work to another agent and wait for the result (§6.3): make the child
+   * run, run it, and turn what came back into the call's result. The brief is
+   * the call as it ran, with any change a person made. A child of a tainted
+   * run starts tainted; a child that read outside content returns its reply
+   * as outside content, so this run is tainted from here (ADR-0013).
+   */
+  async function delegate(
+    toolCallId: string,
+    args: unknown,
+    taintedBefore: boolean,
+  ): Promise<{ content: string; untrusted: boolean }> {
+    const { team } = deps;
+    if (!team || !steps.invokeRun) {
+      return {
+        content: "Not done: handing work to another agent isn't available here. Do it yourself.",
+        untrusted: false,
+      };
+    }
+    const { agent, brief } = args as { agent: string; brief: string };
+    const started = await steps.run(`${toolCallId}-handoff`, async () => {
+      try {
+        const handoff = await team.handoff(ctx, {
+          key: `${ctx.runId}:${toolCallId}`,
+          agent,
+          brief: await redact(ctx, brief),
+        });
+        await log([
+          runEvent(`${toolCallId}-handoff`, "delegation.started", {
+            toolCallId,
+            childRunId: handoff.runId,
+            agentId: handoff.agentId,
+            agentName: handoff.agentName,
+          }),
+        ]);
+        return { ok: true as const, handoff };
+      } catch (error) {
+        return { ok: false as const, message: errorMessage(error) };
+      }
+    });
+    if (!started.ok) return { content: `Not done: ${started.message}`, untrusted: false };
+    const { handoff } = started;
+
+    const child = await steps.invokeRun(
+      `${toolCallId}-delegate`,
+      {
+        agentId: handoff.agentId,
+        runId: handoff.runId,
+        threadId: handoff.threadId,
+        messageId: handoff.messageId,
+      },
+      { timeoutMs: options.delegationTimeoutMs ?? DELEGATION_TIMEOUT_MS },
+    );
+
+    return steps.run(`${toolCallId}-delegated`, async () => {
+      const status = delegationStatus(child);
+      const reply = child?.reply?.trim() ?? "";
+      const answer =
+        status === "done" || status === "stopped"
+          ? reply.length > DELEGATION_ANSWER_CHARS
+            ? `${reply.slice(0, DELEGATION_ANSWER_CHARS)}\n…[cut at ${DELEGATION_ANSWER_CHARS} characters]`
+            : reply
+          : "";
+      const untrusted = answer !== "" && (child?.tainted ?? false);
+      const note = DELEGATION_NOTES[status];
+      const content = JSON.stringify({
+        agent: handoff.agentName,
+        status,
+        ...(answer ? { answer } : {}),
+        ...(note ? { note } : {}),
+      });
+      const events: RunEventWrite[] = [
+        runEvent(`${toolCallId}-delegated`, "delegation.finished", {
+          toolCallId,
+          childRunId: handoff.runId,
+          status,
+          preview: preview(answer || note, 500),
+        }),
+      ];
+      if (untrusted && !taintedBefore) {
+        events.push(
+          runEvent(`${toolCallId}-delegated-taint`, "run.tainted", { source: DELEGATE_TASK }),
+        );
+      }
+      await log(events);
+      if (untrusted && !taintedBefore) await deps.runs.update(ctx, ctx.runId, { tainted: true });
+      return { content, untrusted };
+    });
+  }
+
   async function finish(result: {
     status: "succeeded" | "failed";
     stopReason: RunStopReason;
     usage: RunUsageTotals;
     messageId: string | null;
+    reply: string | null;
+    tainted: boolean;
     error?: { code: string; message: string };
   }): Promise<RunResult> {
     await steps.run("finish", async () => {
@@ -820,7 +1007,11 @@ ${result.content}`,
       stopReason: result.stopReason,
       usage: result.usage,
       messageId: result.messageId,
+      reply: result.reply,
+      tainted: result.tainted,
+      // Not from a handoff: its request was written by another model, not the person.
       learn:
+        input.trigger !== "delegation" &&
         result.status === "succeeded" &&
         result.stopReason === "final_answer" &&
         result.messageId !== null &&

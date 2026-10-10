@@ -8,6 +8,8 @@ import {
 import {
   asId,
   type ApprovalStore,
+  type ChildRunRequest,
+  type ChildRunResult,
   type RunContext,
   type RunStore,
   type StepRunner,
@@ -39,18 +41,58 @@ export const TOKEN_REFRESH_AHEAD_MS = 15 * 60_000;
 const NOT_RETRYABLE = new Set(["auth", "bad_request", "context_length"]);
 
 /**
+ * Starts a child run and waits for what it returns (Inngest `step.invoke` on
+ * the `agent-run` function); throws if it failed or ran out of time.
+ */
+export type InvokeChildRun = (
+  id: string,
+  child: ChildRunRequest,
+  timeoutMs: number,
+) => Promise<unknown>;
+
+/**
  * Adapt Inngest's `step.run` to the harness's `StepRunner`, and turn model
  * errors into Inngest's retry signals: wait for capacity, or stop retrying.
+ * With `invoke`, runs can hand work to other agents (M5.01).
  */
-export function inngestSteps(step: {
-  run: (id: string, fn: () => Promise<unknown>) => Promise<unknown>;
-  waitForEvent?: (
-    id: string,
-    opts: { event: string; timeout: number; if: string },
-  ) => Promise<{ data?: unknown } | null>;
-}): StepRunner {
+export function inngestSteps(
+  step: {
+    run: (id: string, fn: () => Promise<unknown>) => Promise<unknown>;
+    waitForEvent?: (
+      id: string,
+      opts: { event: string; timeout: number; if: string },
+    ) => Promise<{ data?: unknown } | null>;
+  },
+  invoke?: InvokeChildRun,
+): StepRunner {
   const waitForEvent = step.waitForEvent?.bind(step);
   return {
+    ...(invoke
+      ? {
+          async invokeRun(id, child, { timeoutMs }) {
+            try {
+              const result = (await invoke(id, child, Math.max(1_000, timeoutMs))) as {
+                status?: ChildRunResult["status"];
+                stopReason?: string | null;
+                reply?: string | null;
+                tainted?: boolean;
+              } | null;
+              if (!result?.status) return null;
+              return {
+                status: result.status,
+                stopReason: result.stopReason ?? null,
+                reply: result.reply ?? null,
+                // Not knowing is treated as having read outside content.
+                tainted: result.tainted ?? true,
+              };
+            } catch {
+              // The child failed after its retries, or ran past the timeout;
+              // its own run says why.
+              return null;
+            }
+          },
+        }
+      : {}),
     ...(waitForEvent
       ? {
           async waitForEvent(id, { event, field, value, timeoutMs }) {
@@ -101,6 +143,10 @@ function failureText(error: unknown): string {
 }
 
 export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
+  // A handoff's child is another `agent-run` (M5.01). The function invokes
+  // itself, so it is reached through this holder rather than by name.
+  const self: { agentRun?: InngestFunction.Any } = {};
+
   const agentRun = inngest.createFunction(
     {
       id: "agent-run",
@@ -154,10 +200,24 @@ export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
         agentId: asId(data.agentId),
         runId: asId(data.runId),
       };
+      const invoke: InvokeChildRun = (id, child, timeoutMs) =>
+        step.invoke(id, {
+          function: self.agentRun!,
+          data: messageReceivedEventSchema.parse({
+            workspaceId: data.workspaceId,
+            userId: data.userId,
+            agentId: child.agentId,
+            threadId: child.threadId,
+            messageId: child.messageId,
+            runId: child.runId,
+            trigger: "delegation",
+          }),
+          timeout: timeoutMs,
+        });
       const result = await runAgent(
         { ctx, threadId: asId<ThreadId>(data.threadId), trigger: data.trigger },
         deps.harness,
-        inngestSteps(step),
+        inngestSteps(step, invoke),
       );
       if (result.learn && result.messageId) {
         // Learning runs as its own function, so this agent's next message
@@ -178,6 +238,7 @@ export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
       return result;
     },
   );
+  self.agentRun = agentRun;
 
   // Memory extraction after an answered run (ARCHITECTURE.md §8). Learning is
   // a bonus: a failure here is logged by Inngest and never reaches the person.
@@ -217,6 +278,25 @@ export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
     async ({ event, step }) => {
       const data = runCancelledEventSchema.parse(event.data);
       const ctx: TenantContext = { workspaceId: asId(data.workspaceId), userId: asId(data.userId) };
+      // Work it handed to other agents stops too (M5.01); each child stops
+      // its own children the same way.
+      const children = await step.run(
+        "find-children",
+        async () => (await deps.runs.activeChildren?.(ctx, asId(data.runId))) ?? [],
+      );
+      if (children.length > 0) {
+        await step.sendEvent(
+          "cancel-children",
+          children.map((childId) => ({
+            name: INNGEST_EVENTS.runCancelled,
+            data: runCancelledEventSchema.parse({
+              workspaceId: data.workspaceId,
+              userId: data.userId,
+              runId: childId,
+            }),
+          })),
+        );
+      }
       await step.run("mark-cancelled", async () => {
         const run = await deps.runs.get(ctx, asId(data.runId));
         if (!run || ["succeeded", "failed", "cancelled"].includes(run.status)) return false;

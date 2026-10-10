@@ -100,9 +100,12 @@ export async function runPreviews(
       .select({
         runId: message.runId,
         authorType: message.authorType,
+        // A handoff's brief is written by the agent handing the work over (M5.01).
+        byRunAgent: sql<boolean>`${message.authorAgentId} = ${run.agentId}`,
         text: sql<string>`left(${message.content}, ${chars})`,
       })
       .from(message)
+      .innerJoin(run, eq(run.id, message.runId))
       .where(
         and(inArray(message.runId, [...runIds]), inArray(message.authorType, ["user", "agent"])),
       )
@@ -111,7 +114,7 @@ export async function runPreviews(
   for (const row of rows) {
     if (!row.runId) continue;
     const entry = previews.get(row.runId) ?? { request: null, reply: null };
-    if (row.authorType === "user") entry.request ??= row.text;
+    if (row.authorType === "user" || !row.byRunAgent) entry.request ??= row.text;
     else entry.reply ??= row.text;
     previews.set(row.runId, entry);
   }

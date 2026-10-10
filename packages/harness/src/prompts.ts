@@ -102,6 +102,22 @@ export const TASK_STATE: PromptTemplate<{
       .join("\n\n"),
 };
 
+/**
+ * A brief from another agent, as the agent it was handed to reads it (M5.01).
+ * Its reply goes back to the agent that handed the work over.
+ */
+export const HANDOFF_BRIEF: PromptTemplate<{ readonly brief: string }> = {
+  id: "harness.handoff",
+  version: 1,
+  render: ({ brief }) =>
+    [
+      "Another agent in this workspace handed you this task. Do it with your own tools, then reply with the result. Your reply goes back to that agent, not to the person, so make it complete and self-contained.",
+      "",
+      "The task:",
+      brief,
+    ].join("\n"),
+};
+
 /** Turns older steps of a long run into a compact summary (M2.12). */
 export const COMPACTION: PromptTemplate<{
   readonly previous: string;

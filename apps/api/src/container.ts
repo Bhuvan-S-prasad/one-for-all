@@ -81,6 +81,7 @@ import { createAuth, type Auth } from "./auth/auth";
 import { createLogger, type Logger } from "./lib/logger";
 import { createSessionService, type SessionService } from "./services/sessions";
 import { createSetupService, type SetupService } from "./services/setup";
+import { createTeamDirectory } from "./services/team";
 
 /**
  * Model providers this build can use (ADR-0022). `LLM_PROVIDER` picks one.
@@ -317,6 +318,8 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
   const sandbox = config.sandbox ? createDockerSandbox(config.sandbox) : null;
   const artifacts = createArtifactStore(db);
   const approvals = createApprovalStore(db);
+  // The other agents a run can hand work to (M5.01).
+  const team = createTeamDirectory(db);
   const connections = createConnectionStore(db);
   // Apps through MCP (ADR-0011): sign-ins are sealed by the vault, so no vault, no connections.
   const mcp = fullVault
@@ -347,6 +350,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
           ? createSearxngProvider({ baseUrl: config.search.searxngUrl })
           : null,
         sandbox,
+        team,
       }).concat(overrides.extraTools ?? []),
     ),
     policy: createPolicyEngine({ agents, rules: createPolicyRuleStore(db) }),
@@ -377,6 +381,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     threads,
     memory,
     approvals,
+    team,
     redact: (ctx, text) => vault.redact(ctx, text),
     middleware: [createTelemetryMiddleware(telemetry)],
   };

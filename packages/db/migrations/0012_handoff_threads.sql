@@ -1,0 +1,1 @@
+ALTER TYPE "public"."thread_kind" ADD VALUE 'handoff';

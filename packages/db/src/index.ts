@@ -29,6 +29,7 @@ export {
   listMessages,
   newDirectThread,
   runRequestMessage,
+  startHandoff,
   startTurn,
   updateThread,
   type MessageRow,
