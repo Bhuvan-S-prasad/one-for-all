@@ -4,6 +4,7 @@ import type {
   CreateAgentInput,
   CreatePolicyRuleInput,
   CreateRoutineRequest,
+  CreateSkillRequest,
   CreateThreadRequest,
   FirstRunSetupRequest,
   LoginRequest,
@@ -15,6 +16,7 @@ import type {
   Thread,
   UpdateAgentRequest,
   UpdateRoutineRequest,
+  UpdateSkillRequest,
   UpdateThreadRequest,
 } from "@ofa/contracts";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -466,6 +468,55 @@ export function useSetTimeZone() {
   return useMutation({
     mutationFn: (timeZone: string) => api.setTimeZone(timeZone),
     onSuccess: (settings) => queryClient.setQueryData(queryKeys.workspaceSettings, settings),
+  });
+}
+
+// ── Skills (M5.08) and episodes (M5.09) ──────────────────────────────────────
+
+/** All skills, or one agent's with the shared ones (for `/` in its chat). */
+export function useSkills(agentId?: string) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: queryKeys.skills(agentId),
+    queryFn: async () => (await api.listSkills({ agentId })).items,
+    staleTime: 30_000,
+  });
+}
+
+export function useCreateSkill() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateSkillRequest) => api.createSkill(input),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.skillLists }),
+  });
+}
+
+/** Edit, approve or retire a skill. */
+export function useUpdateSkill() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: UpdateSkillRequest }) =>
+      api.updateSkill(id, patch),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.skillLists }),
+  });
+}
+
+export function useDeleteSkill() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.deleteSkill(id),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.skillLists }),
+  });
+}
+
+export function useEpisodes(agentId?: string) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: queryKeys.episodes(agentId),
+    queryFn: async () => (await api.listEpisodes({ agentId })).items,
   });
 }
 

@@ -1,5 +1,11 @@
 export { compactTurns, transcriptOf, type CompactionResult } from "./compaction";
 export {
+  consolidateMemory,
+  parsePlan,
+  type ConsolidateInput,
+  type ConsolidationPlan,
+} from "./consolidate";
+export {
   assembleContext,
   contextBudget,
   turnMessages,
@@ -18,7 +24,7 @@ export {
   type RunInput,
   type RunResult,
 } from "./loop";
-export { parseFacts } from "./memory-extraction";
+export { parseExtraction, parseFacts, scopeFor, type FactAbout } from "./memory-extraction";
 export {
   MiddlewareChain,
   type HarnessMiddleware,
@@ -29,7 +35,9 @@ export {
   AGENT_IDENTITY,
   AGENT_VOICE,
   COMPACTION,
+  MEMORY_CONSOLIDATION,
   MEMORY_EXTRACTION,
+  SKILL_IN_USE,
   PLATFORM_RULES,
   promptRef,
   type PromptTemplate,

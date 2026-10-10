@@ -74,6 +74,11 @@ export {
   useSetTimeZone,
   useUpdateRoutine,
   useWorkspaceSettings,
+  useCreateSkill,
+  useDeleteSkill,
+  useEpisodes,
+  useSkills,
+  useUpdateSkill,
 } from "./hooks";
 export {
   agentQuery,

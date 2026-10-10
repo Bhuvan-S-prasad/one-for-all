@@ -33,6 +33,8 @@ export const TENANT_TABLES = [
   "policy_rule",
   "routine",
   "schedule",
+  "skill",
+  "episode",
 ] as const;
 
 /**

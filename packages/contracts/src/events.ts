@@ -20,6 +20,8 @@ export const INNGEST_EVENTS = {
   scheduleCreated: "schedule/item.created",
   /** A person cancelled a task or reminder before it was due. */
   scheduleCancelled: "schedule/item.cancelled",
+  /** Consolidate a workspace's memory now, not at 3 at night (M5.09). */
+  memoryConsolidationRequested: "memory/consolidation.requested",
 } as const;
 
 export const messageReceivedEventSchema = z.object({
@@ -71,3 +73,8 @@ export type ScheduleCreatedEvent = z.infer<typeof scheduleCreatedEventSchema>;
 
 export const scheduleCancelledEventSchema = z.object({ ...tenant, scheduleId: idSchema });
 export type ScheduleCancelledEvent = z.infer<typeof scheduleCancelledEventSchema>;
+
+export const memoryConsolidationRequestedEventSchema = z.object({ ...tenant });
+export type MemoryConsolidationRequestedEvent = z.infer<
+  typeof memoryConsolidationRequestedEventSchema
+>;

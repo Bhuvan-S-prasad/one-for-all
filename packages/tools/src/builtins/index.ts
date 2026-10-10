@@ -1,9 +1,16 @@
-import type { MemoryStore, SandboxProvider, Scheduler, TeamDirectory } from "@ofa/core";
+import type {
+  MemoryStore,
+  SandboxProvider,
+  Scheduler,
+  SkillLibrary,
+  TeamDirectory,
+} from "@ofa/core";
 import type { ToolDefinition } from "../define";
 import { artifactsReadTool } from "./artifacts";
 import { browserTools, fileTools, shellTool, useSavedLoginTool } from "./computer";
 import { recallTool, rememberTool, todoTool } from "./memory";
 import { remindMeTool, scheduleTaskTool } from "./schedule";
+import { runSkillTool, saveSkillTool } from "./skills";
 import { loadToolkitTool } from "./toolkits";
 import { delegateTaskTool, messageAgentTool } from "./team";
 import { readUrlTool, webSearchTool, type Fetcher, type WebSearchProvider } from "./web";
@@ -21,6 +28,8 @@ export interface BuiltinToolDeps {
   readonly team?: TeamDirectory | null;
   /** Tasks and reminders for later (M5.07); without it, those tools are never listed. */
   readonly scheduler?: Scheduler | null;
+  /** Saved procedures (M5.08); without it, the skill tools are never listed. */
+  readonly skills?: SkillLibrary | null;
 }
 
 /**
@@ -44,5 +53,7 @@ export function builtinTools(deps: BuiltinToolDeps): ToolDefinition<never>[] {
     messageAgentTool(deps.team ?? null),
     scheduleTaskTool(deps.scheduler ?? null),
     remindMeTool(deps.scheduler ?? null),
+    runSkillTool(deps.skills ?? null),
+    saveSkillTool(deps.skills ?? null),
   ] as unknown as ToolDefinition<never>[];
 }

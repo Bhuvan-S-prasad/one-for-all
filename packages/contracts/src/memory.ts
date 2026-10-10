@@ -34,3 +34,30 @@ export type MemoryListQuery = z.infer<typeof memoryListQuerySchema>;
 
 export const memoryListSchema = z.object({ items: z.array(memoryItemSchema) });
 export type MemoryList = z.infer<typeof memoryListSchema>;
+
+// ── Episodes (M5.09) ─────────────────────────────────────────────────────────
+// What happened in a run and how it ended: one per run that replied. Nightly
+// consolidation reads them for new facts and repeated procedures.
+
+export const EPISODE_OUTCOMES = ["done", "stopped", "failed"] as const;
+
+export const episodeSchema = z.object({
+  id: idSchema,
+  agentId: idSchema,
+  runId: idSchema,
+  threadId: idSchema.nullable(),
+  summary: z.string(),
+  outcome: z.enum(EPISODE_OUTCOMES),
+  /** The run read outside content; its episode isn't used for new facts. */
+  tainted: z.boolean(),
+  createdAt: timestampSchema,
+});
+export type Episode = z.infer<typeof episodeSchema>;
+
+export const episodeListQuerySchema = z.object({
+  agentId: idSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+export const episodeListSchema = z.object({ items: z.array(episodeSchema) });
+export type EpisodeList = z.infer<typeof episodeListSchema>;

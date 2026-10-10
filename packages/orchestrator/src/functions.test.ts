@@ -6,11 +6,19 @@ import {
   type TenantContext,
   type ThreadId,
   type TokenRefresher,
+  type MemoryMaintenance,
   type RoutineRunner,
 } from "@ofa/core";
 import { NonRetriableError, RetryAfterError } from "inngest";
 import { describe, expect, it } from "vitest";
-import { fireDueRoutines, inngestSteps, refreshDue, TOKEN_REFRESH_AHEAD_MS } from "./functions";
+import { createScriptedLLM } from "@ofa/harness";
+import {
+  consolidateDue,
+  fireDueRoutines,
+  inngestSteps,
+  refreshDue,
+  TOKEN_REFRESH_AHEAD_MS,
+} from "./functions";
 
 // A stand-in for Inngest's `step.run`: runs the function, passes errors through.
 const step = { run: (_id: string, fn: () => Promise<unknown>) => fn() };
@@ -207,6 +215,61 @@ describe("routine tick (M5.06)", () => {
       "fire-routine-1-2026-10-12T07:00:00.000Z",
       "fire-routine-2-2026-10-12T07:00:00.000Z",
       "fire-routine-3-2026-10-12T07:00:00.000Z",
+    ]);
+  });
+});
+
+describe("nightly memory consolidation (M5.09)", () => {
+  it("runs each due workspace's agents and shared facts, expires, and records the pass", async () => {
+    const calls: string[] = [];
+    const memory: MemoryMaintenance = {
+      listDue: async () => [
+        { workspaceId: "ws-1", userId: "owner-1" },
+        { workspaceId: "ws-2", userId: "owner-2" },
+      ],
+      agents: async (ctx) => (ctx.workspaceId === "ws-1" ? ["a1", "a2"] : []),
+      facts: async (ctx, agentId) => {
+        if (agentId === "a2") throw new Error("database blip");
+        return [];
+      },
+      newEpisodes: async () => [],
+      merge: async () => false,
+      addFact: async () => {},
+      proposeSkill: async () => false,
+      expireStale: async (ctx) => (calls.push(`expire ${ctx.workspaceId}`), 3),
+      closeEpisodes: async (ctx, agentId) => void calls.push(`close ${ctx.workspaceId} ${agentId}`),
+      finish: async (ctx) => void calls.push(`finish ${ctx.workspaceId}`),
+    };
+    const ids: string[] = [];
+    const steps = inngestSteps({ run: (id, fn) => (ids.push(id), fn()) });
+    const now = new Date("2026-10-11T21:30:00Z");
+    const result = await consolidateDue(createScriptedLLM([]), memory, steps, () => now);
+    expect(result).toEqual({
+      "ws-1": { merged: 0, added: 0, expired: 3, proposedSkills: 0, modelCalls: 0, agents: 2 },
+      "ws-2": { merged: 0, added: 0, expired: 3, proposedSkills: 0, modelCalls: 0, agents: 0 },
+    });
+    // One agent failing didn't stop the others or the workspace's pass.
+    expect(calls).toEqual([
+      "close ws-1 a1",
+      "expire ws-1",
+      "finish ws-1",
+      "expire ws-2",
+      "finish ws-2",
+    ]);
+    expect(ids).toEqual([
+      "list-due",
+      "ws-1-started",
+      "ws-1-agents",
+      "ws-1-consolidate-a1",
+      "ws-1-consolidate-a2",
+      "ws-1-consolidate-workspace",
+      "ws-1-expire",
+      "ws-1-finish",
+      "ws-2-started",
+      "ws-2-agents",
+      "ws-2-consolidate-workspace",
+      "ws-2-expire",
+      "ws-2-finish",
     ]);
   });
 });

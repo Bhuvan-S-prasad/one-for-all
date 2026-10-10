@@ -14,6 +14,7 @@ export * from "./ports/approvals";
 export * from "./ports/connections";
 export * from "./ports/sandbox";
 export * from "./ports/schedules";
+export * from "./ports/skills";
 export * from "./ports/team";
 export * from "./ports/telemetry";
 export * from "./ports/tools";

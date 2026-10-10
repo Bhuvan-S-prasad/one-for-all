@@ -131,6 +131,34 @@ export {
   type ScheduleRow,
 } from "./repos/schedules";
 export {
+  createSkill,
+  deleteSkill,
+  findUsableSkill,
+  getSkill,
+  listSkills,
+  updateSkill,
+  type SkillInsert,
+  type SkillRow,
+} from "./repos/skills";
+export {
+  closeEpisodes,
+  listEpisodes,
+  newEpisodes,
+  searchEpisodes,
+  upsertEpisode,
+  type EpisodeRow,
+} from "./repos/episodes";
+export {
+  agentsWithMemory,
+  expireStaleFacts,
+  factsToConsolidate,
+  listConsolidationCandidates,
+  markWorkspaceConsolidated,
+  mergeFacts,
+  type ConsolidationCandidate,
+  type FactRow,
+} from "./repos/consolidation";
+export {
   createAgentDirectory,
   createRunStore,
   createThreadStore,

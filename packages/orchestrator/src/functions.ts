@@ -1,6 +1,7 @@
 import {
   EMPTY_RUN_USAGE,
   INNGEST_EVENTS,
+  memoryConsolidationRequestedEventSchema,
   messageReceivedEventSchema,
   runCancelledEventSchema,
   runSucceededEventSchema,
@@ -10,6 +11,9 @@ import {
   asId,
   type ApprovalStore,
   type ChildRunRequest,
+  type ConsolidationResult,
+  type LLMGateway,
+  type MemoryMaintenance,
   type ChildRunResult,
   type RoutineRunner,
   type RunContext,
@@ -22,7 +26,13 @@ import {
   type TokenRefresher,
   type TokenRefreshOutcome,
 } from "@ofa/core";
-import { learnFromRun, runAgent, runEvent, type HarnessDeps } from "@ofa/harness";
+import {
+  consolidateMemory,
+  learnFromRun,
+  runAgent,
+  runEvent,
+  type HarnessDeps,
+} from "@ofa/harness";
 import { NonRetriableError, RetryAfterError, type Inngest, type InngestFunction } from "inngest";
 
 // Durable functions (ADR-0006). The orchestrator decides when and how often an
@@ -39,7 +49,12 @@ export interface OrchestratorDeps {
   readonly routines?: RoutineRunner;
   /** Fires tasks and reminders agents set for later (M5.07). */
   readonly schedules?: ScheduleRunner;
+  /** Nightly memory consolidation (M5.09). */
+  readonly memory?: MemoryMaintenance;
 }
+
+/** Hourly: each workspace is consolidated when it is 3 at night there. */
+export const MEMORY_CONSOLIDATION_CRON = "15 * * * *";
 
 /** How often due routines are looked for: every minute. */
 export const ROUTINE_TICK_CRON = "* * * * *";
@@ -359,7 +374,94 @@ export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
   if (deps.tokenRefresh) functions.push(tokenRefreshFunction(inngest, deps.tokenRefresh));
   if (deps.routines) functions.push(routineTickFunction(inngest, deps.routines));
   if (deps.schedules) functions.push(scheduleFireFunction(inngest, deps.schedules));
+  if (deps.memory) {
+    functions.push(memoryConsolidationFunction(inngest, deps.harness.llm, deps.memory));
+  }
   return functions;
+}
+
+/**
+ * Nightly memory consolidation (ARCHITECTURE.md §8, M5.09). Every hour, the
+ * workspaces where it is now 3 at night get their pass, as their owner, one
+ * at a time so the shared model quota is spared.
+ */
+function memoryConsolidationFunction(
+  inngest: Inngest.Any,
+  llm: LLMGateway,
+  memory: MemoryMaintenance,
+) {
+  return inngest.createFunction(
+    {
+      id: "memory-consolidate",
+      name: "Consolidate memory overnight",
+      // Nightly, or now for one workspace when asked.
+      triggers: [
+        { cron: MEMORY_CONSOLIDATION_CRON },
+        { event: INNGEST_EVENTS.memoryConsolidationRequested },
+      ],
+      concurrency: [{ limit: 1 }],
+      retries: 2,
+    },
+    async ({ event, step }) => {
+      const asked =
+        event.name === INNGEST_EVENTS.memoryConsolidationRequested
+          ? memoryConsolidationRequestedEventSchema.parse(event.data)
+          : null;
+      return consolidateDue(
+        llm,
+        memory,
+        inngestSteps(step),
+        undefined,
+        asked ? [asked] : undefined,
+      );
+    },
+  );
+}
+
+/** One hourly tick: each due workspace's agents, its shared facts, then the rules that need no model. */
+export async function consolidateDue(
+  llm: LLMGateway,
+  memory: MemoryMaintenance,
+  steps: StepRunner,
+  now: () => Date = () => new Date(),
+  /** These workspaces now, whatever their local time. */
+  only?: readonly { readonly workspaceId: string; readonly userId: string }[],
+): Promise<Record<string, ConsolidationResult & { agents: number }>> {
+  const due = only ?? (await steps.run("list-due", async () => memory.listDue(now())));
+  const results: Record<string, ConsolidationResult & { agents: number }> = {};
+  for (const w of due) {
+    const ctx: TenantContext = { workspaceId: asId(w.workspaceId), userId: asId(w.userId) };
+    // Step IDs must be unique in the function: prefix them with the workspace.
+    const scoped: StepRunner = {
+      run: (id, fn) => steps.run(`${w.workspaceId}-${id}`, fn),
+    };
+    const at = await scoped.run("started", async () => now().toISOString());
+    const when = new Date(at);
+    const agents = await scoped.run("agents", async () => memory.agents(ctx));
+    const total = { merged: 0, added: 0, expired: 0, proposedSkills: 0, modelCalls: 0 };
+    for (const agentId of [...agents, null]) {
+      try {
+        const r = await consolidateMemory(
+          { ctx, agentId, now: when },
+          { llm, maintenance: memory },
+          scoped,
+        );
+        total.merged += r.merged;
+        total.added += r.added;
+        total.proposedSkills += r.proposedSkills;
+        total.modelCalls += r.modelCalls;
+      } catch {
+        // One agent's pass failing (a model error after retries) doesn't stop the rest.
+      }
+    }
+    total.expired = await scoped.run("expire", async () => memory.expireStale(ctx, when));
+    await scoped.run("finish", async () => {
+      await memory.finish(ctx, when);
+      return true;
+    });
+    results[w.workspaceId] = { ...total, agents: agents.length };
+  }
+  return results;
 }
 
 const PREEMPTED_NOTE =

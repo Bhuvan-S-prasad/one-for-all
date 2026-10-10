@@ -44,6 +44,8 @@ const TOOL_DONE: Record<string, string> = {
   message_agent: "Messaged another agent",
   schedule_task: "Scheduled a task for later",
   remind_me: "Set a reminder",
+  run_skill: "Opened a skill",
+  save_skill: "Saved a skill",
 };
 
 /** How a run was started, as Activity says it. */

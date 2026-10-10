@@ -32,6 +32,7 @@ import {
   createThreadStore,
   createToolCallStore,
   listConnectionsDueForRefresh,
+  listConsolidationCandidates,
   listDueRoutines,
   type Database,
   type DatabaseHandle,
@@ -53,7 +54,7 @@ import {
   type McpConnections,
   type McpToolkits,
 } from "@ofa/mcp";
-import { createPgMemoryStore } from "@ofa/memory";
+import { createMemoryMaintenance, createPgMemoryStore } from "@ofa/memory";
 import {
   createFunctions,
   createInngestClient,
@@ -86,6 +87,7 @@ import { createLogger, type Logger } from "./lib/logger";
 import { createRoutineService, type RoutineService } from "./services/routines";
 import { createScheduler } from "./services/schedules";
 import { createSessionService, type SessionService } from "./services/sessions";
+import { createSkillLibrary } from "./services/skills";
 import { createSetupService, type SetupService } from "./services/setup";
 import { createTeamDirectory } from "./services/team";
 
@@ -368,6 +370,11 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     announce: announceMessage,
   });
   const owner = createOwnerAccess(config, logger);
+  // Skills (M5.08) and nightly memory consolidation (M5.09).
+  const skills = createSkillLibrary(db);
+  const memoryMaintenance = createMemoryMaintenance(db, {
+    candidates: () => owner.use("memory consolidation", listConsolidationCandidates, []),
+  });
   const routines = createRoutineService(db, {
     listDue: (now) => owner.use("routines", (ownerDb) => listDueRoutines(ownerDb, now), []),
     announce: announceMessage,
@@ -404,6 +411,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
         sandbox,
         team,
         scheduler,
+        skills,
       }).concat(overrides.extraTools ?? []),
     ),
     policy: createPolicyEngine({ agents, rules: createPolicyRuleStore(db) }),
@@ -435,6 +443,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     memory,
     approvals,
     team,
+    skills,
     redact: (ctx, text) => vault.redact(ctx, text),
     middleware: [createTelemetryMiddleware(telemetry)],
   };
@@ -453,6 +462,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     ...(tokenRefresh ? { tokenRefresh } : {}),
     routines,
     schedules: scheduler,
+    memory: memoryMaintenance,
   });
 
   return {

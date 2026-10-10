@@ -7,6 +7,7 @@ import {
   PLATFORM_RULES,
   ROUTINE_RUN,
   SCHEDULED_TASK,
+  SKILL_IN_USE,
   STEERING,
   TASK_STATE,
   promptRef,
@@ -81,6 +82,14 @@ export interface ContextInput {
   };
   readonly tools: readonly ToolDescriptor[];
   readonly memories: readonly string[];
+  /** Earlier work like this request, from episodic memory (M5.09). */
+  readonly episodes?: readonly string[];
+  /** A skill the request named with `/slug` (M5.08); its steps join the task. */
+  readonly skill?: {
+    readonly name: string;
+    readonly slug: string;
+    readonly steps: readonly string[];
+  } | null;
   readonly todos: readonly { readonly text: string; readonly done: boolean }[] | null;
   readonly history: readonly HistoryMessage[];
   /** Compacted summary of earlier steps in this run. */
@@ -202,8 +211,31 @@ export function assembleContext(input: ContextInput, budget: ContextBudget): Ass
     memoryLines.push(`- ${fact}`);
     memoryTokens += cost;
   }
-  const memory = memoryLines.length
-    ? `What you remember (may be out of date; check sources for anything important):\n${memoryLines.join("\n")}`
+  const episodeLines: string[] = [];
+  for (const line of input.episodes ?? []) {
+    const cost = estimateTokens(line) + 2;
+    if (memoryTokens + cost > budget.memory) break;
+    episodeLines.push(`- ${line}`);
+    memoryTokens += cost;
+  }
+  const memory = [
+    memoryLines.length
+      ? `What you remember (may be out of date; check sources for anything important):\n${memoryLines.join("\n")}`
+      : "",
+    episodeLines.length ? `Earlier work like this:\n${episodeLines.join("\n")}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  // A skill the person named (M5.08): its steps, within the plan budget.
+  const skill = input.skill
+    ? truncateToTokens(
+        SKILL_IN_USE.render({
+          name: input.skill.name,
+          slug: input.skill.slug,
+          steps: input.skill.steps,
+        }),
+        budget.plan,
+      )
     : "";
   // Task and plan, restated every step (§7): the latest request, the agent's
   // todo list, and its notes from compacted steps. Half the plan budget goes
@@ -224,12 +256,13 @@ export function assembleContext(input: ContextInput, budget: ContextBudget): Ass
     : "";
   const taskBlock = TASK_STATE.render({ task, plan, notes });
   blocks.memory = estimateTokens(memory);
+  blocks.skill = skill ? estimateTokens(skill) : 0;
   blocks.notes = notes ? estimateTokens(notes) : 0;
   blocks.plan = estimateTokens(taskBlock) - blocks.notes;
 
   const system: LLMMessage = {
     role: "system",
-    content: [platform, identity, memory, taskBlock].filter(Boolean).join("\n\n"),
+    content: [platform, identity, memory, skill, taskBlock].filter(Boolean).join("\n\n"),
   };
 
   // Volatile: the thread (newest kept, oldest dropped), then this run's steps.
@@ -273,6 +306,7 @@ export function assembleContext(input: ContextInput, budget: ContextBudget): Ass
       ...(input.history.some((m) => m.scheduled === "routine") ? [ROUTINE_RUN] : []),
       ...(input.history.some((m) => m.scheduled === "task") ? [SCHEDULED_TASK] : []),
       ...(input.turns.some((t) => t.kind === "user") ? [STEERING] : []),
+      ...(input.skill ? [SKILL_IN_USE] : []),
     ]
       .map(promptRef)
       .join("+"),

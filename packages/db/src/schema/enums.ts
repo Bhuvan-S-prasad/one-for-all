@@ -53,3 +53,11 @@ export const routineStatus = pgEnum("routine_status", ["active", "paused"]);
 export const scheduleKind = pgEnum("schedule_kind", ["task", "reminder"]);
 
 export const scheduleStatus = pgEnum("schedule_status", ["pending", "done", "cancelled", "failed"]);
+
+/** `proposed` skills wait for a person; only `active` ones reach a model (M5.08). */
+export const skillStatus = pgEnum("skill_status", ["active", "proposed", "archived"]);
+
+export const skillSource = pgEnum("skill_source", ["person", "agent", "consolidation"]);
+
+/** How a run ended, as its episode says (M5.09). */
+export const episodeOutcome = pgEnum("episode_outcome", ["done", "stopped", "failed"]);

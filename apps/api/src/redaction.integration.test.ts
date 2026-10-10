@@ -120,6 +120,7 @@ describe.skipIf(!hasDb)("secret redaction (integration)", async () => {
     cancelRun: async () => {},
     approvalDecided: async () => {},
     scheduleCreated: async () => {},
+    consolidateMemory: async () => {},
     scheduleCancelled: async () => {},
   };
   const container = createContainer(config, {

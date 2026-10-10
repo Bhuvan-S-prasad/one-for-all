@@ -16,5 +16,6 @@ export * from "./routines";
 export * from "./runs";
 export * from "./schedules";
 export * from "./screen";
+export * from "./skills";
 export * from "./settings";
 export * from "./threads";

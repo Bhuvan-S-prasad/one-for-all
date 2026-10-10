@@ -7,6 +7,7 @@ import {
   type PolicyEngine,
   type RunContext,
   type Scheduler,
+  type SkillLibrary,
   type TeamDirectory,
   type ToolCallRecord,
   type ToolCallStore,
@@ -25,6 +26,8 @@ import {
   editableTextFields,
   messageAgentTool,
   remindMeTool,
+  runSkillTool,
+  saveSkillTool,
   scheduleTaskTool,
   htmlToText,
   isPrivateAddress,
@@ -490,6 +493,103 @@ describe("schedule_task and remind_me (M5.07)", () => {
     const agents = { get: async () => agent };
     const run = createToolExecutor({
       registry: createToolRegistry([remindMeTool(null)] as unknown as ToolDefinition<never>[]),
+      policy: createPolicyEngine({ agents }),
+      calls: memoryCalls(),
+      agents,
+    });
+    expect(await run.listTools(ctx)).toEqual([]);
+  });
+});
+
+describe("run_skill and save_skill (M5.08)", () => {
+  function setup() {
+    const saved: unknown[] = [];
+    const skills: SkillLibrary = {
+      list: async () => [{ slug: "brief", name: "Brief", description: "A three-point brief." }],
+      find: async (_ctx, name) =>
+        name.replace(/^\//, "") === "brief"
+          ? {
+              slug: "brief",
+              name: "Brief",
+              description: "A three-point brief.",
+              steps: ["Search", "Write three points"],
+            }
+          : null,
+      save: async (_ctx, input) => {
+        saved.push(input);
+        return { slug: "weekly-report", status: input.tainted ? "proposed" : "active" };
+      },
+    };
+    const agent = agentWith([
+      { tool: "run_skill", mode: "auto" },
+      { tool: "save_skill", mode: "auto" },
+    ]);
+    const agents = { get: async () => agent };
+    const run = createToolExecutor({
+      registry: createToolRegistry([
+        runSkillTool(skills),
+        saveSkillTool(skills),
+      ] as unknown as ToolDefinition<never>[]),
+      policy: createPolicyEngine({ agents }),
+      calls: memoryCalls(),
+      agents,
+    });
+    return { run, saved };
+  }
+
+  it("lists the agent's skills and hands back a skill's steps", async () => {
+    const { run } = setup();
+    const tools = await run.listTools(ctx);
+    expect(tools.find((t) => t.name === "run_skill")?.description).toContain(
+      "Your skills:\n- brief: Brief. A three-point brief.",
+    );
+    expect(await run.execute(request("run_skill", { skill: "/brief" }), ctx)).toMatchObject({
+      status: "ok",
+      content: expect.stringContaining("1. Search\n2. Write three points"),
+      untrusted: false,
+    });
+    expect(
+      await run.execute(request("run_skill", { skill: "nope" }, "tool-0-1"), ctx),
+    ).toMatchObject({
+      status: "error",
+      code: "unknown_skill",
+      message: expect.stringContaining("Your skills: brief."),
+    });
+  });
+
+  it("saves a skill, as a proposal when the run read outside content", async () => {
+    const { run, saved } = setup();
+    const args = {
+      name: "Weekly report",
+      description: "Every Friday",
+      steps: ["Collect", "Write"],
+    };
+    expect(await run.execute(request("save_skill", args), ctx)).toMatchObject({
+      status: "ok",
+      content: expect.stringContaining("Saved as your skill /weekly-report"),
+    });
+    const tainted = await run.execute(
+      { ...request("save_skill", args, "tool-1-0"), tainted: true },
+      ctx,
+    );
+    expect(tainted).toMatchObject({
+      status: "ok",
+      content: expect.stringContaining("as a proposal"),
+    });
+    expect(saved).toMatchObject([{ tainted: false }, { tainted: true }]);
+  });
+
+  it("aren't listed without a skill library", async () => {
+    const agent = agentWith([
+      { tool: "run_skill", mode: "auto" },
+      { tool: "save_skill", mode: "auto" },
+    ]);
+    const agents = { get: async () => agent };
+    const run = createToolExecutor({
+      registry: createToolRegistry([
+        runSkillTool(null),
+        saveSkillTool(null),
+      ] as unknown as ToolDefinition<never>[]),
       policy: createPolicyEngine({ agents }),
       calls: memoryCalls(),
       agents,

@@ -3,23 +3,27 @@ import {
   runEventSchema,
   type Agent,
   type AgentSpec,
+  type Episode,
   type MemoryItem,
   type Message,
   type Routine,
   type Run,
   type RunEvent,
   type Schedule,
+  type Skill,
   type Thread,
   type ThreadSummary,
 } from "@ofa/contracts";
 import type {
   AgentWithGrants,
+  EpisodeRow,
   MemoryReviewRow,
   MessageRow,
   RoutineRow,
   RunEventRow,
   RunRow,
   ScheduleRow,
+  SkillRow,
   ThreadSummaryRow,
   ThreadWithMembers,
 } from "@ofa/db";
@@ -167,6 +171,35 @@ export function toSchedule(row: ScheduleRow): Schedule {
     runId: row.runId,
     firedRunId: row.firedRunId,
     firedAt: row.firedAt?.toISOString() ?? null,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+export function toSkill(row: SkillRow): Skill {
+  return {
+    id: row.id,
+    agentId: row.agentId,
+    slug: row.slug,
+    name: row.name,
+    description: row.description,
+    steps: row.steps,
+    status: row.status,
+    source: row.source,
+    sourceRunId: row.sourceRunId,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+export function toEpisode(row: EpisodeRow): Episode {
+  return {
+    id: row.id,
+    agentId: row.agentId,
+    runId: row.runId,
+    threadId: row.threadId,
+    summary: row.summary,
+    outcome: row.outcome,
+    tainted: row.tainted,
     createdAt: row.createdAt.toISOString(),
   };
 }

@@ -15,6 +15,8 @@ import {
   type RunEventWrite,
   type RunStore,
   type RunUsageTotals,
+  skillReferences,
+  type SkillLibrary,
   type StepRunner,
   type TeamDirectory,
   type ThreadId,
@@ -80,6 +82,8 @@ export interface HarnessDeps {
    * that can start child runs, `delegate_task` is refused.
    */
   readonly team?: TeamDirectory;
+  /** Skills the agent may use (M5.08): `/slug` in the request applies one. */
+  readonly skills?: SkillLibrary;
   /**
    * Replaces known secret values (the vault's redaction). Applied to every
    * run event, approval request and reply before it is stored (hard rule 4).
@@ -376,6 +380,29 @@ export async function runAgent(
         };
       });
       const lastUser = [...history].reverse().find((m) => m.author === "user")?.content ?? "";
+      // The request as written, for the episode and for `/skill` references.
+      const asked =
+        (input.requestId ? messages.find((m) => m.id === input.requestId) : undefined) ??
+        [...messages].reverse().find((m) => m.author === "user");
+      const request = asked?.content ?? "";
+      let skill: { name: string; slug: string; steps: string[] } | null = null;
+      if (deps.skills && request) {
+        for (const ref of skillReferences(request)) {
+          const found = await deps.skills.find(ctx, ref);
+          if (found) {
+            skill = { name: found.name, slug: found.slug, steps: [...found.steps] };
+            break;
+          }
+        }
+      }
+      // Earlier work like this one (M5.09), as plain lines: step results are JSON.
+      const episodes =
+        deps.memory?.recallEpisodes && lastUser && agent.memoryScopes.length > 0
+          ? (await deps.memory.recallEpisodes(ctx, { query: lastUser, limit: 2 })).map(
+              (e) =>
+                `${new Date(e.createdAt).toISOString().slice(0, 10)}: ${e.summary}${e.outcome === "done" ? "" : ` (${e.outcome})`}`,
+            )
+          : [];
       const memories =
         deps.memory && lastUser && agent.memoryScopes.length > 0
           ? (
@@ -394,6 +421,9 @@ export async function runAgent(
         tools,
         window: model.contextWindow,
         messageIds: messages.map((m) => m.id as string),
+        request: request.slice(0, 600),
+        skill,
+        episodes,
       };
     });
     const budget = contextBudget(context.window, options.maxContextTokens ?? 32_000);
@@ -454,6 +484,8 @@ export async function runAgent(
           agent,
           tools,
           memories: context.memories,
+          episodes: context.episodes,
+          skill: context.skill,
           todos,
           history: context.history,
           summary,
@@ -472,6 +504,8 @@ export async function runAgent(
                 agent,
                 tools,
                 memories: context.memories,
+                episodes: context.episodes,
+                skill: context.skill,
                 todos,
                 history: context.history,
                 summary: result.summary,
@@ -510,6 +544,8 @@ export async function runAgent(
               agent,
               tools,
               memories: context.memories,
+              episodes: context.episodes,
+              skill: context.skill,
               todos,
               history: context.history,
               summary,
@@ -723,6 +759,7 @@ ${result.content}`,
       messageId: reply?.id ?? null,
       reply: reply?.content ?? null,
       tainted,
+      request: context.request,
     });
   } catch (error) {
     await chain.error(hook, error);
@@ -1058,6 +1095,8 @@ ${result.content}`,
     reply: string | null;
     tainted: boolean;
     error?: { code: string; message: string };
+    /** What was asked, for the run's episode. */
+    request?: string;
   }): Promise<RunResult> {
     await steps.run("finish", async () => {
       if (hook) await chain.runEnd(hook, { status: result.status, stopReason: result.stopReason });
@@ -1076,6 +1115,21 @@ ${result.content}`,
           ...(result.error ? { error: result.error } : {}),
         }),
       ]);
+      // Its episode (M5.09): what was asked and what came of it. The learning
+      // pass may replace the summary with a better one. Memory is a bonus, so
+      // a failure here never fails the run.
+      if (result.reply !== null && deps.memory?.writeEpisode) {
+        const done = result.stopReason === "final_answer";
+        const asked = result.request ? `Asked: ${preview(result.request, 200)} — ` : "";
+        await deps.memory
+          .writeEpisode(ctx, {
+            threadId: input.threadId,
+            summary: `${asked}${done ? "Answered" : "Stopped"}: ${preview(result.reply, 300)}`,
+            outcome: done ? "done" : "stopped",
+            tainted: result.tainted,
+          })
+          .catch(() => {});
+      }
       return true;
     });
     return {

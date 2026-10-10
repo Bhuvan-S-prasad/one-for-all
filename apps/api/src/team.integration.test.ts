@@ -104,6 +104,7 @@ describe.skipIf(!hasDb)("handing work to other agents (integration)", async () =
     cancelRun: async () => {},
     approvalDecided: async () => {},
     scheduleCreated: async () => {},
+    consolidateMemory: async () => {},
     scheduleCancelled: async () => {},
   };
   const container = createContainer(config, {

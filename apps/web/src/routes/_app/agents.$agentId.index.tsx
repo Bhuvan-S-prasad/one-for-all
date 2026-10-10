@@ -4,6 +4,7 @@ import {
   useAgent,
   useAgents,
   useApprovals,
+  useSkills,
   useChatThread,
   useNewThread,
   useRun,
@@ -42,6 +43,12 @@ import { AgentTabs } from "@/components/agent-tabs";
 import { LiveRun, WorkingRing } from "@/components/chat/live-run";
 import { Reply } from "@/components/chat/reply";
 import { RunPanel } from "@/components/chat/run-panel";
+import {
+  insertSkill,
+  matchSkills,
+  SkillSuggestions,
+  skillQuery,
+} from "@/components/chat/skill-picker";
 import { ComputerOverlay, ComputerPanel, usesBrowser } from "@/components/computer/computer-panel";
 import { Familiar } from "@/components/familiar";
 import { ErrorAlert } from "@/components/ui/alert";
@@ -788,6 +795,19 @@ function Composer(props: {
   const [text, setText] = useState(props.initial ?? "");
   const local = useRef<HTMLTextAreaElement | null>(null);
   const { initial, onDraftUsed } = props;
+  // `/` names one of the agent's skills (M5.08).
+  const { data: skills } = useSkills(props.agent.id);
+  const typed = skillQuery(text);
+  const matches = typed === null ? [] : matchSkills(skills ?? [], typed);
+  const [dismissedAt, setDismissedAt] = useState<string | null>(null);
+  const [picked, setPicked] = useState(0);
+  const picking = matches.length > 0 && dismissedAt !== text;
+  const activeSkill = Math.min(picked, Math.max(0, matches.length - 1));
+  const pickSkill = (slug: string) => {
+    setText((current) => insertSkill(current, slug));
+    setPicked(0);
+    local.current?.focus();
+  };
 
   // A message started elsewhere (⌘K "Ask …") arrives ready to send.
   useEffect(() => {
@@ -838,6 +858,25 @@ function Composer(props: {
     }
   };
   const onKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (picking) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        setPicked((activeSkill + step + matches.length) % matches.length);
+        return;
+      }
+      if ((event.key === "Enter" && !event.shiftKey) || event.key === "Tab") {
+        event.preventDefault();
+        pickSkill(matches[activeSkill]!.slug);
+        return;
+      }
+      if (event.key === "Escape") {
+        // Closes the list; it doesn't stop the agent.
+        event.preventDefault();
+        setDismissedAt(text);
+        return;
+      }
+    }
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing)
       void submit(event);
   };
@@ -848,7 +887,16 @@ function Composer(props: {
       <label htmlFor="message" className="sr-only">
         Message {props.agent.name}
       </label>
-      <div className="flex items-end gap-2 rounded-[26px] border border-input bg-card p-2 pl-4 focus-within:border-ring/60">
+      <div className="relative flex items-end gap-2 rounded-[26px] border border-input bg-card p-2 pl-4 focus-within:border-ring/60">
+        {picking && (
+          <SkillSuggestions
+            id="skill-suggestions"
+            items={matches}
+            active={activeSkill}
+            onPick={(skill) => pickSkill(skill.slug)}
+            onHover={setPicked}
+          />
+        )}
         <textarea
           id="message"
           ref={(el) => {
@@ -858,6 +906,11 @@ function Composer(props: {
               (props.ref as React.RefObject<HTMLTextAreaElement | null>).current = el;
           }}
           rows={1}
+          role="combobox"
+          aria-expanded={picking}
+          aria-controls={picking ? "skill-suggestions" : undefined}
+          aria-activedescendant={picking ? `skill-suggestions-${activeSkill}` : undefined}
+          aria-autocomplete="list"
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKey}
@@ -895,6 +948,7 @@ function Composer(props: {
         <span>↵ send</span>
         <span>⇧↵ new line</span>
         <span>/ to write from anywhere</span>
+        {(skills?.length ?? 0) > 0 && <span>/name for a skill</span>}
         {props.active && <span className="ml-auto">Esc stops {props.agent.name}</span>}
       </div>
     </form>

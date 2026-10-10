@@ -6,7 +6,7 @@ import {
   type MemoryScope,
   type TenantContext,
 } from "@ofa/core";
-import { and, desc, eq, gt, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import type { Database } from "../client";
 import { memory } from "../schema/index";
 import { withTenant } from "../tenant";
@@ -119,6 +119,21 @@ export async function searchMemories(
     or(isNull(memory.expiresAt), gt(memory.expiresAt, sql`now()`)),
   );
   return withTenant(db, ctx, async (tx) => {
+    // Facts that are used stay; consolidation expires ones never recalled (M5.09).
+    const recalled = async (rows: Parameters<typeof toRecord>[0][]) => {
+      if (rows.length > 0) {
+        await tx
+          .update(memory)
+          .set({ lastRecalledAt: new Date() })
+          .where(
+            inArray(
+              memory.id,
+              rows.map((r) => r.id),
+            ),
+          );
+      }
+      return rows.map(toRecord);
+    };
     if (words.length === 0) {
       const rows = await tx
         .select(columns)
@@ -126,7 +141,7 @@ export async function searchMemories(
         .where(filters)
         .orderBy(desc(memory.createdAt))
         .limit(search.limit);
-      return rows.map(toRecord);
+      return recalled(rows);
     }
     // to_tsquery handles stemming and drops stop words; words are letters and
     // digits only, so nothing in them is tsquery syntax.
@@ -137,7 +152,7 @@ export async function searchMemories(
       .where(and(filters, sql`${memory.contentSearch} @@ ${query}`))
       .orderBy(desc(sql`ts_rank_cd(${memory.contentSearch}, ${query})`), desc(memory.createdAt))
       .limit(search.limit);
-    return rows.map(toRecord);
+    return recalled(rows);
   });
 }
 

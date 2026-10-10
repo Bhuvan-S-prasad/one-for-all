@@ -21,6 +21,7 @@ export { artifactsReadTool } from "./builtins/artifacts";
 export { LOAD_ALL_LIMIT, LOAD_TOOLKIT, loadToolkitTool } from "./builtins/toolkits";
 export { DELEGATE_TASK, delegateTaskTool, MESSAGE_AGENT, messageAgentTool } from "./builtins/team";
 export { REMIND_ME, remindMeTool, SCHEDULE_TASK, scheduleTaskTool } from "./builtins/schedule";
+export { RUN_SKILL, runSkillTool, SAVE_SKILL, saveSkillTool } from "./builtins/skills";
 export {
   browserTools,
   fileTools,

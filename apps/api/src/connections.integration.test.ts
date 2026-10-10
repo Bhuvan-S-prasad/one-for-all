@@ -50,6 +50,7 @@ describe.skipIf(!hasDb)("MCP connections API (integration)", async () => {
     cancelRun: async () => {},
     approvalDecided: async () => {},
     scheduleCreated: async () => {},
+    consolidateMemory: async () => {},
     scheduleCancelled: async () => {},
   };
   const container = createContainer(config, {

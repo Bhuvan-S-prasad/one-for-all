@@ -1,4 +1,12 @@
 import {
+  episodeListSchema,
+  skillListSchema,
+  skillSchema,
+  type CreateSkillRequest,
+  type EpisodeList,
+  type Skill,
+  type SkillList,
+  type UpdateSkillRequest,
   routineListSchema,
   routineRunsSchema,
   routineSchema,
@@ -347,6 +355,21 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request("GET", "/api/settings/workspace", workspaceSettingsSchema),
     setTimeZone: (timeZone: string): Promise<WorkspaceSettings> =>
       request("PUT", "/api/settings/workspace", workspaceSettingsSchema, { timeZone }),
+
+    // ── Skills (M5.08) and episodes (M5.09) ───────────────────────────────
+    /** All skills, or one agent's with the shared ones. */
+    listSkills: (filter: { agentId?: string; status?: Skill["status"] } = {}): Promise<SkillList> =>
+      request("GET", `/api/skills${query({ ...filter })}`, skillListSchema),
+    createSkill: (input: CreateSkillRequest): Promise<Skill> =>
+      request("POST", "/api/skills", skillSchema, input),
+    /** Edit, approve (`status: "active"`) or retire a skill. */
+    updateSkill: (id: string, patch: UpdateSkillRequest): Promise<Skill> =>
+      request("PATCH", `/api/skills/${encodeURIComponent(id)}`, skillSchema, patch),
+    deleteSkill: (id: string): Promise<void> =>
+      request("DELETE", `/api/skills/${encodeURIComponent(id)}`, null),
+    /** What runs were asked and how they ended, newest first. */
+    listEpisodes: (filter: { agentId?: string; limit?: number } = {}): Promise<EpisodeList> =>
+      request("GET", `/api/memories/episodes${query({ ...filter })}`, episodeListSchema),
 
     // ── Approvals ──────────────────────────────────────────────────────────
     /** Waiting for an answer, newest first. */

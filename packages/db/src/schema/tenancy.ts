@@ -9,6 +9,8 @@ export const workspace = pgTable("workspace", {
   name: text("name").notNull(),
   /** Where routines and reminders read clock times by default (M5.06). */
   timeZone: text("time_zone").notNull().default("UTC"),
+  /** The last nightly memory pass (M5.09). */
+  memoryConsolidatedAt: timestampAt("memory_consolidated_at"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });

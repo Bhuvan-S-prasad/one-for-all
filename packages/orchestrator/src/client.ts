@@ -3,9 +3,11 @@ import {
   INNGEST_EVENTS,
   messageReceivedEventSchema,
   runCancelledEventSchema,
+  memoryConsolidationRequestedEventSchema,
   scheduleCancelledEventSchema,
   scheduleCreatedEventSchema,
   type ApprovalDecidedEvent,
+  type MemoryConsolidationRequestedEvent,
   type MessageReceivedEvent,
   type RunCancelledEvent,
   type ScheduleCancelledEvent,
@@ -39,6 +41,8 @@ export interface RunDispatcher {
   scheduleCreated(event: ScheduleCreatedEvent): Promise<void>;
   /** End that wait early: the item was cancelled. */
   scheduleCancelled(event: ScheduleCancelledEvent): Promise<void>;
+  /** Consolidate a workspace's memory now (M5.09). */
+  consolidateMemory(event: MemoryConsolidationRequestedEvent): Promise<void>;
 }
 
 export function createRunDispatcher(inngest: Inngest): RunDispatcher {
@@ -77,6 +81,12 @@ export function createRunDispatcher(inngest: Inngest): RunDispatcher {
         name: INNGEST_EVENTS.scheduleCancelled,
         data: scheduleCancelledEventSchema.parse(event),
         id: `schedule-cancelled-${event.scheduleId}`,
+      });
+    },
+    async consolidateMemory(event) {
+      await inngest.send({
+        name: INNGEST_EVENTS.memoryConsolidationRequested,
+        data: memoryConsolidationRequestedEventSchema.parse(event),
       });
     },
   };
