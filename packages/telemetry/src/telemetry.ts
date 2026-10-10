@@ -21,6 +21,8 @@ export interface TelemetryOptions {
   readonly endpoint?: string;
   /** For tests. */
   readonly exporter?: SpanExporter;
+  /** Replaces known secret values in attributes and recorded errors (hard rule 4). */
+  readonly redact?: (text: string) => string;
 }
 
 export interface TelemetryHandle extends Telemetry {
@@ -36,11 +38,25 @@ function idsFor(key: string): { traceId: string; spanId: string } {
   return { traceId: hash.slice(0, 32), spanId: hash.slice(32, 48) };
 }
 
-function clean(attributes: SpanAttributes | undefined): Record<string, string | number | boolean> {
+type Redact = (text: string) => string;
+
+function clean(
+  attributes: SpanAttributes | undefined,
+  redact: Redact,
+): Record<string, string | number | boolean> {
   const out: Record<string, string | number | boolean> = {};
   for (const [key, value] of Object.entries(attributes ?? {}))
-    if (value !== undefined) out[key] = value;
+    if (value !== undefined) out[key] = typeof value === "string" ? redact(value) : value;
   return out;
+}
+
+/** An error as a trace may hold it: its name, and its message and stack with secrets replaced. */
+function cleanError(error: unknown, redact: Redact): Error {
+  const source = error instanceof Error ? error : new Error(String(error));
+  const copy = new Error(redact(source.message));
+  copy.name = source.name;
+  copy.stack = source.stack === undefined ? undefined : redact(source.stack);
+  return copy;
 }
 
 export function createTelemetry(options: TelemetryOptions): TelemetryHandle {
@@ -60,6 +76,7 @@ export function createTelemetry(options: TelemetryOptions): TelemetryHandle {
     spanProcessors: [new BatchSpanProcessor(exporter)],
   });
   const tracer: Tracer = provider.getTracer("one-for-all");
+  const redact: Redact = options.redact ?? ((text) => text);
 
   return {
     startSpan(name, attributes, spanOptions) {
@@ -70,11 +87,11 @@ export function createTelemetry(options: TelemetryOptions): TelemetryHandle {
             isRemote: true,
           })
         : context.active();
-      const span = tracer.startSpan(name, { attributes: clean(attributes) }, parent);
+      const span = tracer.startSpan(name, { attributes: clean(attributes, redact) }, parent);
       return {
-        setAttributes: (more) => void span.setAttributes(clean(more)),
+        setAttributes: (more) => void span.setAttributes(clean(more, redact)),
         recordError: (error) => {
-          span.recordException(error instanceof Error ? error : new Error(String(error)));
+          span.recordException(cleanError(error, redact));
           span.setStatus({ code: 2 });
         },
         end: () => span.end(),

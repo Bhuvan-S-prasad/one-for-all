@@ -23,7 +23,7 @@ Open <http://localhost:3000>. The first visit asks you to create the owner accou
 
 On Windows, run step 1 in Git Bash or WSL.
 
-**Keep `infra/compose/.env` private and backed up.** It holds the database passwords and `VAULT_KEY`, which encrypts stored credentials. Losing it means losing access to them.
+**Keep `infra/compose/.env` private and backed up.** It holds the database passwords and `VAULT_KEY`, which encrypts stored credentials. Losing it means losing access to them. To rotate `VAULT_KEY`, put a new key in it, move the old one to `VAULT_PREVIOUS_KEYS`, and restart; the app re-wraps everything and logs when the old key can be removed.
 
 ### Local-only by default
 

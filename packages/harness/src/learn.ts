@@ -1,6 +1,7 @@
 import type { MessageId, RunContext, StepRunner, ThreadId } from "@ofa/core";
 import type { HarnessDeps } from "./loop";
 import { extractMemories } from "./memory-extraction";
+import { redactJson } from "./redaction";
 
 // The learning pass (ARCHITECTURE.md §8). It runs after a run succeeded, in a
 // function of its own, so a slow extraction call never holds the agent's turn:
@@ -18,7 +19,10 @@ export interface LearnResult {
   readonly calls: number;
 }
 
-type LearnDeps = Pick<HarnessDeps, "llm" | "runs" | "agents" | "threads" | "memory" | "options">;
+type LearnDeps = Pick<
+  HarnessDeps,
+  "llm" | "runs" | "agents" | "threads" | "memory" | "options" | "redact"
+>;
 
 export async function learnFromRun(
   input: LearnInput,
@@ -54,7 +58,12 @@ export async function learnFromRun(
         .map((m) => ({ author: m.author, agentId: m.agentId, content: m.content })),
       answer: reply.content,
       verified: !run.tainted,
-      log: (events) => deps.runs.append(ctx, ctx.runId, events),
+      log: async (events) =>
+        deps.runs.append(
+          ctx,
+          ctx.runId,
+          deps.redact ? await redactJson(deps.redact, ctx, events) : events,
+        ),
     });
     if (usage.calls > 0) {
       // Keep the run's totals honest: the learning call is part of its cost.

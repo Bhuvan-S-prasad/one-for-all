@@ -29,6 +29,7 @@ import { Familiar } from "@/components/familiar";
 import { Toaster } from "@/components/toaster";
 import { MOOD_WORDS, shouldAnimate, useAgentMoods } from "@/lib/agents";
 import { roleLabel } from "@/lib/format";
+import { useApprovalAlerts } from "@/lib/notifications";
 import { isTyping, MOD_K, useGlobalShortcuts, useStoredFlag } from "@/lib/shortcuts";
 import { setThemePreference, useTheme, type ThemePreference } from "@/lib/theme";
 import { useSignOut } from "@/lib/use-sign-out";
@@ -81,6 +82,7 @@ export function AppShell({ session, children }: { session: SessionResponse; chil
   };
   const { data: agents } = useAgents();
   const { moods, stuck, waiting } = useAttention(agents);
+  useApprovalAlerts(agents);
 
   useGlobalShortcuts({
     openPalette: () => openPalette(),

@@ -27,6 +27,11 @@ export const queryKeys = {
   approvals: (agentId?: string) => ["approvals", agentId ?? "all"] as const,
   approvalLists: ["approvals"] as const,
   llmSettings: ["settings", "llm"] as const,
+  mcpServers: ["connections", "servers"] as const,
+  mcpCatalog: ["connections", "catalog"] as const,
+  connections: ["connections"] as const,
+  appTools: (serverId: string) => ["connections", "tools", serverId] as const,
+  policyRules: ["policy-rules"] as const,
 };
 
 /** Shared by hooks and router loaders, so both read the same cache entry. */
@@ -144,6 +149,15 @@ export const approvalsQuery = (api: ApiClient, agentId?: string) =>
 
 export const loginsQuery = (api: ApiClient) =>
   queryOptions({ queryKey: queryKeys.logins, queryFn: async () => (await api.listLogins()).items });
+
+export const mcpServersQuery = (api: ApiClient) =>
+  queryOptions({
+    queryKey: queryKeys.mcpServers,
+    queryFn: async () => (await api.listMcpServers()).items,
+  });
+
+export const mcpCatalogQuery = (api: ApiClient) =>
+  queryOptions({ queryKey: queryKeys.mcpCatalog, queryFn: () => api.mcpCatalog() });
 
 export const llmSettingsQuery = (api: ApiClient) =>
   queryOptions({ queryKey: queryKeys.llmSettings, queryFn: () => api.llmSettings() });

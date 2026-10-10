@@ -171,6 +171,8 @@ export interface ToolExecutionRequest {
   readonly approved?: boolean;
   /** Addresses the run was given so far (`urlKey` form), for the provenance check (§10.3). */
   readonly knownUrls?: readonly string[];
+  /** Sites a person allowed for the rest of this run (see `PolicyInput.allowedSites`). */
+  readonly allowedSites?: readonly string[];
 }
 
 export type ToolOutcome =
@@ -194,6 +196,12 @@ export type ToolOutcome =
       readonly message: string;
       /** For `approve` and `human`: what the call would do, in plain words, for the person deciding. */
       readonly summary?: string;
+      /** The site a person may allow for the rest of the run instead (see `PolicyDecision.allowSite`). */
+      readonly allowSite?: string;
+      /** Top-level text arguments the person may change before approving (ADR-0030). */
+      readonly editable?: readonly string[];
+      /** The card should list the call's arguments: the summary doesn't say them. */
+      readonly showArgs?: boolean;
     }
   | {
       readonly status: "error";
@@ -204,9 +212,29 @@ export type ToolOutcome =
       readonly durationMs: number;
     };
 
+/**
+ * A tool `load_toolkit` picked from an app, by its full name, however the
+ * model wrote it: `create_pages`, `notion.create_pages` or `notion_create_pages`.
+ */
+export function toolkitToolName(app: string, tool: string): string {
+  const name = tool.trim().toLowerCase();
+  for (const sep of [".", "_"]) {
+    if (name.startsWith(`${app}${sep}`)) return `${app}.${name.slice(app.length + 1)}`;
+  }
+  return `${app}.${name}`;
+}
+
 /** Lists the tools an agent may use and runs them through policy (hard rule 5). */
 export interface ToolExecutor {
-  listTools(ctx: RunContext): Promise<ToolDescriptor[]>;
+  /**
+   * The tools the model sees. Apps with many tools stay behind `load_toolkit`
+   * until the run loads them: `toolkits` holds whole apps by slug (`notes`)
+   * and single tools picked from a large app (`notion.create_pages`).
+   */
+  listTools(
+    ctx: RunContext,
+    options?: { readonly toolkits?: readonly string[] },
+  ): Promise<ToolDescriptor[]>;
   execute(request: ToolExecutionRequest, ctx: RunContext): Promise<ToolOutcome>;
 }
 

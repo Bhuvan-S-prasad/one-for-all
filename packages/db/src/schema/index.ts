@@ -13,3 +13,5 @@ export * from "./secrets";
 export * from "./audit";
 export * from "./artifacts";
 export * from "./approvals";
+export * from "./connections";
+export * from "./policy";

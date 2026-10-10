@@ -12,6 +12,8 @@ import { requestContext } from "./middleware/request-context";
 import { requireSession, requireTenant } from "./middleware/session";
 import { agentRoutes } from "./routes/agents";
 import { approvalRoutes } from "./routes/approvals";
+import { connectionCallbackRoutes, mcpServerRoutes } from "./routes/mcp-servers";
+import { policyRuleRoutes } from "./routes/policy-rules";
 import { artifactRoutes } from "./routes/artifacts";
 import { healthRoutes } from "./routes/health";
 import { loginRoutes } from "./routes/logins";
@@ -92,6 +94,9 @@ export function createApp(container: Container): App {
   app.route("/api/threads", threadRoutes(container));
   app.route("/api/runs", runRoutes(container));
   app.route("/api/approvals", approvalRoutes(container));
+  app.route("/api/policy-rules", policyRuleRoutes(container));
+  app.route("/api/mcp-servers", mcpServerRoutes(container));
+  app.route("/api/connections", connectionCallbackRoutes(container));
   app.route("/api/memories", memoryRoutes(container));
   app.route("/api/artifacts", artifactRoutes(container));
   app.route("/api/logins", loginRoutes(container));

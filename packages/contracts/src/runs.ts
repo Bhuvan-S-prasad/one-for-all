@@ -154,6 +154,10 @@ const RUN_EVENT_PAYLOADS = {
     approvalId: idSchema,
     decision: z.enum(["approved", "edited", "rejected", "expired"]),
     decidedBy: idSchema.nullable(),
+    /** Allowed for the rest of the run (M4.07). */
+    allowedSite: z.string().max(253).optional(),
+    /** `edited`: the arguments the person changed before approving (ADR-0030). */
+    edited: z.array(z.string().max(100)).max(50).optional(),
   }),
   "tool.completed": z.object({
     toolCallId: idSchema,

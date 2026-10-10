@@ -2,18 +2,23 @@ export {
   createToolRegistry,
   defineJsonSchemaTool,
   defineTool,
+  editableTextFields,
   inputFromJsonSchema,
   toDescriptor,
   ToolSchemaError,
   type ToolDefinition,
   type ToolRegistry,
   type ToolRunContext,
+  type Toolkit,
+  type ToolkitSource,
+  type ToolkitSummary,
   type ToolRunResult,
   type Validation,
 } from "./define";
 export { createToolExecutor, type ToolExecutorOptions } from "./executor";
 export { builtinTools, type BuiltinToolDeps } from "./builtins/index";
 export { artifactsReadTool } from "./builtins/artifacts";
+export { LOAD_ALL_LIMIT, LOAD_TOOLKIT, loadToolkitTool } from "./builtins/toolkits";
 export {
   browserTools,
   fileTools,

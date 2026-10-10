@@ -27,6 +27,8 @@ export interface LoggerOptions {
   readonly format: "pretty" | "json";
   /** Output sink; defaults to stdout. Tests pass their own. */
   readonly write?: (line: string) => void;
+  /** Replaces known secret values in each line before it is written (hard rule 4). */
+  readonly redact?: (text: string) => string;
 }
 
 function serializeError(error: unknown): unknown {
@@ -35,7 +37,9 @@ function serializeError(error: unknown): unknown {
 }
 
 export function createLogger(options: LoggerOptions, base: LogFields = {}): Logger {
-  const write = options.write ?? ((line: string) => process.stdout.write(`${line}\n`));
+  const sink = options.write ?? ((line: string) => process.stdout.write(`${line}\n`));
+  const { redact } = options;
+  const write = redact ? (line: string) => sink(redact(line)) : sink;
   const threshold = RANK[options.level];
 
   const log = (level: LogLevel, message: string, fields: LogFields = {}) => {

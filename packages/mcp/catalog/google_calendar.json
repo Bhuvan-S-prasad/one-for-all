@@ -1,0 +1,15 @@
+{
+  "id": "google_calendar",
+  "name": "Google Calendar",
+  "description": "See and manage events on your calendars.",
+  "url": "https://calendarmcp.googleapis.com/mcp/v1",
+  "authOrigin": "https://accounts.google.com",
+  "setup": "own_client",
+  "scopes": ["https://www.googleapis.com/auth/calendar"],
+  "authorizationParams": {
+    "access_type": "offline",
+    "prompt": "consent"
+  },
+  "guide": "docs/guides/google-oauth-client.md",
+  "reviewed": "2026-10-06"
+}

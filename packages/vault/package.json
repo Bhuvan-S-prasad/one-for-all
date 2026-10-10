@@ -2,7 +2,7 @@
   "name": "@ofa/vault",
   "version": "0.0.0",
   "private": true,
-  "description": "Envelope encryption for stored secrets, and secret redaction. Server-only.",
+  "description": "Envelope encryption for stored secrets, key rotation, the OS keychain key source, and secret redaction. Server-only.",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
@@ -11,13 +11,16 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run --passWithNoTests --exclude \"**/*.integration.test.ts\"",
-    "test:integration": "tsx src/scripts/prepare-test-db.ts && vitest run --passWithNoTests integration"
+    "test:integration": "tsx src/scripts/prepare-test-db.ts && vitest run --passWithNoTests integration",
+    "vault": "tsx src/scripts/vault.ts"
   },
   "dependencies": {
+    "@ofa/config": "workspace:*",
     "@ofa/core": "workspace:*",
     "@ofa/db": "workspace:*"
   },
   "devDependencies": {
+    "drizzle-orm": "0.45.3",
     "tsx": "4.23.15"
   }
 }

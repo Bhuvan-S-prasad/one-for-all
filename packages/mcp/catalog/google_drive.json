@@ -1,0 +1,15 @@
+{
+  "id": "google_drive",
+  "name": "Google Drive",
+  "description": "Find, read and organise files in your Drive.",
+  "url": "https://drivemcp.googleapis.com/mcp/v1",
+  "authOrigin": "https://accounts.google.com",
+  "setup": "own_client",
+  "scopes": ["https://www.googleapis.com/auth/drive"],
+  "authorizationParams": {
+    "access_type": "offline",
+    "prompt": "consent"
+  },
+  "guide": "docs/guides/google-oauth-client.md",
+  "reviewed": "2026-10-06"
+}

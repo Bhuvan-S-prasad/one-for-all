@@ -2,6 +2,7 @@ import {
   artifactUri,
   noopTelemetry,
   type AgentDirectory,
+  type AgentProfile,
   type ArtifactStore,
   type PolicyEngine,
   type RunContext,
@@ -11,7 +12,17 @@ import {
   type ToolOutcome,
 } from "@ofa/core";
 import { grantFor, PLATFORM_TOOLS } from "@ofa/policy";
-import type { ToolRegistry, ToolRunContext, ToolRunResult } from "./define";
+import { LOAD_TOOLKIT } from "./builtins/toolkits";
+import { toDescriptor } from "./define";
+import type {
+  Toolkit,
+  ToolDefinition,
+  ToolkitSource,
+  ToolkitSummary,
+  ToolRegistry,
+  ToolRunContext,
+  ToolRunResult,
+} from "./define";
 
 // The tool executor (ARCHITECTURE.md §9.1, "Execution"): the one place a tool
 // runs. In order: schema check, policy verdict, idempotency record, run with
@@ -22,6 +33,10 @@ export interface ToolExecutorOptions {
   readonly policy: PolicyEngine;
   readonly calls: ToolCallStore;
   readonly agents: AgentDirectory;
+  /** Each workspace's connected apps and their tools (M4.05). */
+  readonly toolkits?: ToolkitSource;
+  /** Apps with more granted tools than this wait behind `load_toolkit`. Default 8. */
+  readonly directToolkitLimit?: number;
   /** Replace known secret values in output (vault redaction). */
   readonly redact?: (ctx: RunContext, text: string) => Promise<string>;
   readonly telemetry?: Telemetry;
@@ -67,6 +82,22 @@ function argsText(args: unknown): string {
   return text.length > 400 ? `${text.slice(0, 399)}…` : text;
 }
 
+/** Whether an agent may see a tool: granted and not blocked, or a platform tool. */
+function visible(agent: AgentProfile, name: string): boolean {
+  const grant = grantFor(agent.grants, name);
+  return grant ? grant.mode !== "blocked" : PLATFORM_TOOLS.has(name);
+}
+
+/** The tool's editable arguments that this call fills with text (ADR-0030). */
+function editableIn(
+  tool: { editable?: readonly string[] },
+  args: unknown,
+): { editable?: string[] } {
+  const values = (args ?? {}) as Record<string, unknown>;
+  const editable = (tool.editable ?? []).filter((name) => typeof values[name] === "string");
+  return editable.length > 0 ? { editable } : {};
+}
+
 /** The tool's own words for a call, or its name and arguments; never fails. */
 async function describe(
   tool: { name: string; describe?: (args: unknown, ctx: ToolRunContext) => Promise<string> },
@@ -85,6 +116,49 @@ async function describe(
 
 export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
   const { registry, policy, calls } = options;
+  const directLimit = options.directToolkitLimit ?? 8;
+
+  /**
+   * The workspace's toolkits, each cut down to what this agent was granted,
+   * with the tools the run has loaded: a whole app, or the ones it picked.
+   */
+  async function grantedKits(
+    ctx: RunContext,
+    agent: AgentProfile,
+    loaded: ReadonlySet<string>,
+  ): Promise<
+    { kit: Toolkit; summary: ToolkitSummary; inList: readonly ToolDefinition<unknown>[] }[]
+  > {
+    const kits = (await options.toolkits?.toolkits(ctx)) ?? [];
+    return kits.flatMap((kit) => {
+      // App tools need a grant: none of them is a platform tool.
+      const tools = kit.tools.filter((t) => {
+        const grant = grantFor(agent.grants, t.name);
+        return grant !== undefined && grant.mode !== "blocked";
+      });
+      if (tools.length === 0) return [];
+      const whole = loaded.has(kit.app) || tools.length <= directLimit;
+      return [
+        {
+          kit: { ...kit, tools },
+          summary: {
+            app: kit.app,
+            name: kit.name,
+            description: kit.description,
+            tools: tools.map((t) => ({ name: t.name, description: t.description })),
+            loaded: whole,
+          },
+          inList: whole ? tools : tools.filter((t) => loaded.has(t.name)),
+        },
+      ];
+    });
+  }
+
+  /** The built-in registry plus this workspace's toolkits. */
+  async function registryFor(ctx: RunContext): Promise<ToolRegistry> {
+    const kits = (await options.toolkits?.toolkits(ctx)) ?? [];
+    return kits.length ? registry.extend(kits.flatMap((k) => k.tools)) : registry;
+  }
   const telemetry = options.telemetry ?? noopTelemetry;
   const maxChars = options.maxResultChars ?? 12_000;
   const timeoutMs = options.timeoutMs ?? 60_000;
@@ -93,15 +167,28 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
   const store = options.artifacts;
 
   return {
-    async listTools(ctx) {
+    async listTools(ctx, listing = {}) {
       // The model only ever sees tools this agent was granted (§7: small tool lists).
       const agent = await options.agents.get(ctx, ctx.agentId);
       if (!agent) return [];
-      return registry.descriptors().filter((d) => {
-        const grant = grantFor(agent.grants, d.name);
-        if (grant) return grant.mode !== "blocked";
-        return PLATFORM_TOOLS.has(d.name);
+      const kits = await grantedKits(ctx, agent, new Set(listing.toolkits ?? []));
+      const waiting = kits.filter((k) => !k.summary.loaded).map((k) => k.summary);
+      const builtins = registry.descriptors().flatMap((d) => {
+        if (!visible(agent, d.name)) return [];
+        if (d.name !== LOAD_TOOLKIT) return [d];
+        // Only when something is waiting, naming what is and its tools, so the
+        // agent can pick from a large app in one call.
+        if (waiting.length === 0) return [];
+        const apps = waiting
+          .map((s) => {
+            const names = s.tools.map((t) => t.name.slice(s.app.length + 1)).join(", ");
+            return `${s.app} (${s.name}, ${s.tools.length} tools: ${names}): ${s.description}`;
+          })
+          .join("\n");
+        return [{ ...d, description: `${d.description}\nApps you can load:\n${apps}` }];
       });
+      const loadedTools = kits.flatMap((k) => k.inList.map((t) => toDescriptor(t as never)));
+      return [...builtins, ...loadedTools];
     },
 
     async execute(request, ctx): Promise<ToolOutcome> {
@@ -112,7 +199,8 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
         { trace: ctx.runId },
       );
       try {
-        const tool = registry.get(request.name);
+        const tools = await registryFor(ctx);
+        const tool = tools.get(request.name);
         if (!tool) {
           return {
             status: "error",
@@ -121,37 +209,35 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
             durationMs: 0,
           };
         }
-        const descriptor = registry.descriptors().find((d) => d.name === request.name)!;
+        const descriptor = tools.descriptors().find((d) => d.name === request.name)!;
 
         // Before policy and before anything is recorded: a malformed call
         // goes back to the model to fix, and never reaches the tool (M2.29).
-        const parsed = registry.validate(request.name, request.args);
+        const parsed = tools.validate(request.name, request.args);
         if (!parsed.ok) {
-          return { status: "error", code: "invalid_args", message: parsed.message, durationMs: 0 };
-        }
-
-        const decision = await policy.evaluate({
-          ctx,
-          tool: descriptor,
-          args: parsed.value,
-          tainted: request.tainted,
-          knownUrls: new Set(request.knownUrls ?? []),
-        });
-        span.setAttributes({ "policy.verdict": decision.verdict });
-        if (decision.verdict === "deny") {
           return {
-            status: "blocked",
-            verdict: "deny",
-            reasons: decision.reasons,
-            message: decision.reasons[0] ?? "Not allowed",
+            status: "error",
+            code: "invalid_args",
+            // A validator can quote the value it refused.
+            message: await redact(ctx, parsed.message),
+            durationMs: 0,
           };
         }
+
         const agent = await options.agents.get(ctx, ctx.agentId);
         const runCtx: ToolRunContext = {
           ...ctx,
           idempotencyKey: request.idempotencyKey,
           tainted: request.tainted,
           memoryScopes: agent?.memoryScopes ?? [],
+          ...(options.toolkits && agent
+            ? {
+                toolkits: {
+                  list: async () =>
+                    (await grantedKits(ctx, agent, new Set())).map((k) => k.summary),
+                },
+              }
+            : {}),
           ...(options.logins
             ? { logins: { get: (site: string) => options.logins!(ctx, site) } }
             : {}),
@@ -173,6 +259,33 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
             : {}),
         };
 
+        // The site the call acts on: only taint escalation looks at it, so
+        // only a tainted run asks the tool.
+        const site =
+          request.tainted && tool.site
+            ? ((await withTimeout(tool.site(parsed.value, runCtx), 10_000).catch(() => null)) ??
+              undefined)
+            : undefined;
+
+        const decision = await policy.evaluate({
+          ctx,
+          tool: descriptor,
+          args: parsed.value,
+          tainted: request.tainted,
+          knownUrls: new Set(request.knownUrls ?? []),
+          ...(site ? { site } : {}),
+          allowedSites: new Set(request.allowedSites ?? []),
+        });
+        span.setAttributes({ "policy.verdict": decision.verdict });
+        if (decision.verdict === "deny") {
+          return {
+            status: "blocked",
+            verdict: "deny",
+            reasons: decision.reasons,
+            message: decision.reasons[0] ?? "Not allowed",
+          };
+        }
+
         if (decision.verdict !== "auto" && !request.approved) {
           // A person must agree first (§6.2): nothing runs; the harness asks
           // them, showing what the call would do, and calls again if they agree.
@@ -182,6 +295,9 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
             reasons: decision.reasons,
             message: `${request.name} needs a person's approval first.`,
             summary: await redact(ctx, await describe(tool, parsed.value, runCtx)),
+            ...(decision.allowSite ? { allowSite: decision.allowSite } : {}),
+            ...editableIn(tool, parsed.value),
+            ...(tool.showArgs ? { showArgs: true } : {}),
           };
         }
 

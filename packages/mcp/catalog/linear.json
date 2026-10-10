@@ -1,0 +1,9 @@
+{
+  "id": "linear",
+  "name": "Linear",
+  "description": "Find, create and update issues, projects and comments in Linear.",
+  "url": "https://mcp.linear.app/mcp",
+  "authOrigin": "https://mcp.linear.app",
+  "setup": "automatic",
+  "reviewed": "2026-10-06"
+}

@@ -1,0 +1,11 @@
+{
+  "id": "github",
+  "name": "GitHub",
+  "description": "Repositories, issues, pull requests and notifications on GitHub.",
+  "url": "https://api.githubcopilot.com/mcp/",
+  "authOrigin": "https://github.com",
+  "setup": "own_client",
+  "scopes": ["repo", "read:org", "read:user", "notifications"],
+  "guide": "docs/guides/github-oauth-app.md",
+  "reviewed": "2026-10-06"
+}

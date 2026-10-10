@@ -1,12 +1,13 @@
 import {
   asId,
   type ApprovalRecord,
+  type ApprovalScope,
   type ApprovalStatus,
   type ApprovalStore,
   type TenantContext,
   type Verdict,
 } from "@ofa/core";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import type { Database } from "../client";
 import { approval, run } from "../schema/index";
 import { withTenant, type Tx } from "../tenant";
@@ -25,6 +26,11 @@ const columns = {
   summary: approval.summary,
   reasons: approval.reasons,
   verdict: approval.verdict,
+  site: approval.site,
+  scope: approval.scope,
+  editable: approval.editable,
+  showArgs: approval.showArgs,
+  edits: approval.edits,
   status: approval.status,
   decidedBy: approval.decidedBy,
   createdAt: approval.createdAt,
@@ -43,6 +49,11 @@ interface Row {
   summary: string;
   reasons: string[];
   verdict: Verdict;
+  site: string | null;
+  scope: string;
+  editable: string[];
+  showArgs: boolean;
+  edits: Record<string, string> | null;
   status: string;
   decidedBy: string | null;
   createdAt: Date;
@@ -55,6 +66,7 @@ function toRecord(row: Row): ApprovalRecord {
     ...row,
     runId: asId(row.runId),
     agentId: asId(row.agentId),
+    scope: row.scope as ApprovalScope,
     status: row.status as ApprovalStatus,
   };
 }
@@ -80,6 +92,9 @@ export function createApprovalStore(db: Database): ApprovalStore {
             summary: input.summary.slice(0, 2_000),
             reasons: [...input.reasons],
             verdict: input.verdict,
+            site: input.site ?? null,
+            editable: [...(input.editable ?? [])],
+            showArgs: input.showArgs ?? false,
             expiresAt: input.expiresAt,
           })
           .onConflictDoNothing({ target: [approval.runId, approval.toolCallId] });
@@ -105,7 +120,20 @@ export function createApprovalStore(db: Database): ApprovalStore {
       return withTenant(db, ctx, async (tx) => {
         const [updated] = await tx
           .update(approval)
-          .set({ status: input.status, decidedBy: input.decidedBy, decidedAt: new Date() })
+          .set({
+            status: input.status,
+            decidedBy: input.decidedBy,
+            decidedAt: new Date(),
+            // A site-wide answer only means something for an approval that names a site.
+            scope:
+              input.status === "approved" && input.scope === "site"
+                ? sql`case when ${approval.site} is null then 'once' else 'site' end`
+                : "once",
+            edits:
+              input.status === "approved" && input.edits && Object.keys(input.edits).length > 0
+                ? { ...input.edits }
+                : null,
+          })
           .where(and(eq(approval.id, id), eq(approval.status, "pending")))
           .returning({ id: approval.id });
         if (!updated) return null;

@@ -15,12 +15,13 @@
     "test": "turbo run test",
     "test:integration": "turbo run test:integration",
     "eval": "pnpm --filter @ofa/evals eval",
+    "vault": "pnpm --filter @ofa/vault vault",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "infra:up": "docker compose -f infra/compose/docker-compose.dev.yml up -d --wait",
-    "infra:down": "docker compose -f infra/compose/docker-compose.dev.yml down",
-    "infra:logs": "docker compose -f infra/compose/docker-compose.dev.yml logs -f",
-    "infra:reset": "docker compose -f infra/compose/docker-compose.dev.yml down -v"
+    "infra:up": "docker compose -f infra/compose/docker-compose.dev.yml --env-file infra/compose/dev.env up -d --wait",
+    "infra:down": "docker compose -f infra/compose/docker-compose.dev.yml --env-file infra/compose/dev.env down",
+    "infra:logs": "docker compose -f infra/compose/docker-compose.dev.yml --env-file infra/compose/dev.env logs -f",
+    "infra:reset": "docker compose -f infra/compose/docker-compose.dev.yml --env-file infra/compose/dev.env down -v"
   },
   "devDependencies": {
     "@ofa/eslint-config": "workspace:*",

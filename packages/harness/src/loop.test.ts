@@ -280,6 +280,75 @@ describe("runAgent", () => {
     expect(seen[1]).toEqual(["https://docs.example/start", "https://larkspur.example/notes/3.0"]);
   });
 
+  it("adds an app's tools to the list once load_toolkit has loaded them", async () => {
+    const { tools, llm, run, steps } = setup([
+      { toolCalls: [{ name: "load_toolkit", args: { app: "Notes" } }] },
+      { toolCalls: [{ name: "notes.search", args: { query: "plan" } }] },
+      { text: "Found it." },
+    ]);
+    const asked: (readonly string[] | undefined)[] = [];
+    const noteSearch = { ...search, name: "notes.search" };
+    tools.listTools = async (_c, listing) => {
+      asked.push(listing?.toolkits);
+      return listing?.toolkits?.includes("notes") ? [search, noteSearch] : [search];
+    };
+    const execute = tools.execute.bind(tools);
+    tools.execute = async (request, c) =>
+      request.name === "load_toolkit" || request.name === "notes.search"
+        ? okOutcome(`${request.name} done`)
+        : execute(request, c);
+    await run();
+    const offered = llm.requests.map((r) => (r.tools ?? []).map((t) => t.name).sort());
+    expect(offered[0]).toEqual(["web.search"]);
+    expect(offered[1]).toEqual(["notes.search", "web.search"]);
+    expect(asked).toEqual([undefined, ["notes"]]);
+    expect(steps.ran).toContain("tool-0-0-toolkit");
+  });
+
+  it("loads just the tools picked from a large app, however the model names them", async () => {
+    const { tools, llm, run } = setup([
+      {
+        toolCalls: [
+          {
+            name: "load_toolkit",
+            args: { app: "notion", tools: ["create_pages", "notion_search"] },
+          },
+        ],
+      },
+      { toolCalls: [{ name: "load_toolkit", args: { app: "notion", tools: ["search"] } }] },
+      { text: "Ready." },
+    ]);
+    const asked: (readonly string[] | undefined)[] = [];
+    tools.listTools = async (_c, listing) => {
+      asked.push(listing?.toolkits);
+      return [search];
+    };
+    const execute = tools.execute.bind(tools);
+    tools.execute = async (request, c) =>
+      request.name === "load_toolkit" ? okOutcome("loaded") : execute(request, c);
+    await run();
+    // The second call picked nothing new, so the list wasn't fetched again.
+    expect(asked).toEqual([undefined, ["notion.create_pages", "notion.search"]]);
+    expect(llm.requests).toHaveLength(3);
+  });
+
+  it("points a call to a tool it wasn't given at load_toolkit, when apps are waiting", async () => {
+    const { llm, tools, run } = setup([
+      {
+        toolCalls: [
+          { name: "notion_create_pages", args: {}, invalid: "Unknown tool: notion_create_pages" },
+        ],
+      },
+      { text: "Sorry." },
+    ]);
+    const loader = { ...search, name: "load_toolkit", description: "Load an app" };
+    tools.listTools = async () => [search, loader];
+    await run();
+    expect(llm.requests[1]?.messages.at(-1)?.content).toBe(
+      "Error: Unknown tool: notion_create_pages. If it belongs to a connected app, call load_toolkit first with the app and the tools you need, then call them by the names it gives.",
+    );
+  });
+
   it("lets middleware block a tool before it runs", async () => {
     const { runtime, tools, run } = setup([
       { toolCalls: [{ name: "web.search", args: { query: "x" } }] },
@@ -438,6 +507,95 @@ describe("approvals", () => {
     });
   });
 
+  it("runs the text a person changed before approving, and tells the model (ADR-0030)", async () => {
+    const { runtime } = held(() => null);
+    const page: ToolDescriptor = {
+      name: "notes.create_page",
+      description: "Create a page",
+      inputSchema: {
+        type: "object",
+        properties: {
+          parent: { type: "string" },
+          title: { type: "string" },
+          body: { type: "string" },
+        },
+      },
+      annotations: { outbound: true },
+      source: "mcp",
+    };
+    const llm = createScriptedLLM([
+      {
+        toolCalls: [
+          {
+            name: "notes.create_page",
+            args: { parent: "p1", title: "Plan", body: "Key: hunter2-secret-value" },
+          },
+        ],
+      },
+      { text: "Created." },
+    ]);
+    const tools = createFakeToolExecutor([
+      {
+        descriptor: page,
+        run: (_args, request) =>
+          request.approved
+            ? okOutcome("Page created", true)
+            : {
+                status: "blocked",
+                verdict: "approve",
+                reasons: ["granted as part of notes.*; tools that change things ask first"],
+                message: "notes.create_page needs a person's approval first.",
+                summary: "Use Notes: Create page",
+                editable: ["title", "body"],
+                showArgs: true,
+              },
+      },
+    ]);
+    const approvals = createMemoryApprovals();
+    const steps = createMemoStepRunner({
+      onWait: () => {
+        const id = approvals.records[0]!.id;
+        void approvals.decide(ctx, id, {
+          status: "approved",
+          decidedBy: "usr_1",
+          edits: { title: "A better plan" },
+        });
+        return { approvalId: id };
+      },
+    });
+    await runAgent(
+      { ctx, threadId, trigger: "message" },
+      {
+        llm,
+        tools,
+        runs: runtime.runs,
+        agents: runtime.agents,
+        threads: runtime.threads,
+        approvals,
+        redact: async (_ctx, text) => text.replaceAll("hunter2-secret-value", "[REDACTED]"),
+      },
+      steps,
+    );
+    // Text holding a secret is shown redacted, so it isn't offered for editing.
+    expect(approvals.records[0]).toMatchObject({
+      editable: ["title"],
+      showArgs: true,
+      args: { parent: "p1", title: "Plan", body: "Key: [REDACTED]" },
+    });
+    // Their title, the agent's body (with the real value), the same idempotency key.
+    expect(tools.calls[1]).toMatchObject({
+      args: { parent: "p1", title: "A better plan", body: "Key: hunter2-secret-value" },
+      key: tools.calls[0]?.key,
+    });
+    expect(JSON.stringify(llm.requests[1]?.messages)).toContain(
+      "The person changed title before approving, so this ran with their version.",
+    );
+    expect(runtime.runs.events.find((e) => e.type === "approval.decided")?.payload).toMatchObject({
+      decision: "edited",
+      edited: ["title"],
+    });
+  });
+
   it("tells the model when the person said no, and runs nothing", async () => {
     const { tools, llm, run } = held((_id, a) => decide(a, "rejected"));
     await run();
@@ -468,6 +626,59 @@ describe("approvals", () => {
     expect(approvals.records[0]?.status).toBe("expired");
     expect(tools.calls).toHaveLength(1);
     expect(JSON.stringify(llm.requests[1]?.messages)).toContain("nobody answered");
+  });
+
+  it("after a person allows a site for the task, later calls there carry it", async () => {
+    const { runtime } = held(() => null);
+    const llm = createScriptedLLM([
+      { toolCalls: [{ name: "browser.click", args: { ref: 9 } }] },
+      { toolCalls: [{ name: "browser.click", args: { ref: 10 } }] },
+      { text: "Done." },
+    ]);
+    const requests: (readonly string[] | undefined)[] = [];
+    const tools = createFakeToolExecutor([
+      {
+        descriptor: click,
+        run: (_args, request) => {
+          requests.push(request.allowedSites);
+          return request.approved || request.allowedSites?.includes("a.example")
+            ? okOutcome("Page: Thanks", true)
+            : {
+                status: "blocked",
+                verdict: "approve",
+                reasons: ["outbound tool in a run that read untrusted content"],
+                message: "browser.click needs a person's approval first.",
+                summary: "Click the button “Next” on a.example",
+                allowSite: "a.example",
+              };
+        },
+      },
+    ]);
+    const approvals = createMemoryApprovals();
+    const steps = createMemoStepRunner({
+      onWait: () => {
+        const id = approvals.records[0]!.id;
+        void approvals.decide(ctx, id, { status: "approved", decidedBy: "usr_1", scope: "site" });
+        return { approvalId: id };
+      },
+    });
+    const deps = {
+      llm,
+      tools,
+      runs: runtime.runs,
+      agents: runtime.agents,
+      threads: runtime.threads,
+      approvals,
+    };
+    await runAgent({ ctx, threadId, trigger: "message" }, deps, steps);
+
+    expect(approvals.records).toHaveLength(1);
+    expect(approvals.records[0]).toMatchObject({ site: "a.example", scope: "site" });
+    // Held, run once approved, then the second click went through without asking.
+    expect(requests).toEqual([[], ["a.example"], ["a.example"]]);
+    expect(runtime.runs.events.find((e) => e.type === "approval.decided")?.payload).toMatchObject({
+      allowedSite: "a.example",
+    });
   });
 
   it("refuses calls that need a person when runs cannot wait", async () => {
@@ -545,6 +756,36 @@ describe("context assembly", () => {
     );
     const tool = out.messages.at(-1)?.content ?? "";
     expect(tool.match(/<\/untrusted>/g)).toHaveLength(1);
+  });
+
+  it("lets large app tools borrow from history, and skips only what still doesn't fit", () => {
+    const budget = contextBudget(32_000, 32_000);
+    // About 1,500 tokens of schema each, like Notion's.
+    const big = (name: string): ToolDescriptor => ({
+      ...search,
+      name,
+      inputSchema: { type: "object", description: "x".repeat(6_000) },
+    });
+    const huge = { ...big("app.huge"), inputSchema: { description: "x".repeat(40_000) } };
+    const out = assembleContext(
+      {
+        ...base,
+        history: [],
+        tools: [big("app.a"), huge, big("app.b"), big("app.c"), big("app.d"), search],
+      },
+      budget,
+    );
+    // Past the 4,000-token tool budget, into history's; the one that can't
+    // fit at all is left out, not everything after it.
+    expect(out.tools.map((t) => t.name)).toEqual([
+      "app.a",
+      "app.b",
+      "app.c",
+      "app.d",
+      "web.search",
+    ]);
+    expect(out.tokens.blocks.tools).toBeGreaterThan(budget.tools);
+    expect(out.tokens.blocks.tools).toBeLessThanOrEqual(budget.tools * 2);
   });
 });
 

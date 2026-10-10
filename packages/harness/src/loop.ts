@@ -1,6 +1,7 @@
 import { INNGEST_EVENTS, type RunStopReason } from "@ofa/contracts";
 import {
   APPROVAL_TIMEOUT_MS,
+  toolkitToolName,
   urlKey,
   urlsIn,
   type AgentDirectory,
@@ -31,6 +32,7 @@ import {
 } from "./context";
 import { modelCallEvents, runEvent } from "./events";
 import { MiddlewareChain, type HarnessMiddleware, type RunHookContext } from "./middleware";
+import { redactJson, type RedactText } from "./redaction";
 
 // The agent loop (ARCHITECTURE.md §6.2). Every side effect happens inside a
 // durable step (hard rule 6): model calls, tool calls, run-log writes and the
@@ -65,6 +67,11 @@ export interface HarnessDeps {
    * wait, calls that need a person are refused.
    */
   readonly approvals?: ApprovalStore;
+  /**
+   * Replaces known secret values (the vault's redaction). Applied to every
+   * run event, approval request and reply before it is stored (hard rule 4).
+   */
+  readonly redact?: RedactText;
   readonly middleware?: readonly HarnessMiddleware[];
   readonly options?: HarnessOptions;
 }
@@ -144,6 +151,44 @@ interface ToolStepResult {
     readonly verdict: Verdict;
     readonly reasons: readonly string[];
     readonly summary: string;
+    /** The site the person may allow for the rest of the run instead. */
+    readonly site?: string;
+    readonly editable?: readonly string[];
+    readonly showArgs?: boolean;
+  };
+}
+
+/**
+ * A person's answer: for this call only, or for every call like it on a site
+ * (M4.07), and the text they changed before approving (ADR-0030).
+ */
+interface Decision {
+  readonly status: "approved" | "rejected" | "expired";
+  readonly site: string | null;
+  readonly edits: Record<string, string> | null;
+}
+
+/** What the model is told when a person changed the call before it ran. */
+function editedNote(fields: readonly string[]): string {
+  const names =
+    fields.length > 1 ? `${fields.slice(0, -1).join(", ")} and ${fields.at(-1)}` : fields[0];
+  return `The person changed ${names} before approving, so this ran with their version.`;
+}
+
+/**
+ * A call to a tool the model wasn't given, while apps wait behind
+ * `load_toolkit`, gets told how to load it: with "Unknown tool" alone, an
+ * agent guessed Notion tool names for six steps (M4 end-to-end check).
+ */
+function withLoadHint<T extends { readonly name: string; readonly invalid?: string }>(
+  call: T,
+  tools: readonly ToolDescriptor[],
+): T {
+  if (!call.invalid || tools.some((t) => t.name === call.name)) return call;
+  if (!tools.some((t) => t.name === "load_toolkit")) return call;
+  return {
+    ...call,
+    invalid: `${call.invalid}. If it belongs to a connected app, call load_toolkit first with the app and the tools you need, then call them by the names it gives.`,
   };
 }
 
@@ -168,10 +213,14 @@ export async function runAgent(
   const { ctx } = input;
   const options = deps.options ?? {};
   const chain = new MiddlewareChain(deps.middleware ?? []);
-  const log = (events: RunEventWrite[]) => deps.runs.append(ctx, ctx.runId, events);
+  const redact: RedactText = deps.redact ?? (async (_ctx, text) => text);
+  const log = async (events: RunEventWrite[]) =>
+    deps.runs.append(ctx, ctx.runId, await redactJson(redact, ctx, events));
   let hook: RunHookContext | null = null;
   /** Addresses the run was given, in `urlKey` form (filled in as the run goes). */
   const knownUrls = new Set<string>();
+  /** Sites a person allowed for the rest of this run, rebuilt on replay from memoized answers. */
+  const allowedSites = new Set<string>();
 
   try {
     // ── Start ────────────────────────────────────────────────────────────────
@@ -259,13 +308,17 @@ export async function runAgent(
     const seen = new Map<string, number>();
     let finalText: string | null = null;
     let stopReason: RunStopReason = "step_budget";
+    // Apps behind load_toolkit join the tool list once loaded (M4.05); both
+    // rebuild on replay from the memoized tool steps.
+    let tools = context.tools;
+    const loadedToolkits = new Set<string>();
 
     for (let i = 0; i < agent.budgets.steps; i += 1) {
       let assembled = assembleContext(
         {
           today: start.today,
           agent,
-          tools: context.tools,
+          tools,
           memories: context.memories,
           todos,
           history: context.history,
@@ -283,7 +336,7 @@ export async function runAgent(
               {
                 today: start.today,
                 agent,
-                tools: context.tools,
+                tools,
                 memories: context.memories,
                 todos,
                 history: context.history,
@@ -321,7 +374,7 @@ export async function runAgent(
             {
               today: start.today,
               agent,
-              tools: context.tools,
+              tools,
               memories: context.memories,
               todos,
               history: context.history,
@@ -409,25 +462,62 @@ export async function runAgent(
         toolCalls: step.toolCalls.map(({ id, name, args }) => ({ id, name, args })),
       });
 
-      for (const [j, call] of step.toolCalls.entries()) {
+      for (const [j, offered] of step.toolCalls.entries()) {
         const toolCallId = `tool-${i}-${j}`;
+        const call = withLoadHint(offered, tools);
         let result: ToolStepResult = await steps.run(toolCallId, () =>
           runTool(toolCallId, call, tainted),
         );
         if (result.approval) {
           const decision = await askPerson(toolCallId, call, result.approval);
-          result =
-            decision === "approved"
-              ? await steps.run(`${toolCallId}-approved`, () =>
-                  runTool(toolCallId, call, tainted, true),
-                )
-              : { content: DECLINED[decision], untrusted: false, ok: false, taintedNow: false };
+          if (decision.status === "approved" && decision.site) allowedSites.add(decision.site);
+          if (decision.status === "approved") {
+            const { edits } = decision;
+            // Their version runs, checked against the tool's schema again.
+            const asApproved = edits
+              ? { ...call, args: { ...(call.args as Record<string, unknown>), ...edits } }
+              : call;
+            result = await steps.run(`${toolCallId}-approved`, () =>
+              runTool(toolCallId, asApproved, tainted, true),
+            );
+            if (edits) {
+              result = {
+                ...result,
+                content: `${editedNote(Object.keys(edits))}
+${result.content}`,
+              };
+            }
+          } else {
+            result = {
+              content: DECLINED[decision.status],
+              untrusted: false,
+              ok: false,
+              taintedNow: false,
+            };
+          }
         }
         usage = addUsage(usage, { inputTokens: 0, outputTokens: 0, costUsd: 0 }, { tool: 1 });
         if (result.taintedNow) tainted = true;
         if (result.ok && call.name === "todo.write") {
           const items = (call.args as { items?: { text: string; done: boolean }[] }).items;
           if (Array.isArray(items)) todos = items;
+        }
+        if (result.ok && call.name === "load_toolkit") {
+          const args = call.args as { app?: unknown; tools?: unknown };
+          const app = String(args.app ?? "")
+            .trim()
+            .toLowerCase();
+          // A whole app, or the tools picked from a large one.
+          const picked = Array.isArray(args.tools)
+            ? args.tools.map((t) => toolkitToolName(app, String(t)))
+            : [app];
+          const fresh = app ? picked.filter((entry) => !loadedToolkits.has(entry)) : [];
+          if (fresh.length) {
+            for (const entry of fresh) loadedToolkits.add(entry);
+            tools = await steps.run(`${toolCallId}-toolkit`, () =>
+              deps.tools.listTools(ctx, { toolkits: [...loadedToolkits] }),
+            );
+          }
         }
         turns.push({
           kind: "tool",
@@ -447,14 +537,15 @@ export async function runAgent(
         : (STOP_NOTES[stopReason] ?? "I stopped before finishing.");
     const messageId = input.threadId
       ? await steps.run("reply", async () => {
+          const content = await redact(ctx, replyText);
           const id = await deps.threads.addAgentMessage(ctx, {
             threadId: input.threadId as ThreadId,
-            content: replyText,
+            content,
           });
           await log([
             runEvent("reply", "message.created", {
               messageId: id,
-              preview: preview(replyText, 280),
+              preview: preview(content, 280),
             }),
           ]);
           return id as string;
@@ -476,7 +567,7 @@ export async function runAgent(
     toolCallId: string,
     call: ToolCallTurn,
     approval: NonNullable<ToolStepResult["approval"]>,
-  ): Promise<"approved" | "rejected" | "expired"> {
+  ): Promise<Decision> {
     const approvals = deps.approvals as ApprovalStore;
     const waitFor = (id: string, timeoutMs: number) =>
       steps.waitForEvent!(id, {
@@ -488,13 +579,24 @@ export async function runAgent(
     const timeoutMs = options.approvalTimeoutMs ?? APPROVAL_TIMEOUT_MS;
 
     const asked = await steps.run(`${toolCallId}-ask`, async () => {
+      const args = await redactJson(redact, ctx, call.args);
+      // Text that holds a secret is shown redacted, so it can't be edited:
+      // saving the card would replace the secret with "[REDACTED]".
+      const original = (call.args ?? {}) as Record<string, unknown>;
+      const shown = (args ?? {}) as Record<string, unknown>;
+      const editable = (approval.editable ?? []).filter(
+        (name) => typeof original[name] === "string" && shown[name] === original[name],
+      );
       const record = await approvals.request(ctx, {
         toolCallId,
         tool: call.name,
-        args: call.args,
-        summary: approval.summary,
+        args,
+        summary: await redact(ctx, approval.summary),
         reasons: approval.reasons,
         verdict: approval.verdict,
+        site: approval.site ?? null,
+        editable,
+        showArgs: approval.showArgs ?? false,
         expiresAt: new Date(Date.now() + timeoutMs),
       });
       await log([
@@ -531,18 +633,26 @@ export async function runAgent(
           (await approvals.decide(ctx, asked.id, { status: "expired", decidedBy: null })) ??
           (await approvals.get(ctx, asked.id));
       }
-      const status: "approved" | "rejected" | "expired" =
+      const status: Decision["status"] =
         record && record.status !== "pending" ? record.status : "expired";
+      const site = status === "approved" && record?.scope === "site" ? record.site : null;
+      // Only text the card offered for editing; the API checks the same.
+      const changed = Object.entries(status === "approved" ? (record?.edits ?? {}) : {}).filter(
+        ([name, value]) => record?.editable.includes(name) && typeof value === "string",
+      );
+      const edits = changed.length > 0 ? Object.fromEntries(changed) : null;
       await log([
         runEvent(`${toolCallId}-decided`, "approval.decided", {
           approvalId: asked.id,
-          decision: status,
+          decision: edits ? "edited" : status,
           decidedBy: record?.decidedBy ?? null,
+          ...(site ? { allowedSite: site } : {}),
+          ...(edits ? { edited: Object.keys(edits) } : {}),
         }),
         runEvent(`${toolCallId}-resumed`, "run.resumed", {}),
       ]);
       await deps.runs.update(ctx, ctx.runId, { status: "running", onlyIfStatus: "waiting" });
-      return status;
+      return { status, site, edits } satisfies Decision;
     });
   }
 
@@ -571,6 +681,7 @@ export async function runAgent(
       idempotencyKey: `${ctx.runId}:${toolCallId}`,
       tainted: taintedBefore,
       knownUrls: [...knownUrls],
+      allowedSites: [...allowedSites],
       ...(approved ? { approved: true } : {}),
     };
     const execute = chain.tool(hook as RunHookContext, (r) => deps.tools.execute(r, ctx));
@@ -581,7 +692,8 @@ export async function runAgent(
       outcome = {
         status: "error",
         code: "tool_crashed",
-        message: errorMessage(error),
+        // It goes to the model as well as the run log.
+        message: await redact(ctx, errorMessage(error)),
         durationMs: 0,
       };
     }
@@ -654,6 +766,9 @@ export async function runAgent(
           reasons: outcome.reasons,
           summary:
             outcome.summary ?? `${call.name} ${JSON.stringify(call.args ?? {}).slice(0, 400)}`,
+          ...(outcome.allowSite ? { site: outcome.allowSite } : {}),
+          ...(outcome.editable ? { editable: outcome.editable } : {}),
+          ...(outcome.showArgs ? { showArgs: true } : {}),
         },
       };
     }

@@ -21,6 +21,7 @@ function HatchPage() {
     description: "",
     tier: "standard",
     tools: BUILTIN_TOOLS.filter((t) => t.starter).map((t) => t.name),
+    grants: [],
   }));
 
   return (

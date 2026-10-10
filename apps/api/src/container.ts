@@ -8,6 +8,7 @@ import type {
   AgentDirectory,
   ApprovalStore,
   ArtifactStore,
+  ConnectionStore,
   CredentialVault,
   EventBus,
   LLMGateway,
@@ -16,15 +17,19 @@ import type {
   SandboxProvider,
   TenantContext,
   ThreadStore,
+  TokenRefresher,
 } from "@ofa/core";
 import {
   createAgentDirectory,
   createApprovalStore,
+  createConnectionStore,
+  createPolicyRuleStore,
   createArtifactStore,
   createDatabase,
   createRunStore,
   createThreadStore,
   createToolCallStore,
+  listConnectionsDueForRefresh,
   type Database,
 } from "@ofa/db";
 import { createPgEventBus, workspaceEvent } from "@ofa/events";
@@ -38,6 +43,12 @@ import {
   type TierMap,
   type TierOverrides,
 } from "@ofa/llm";
+import {
+  createMcpConnections,
+  createMcpToolkits,
+  type McpConnections,
+  type McpToolkits,
+} from "@ofa/mcp";
 import { createPgMemoryStore } from "@ofa/memory";
 import {
   createFunctions,
@@ -47,14 +58,24 @@ import {
 } from "@ofa/orchestrator";
 import { createPolicyEngine } from "@ofa/policy";
 import { createDockerSandbox } from "@ofa/sandbox";
-import { createTelemetry, type TelemetryHandle } from "@ofa/telemetry";
+import { createTelemetry, type TelemetryHandle, type TelemetryOptions } from "@ofa/telemetry";
 import {
   builtinTools,
   createSearxngProvider,
   createToolExecutor,
   createToolRegistry,
+  type ToolDefinition,
 } from "@ofa/tools";
-import { createUnconfiguredVault, createVault } from "@ofa/vault";
+import {
+  createOsKeychain,
+  createSecretRegistry,
+  createUnconfiguredVault,
+  createVault,
+  resolveVaultKeys,
+  rotateInstall,
+  type InstallRotation,
+  type VaultKeys,
+} from "@ofa/vault";
 import type { Inngest } from "inngest";
 import { createAuth, type Auth } from "./auth/auth";
 import { createLogger, type Logger } from "./lib/logger";
@@ -75,12 +96,23 @@ export function llmKeySecretName(providerId: string): string {
   return `llm.${providerId}.api_key`;
 }
 
+/** Finishing a vault key rotation at start (M4.02); see vault-rotation.ts. */
+export interface VaultRotation {
+  readonly keys: VaultKeys;
+  /** Re-wrap every workspace's values with the current key; `ownerDb` is the owner connection. */
+  run(ownerDb: Database): Promise<InstallRotation>;
+  /** Remove the replaced key from the OS keychain, once nothing needs it. */
+  forgetPrevious(): void;
+}
+
 export interface Container {
   readonly config: Config;
   readonly logger: Logger;
   readonly db: Database;
   readonly auth: Auth;
   readonly vault: CredentialVault;
+  /** Null when no vault key is configured. */
+  readonly vaultRotation: VaultRotation | null;
   /** Used by the agent runtime; the API never calls models itself (hard rule 1). */
   readonly llm: LLMGateway;
   readonly llmProvider: ModelProvider;
@@ -95,9 +127,17 @@ export interface Container {
   readonly sandbox: SandboxProvider | null;
   readonly artifacts: ArtifactStore;
   readonly approvals: ApprovalStore;
+  /** MCP servers and people’s connections to them. */
+  readonly connections: ConnectionStore;
+  /** The MCP client; null without a vault key, which keeps sign-ins encrypted. */
+  readonly mcp: McpConnections | null;
+  /** Connected apps as toolkits for agents (M4.05); null without the MCP client. */
+  readonly toolkits: McpToolkits | null;
   readonly dispatcher: RunDispatcher;
   readonly inngest: Inngest;
   readonly functions: ReturnType<typeof createFunctions>;
+  /** What the orchestrator runs agents with. */
+  readonly harness: HarnessDeps;
   readonly setup: SetupService;
   readonly sessions: SessionService;
   /** Release connections and flush telemetry. Call once on shutdown. */
@@ -109,6 +149,14 @@ export interface ContainerOverrides {
   /** Replace the event bus (tests use the in-memory bus). */
   readonly bus?: EventBus & { close?(): Promise<void> };
   readonly dispatcher?: RunDispatcher;
+  /** Where the container's own logger writes; redaction still applies (tests). */
+  readonly logWrite?: (line: string) => void;
+  /** Captures spans, as an OTLP endpoint would receive them (tests). */
+  readonly telemetryExporter?: TelemetryOptions["exporter"];
+  /** Replaces the model gateway (tests use a scripted one). */
+  readonly llm?: LLMGateway;
+  /** Tools added to the built-ins (tests). */
+  readonly extraTools?: readonly ToolDefinition<never>[];
 }
 
 function createLlm(
@@ -142,19 +190,119 @@ function createLlm(
   return { llm, provider, tiers: resolveTiers(provider, tiers) };
 }
 
+/** The server's own secrets: each is redacted from logs and traces. */
+export function configSecrets(config: Config): (string | undefined)[] {
+  const passwordIn = (url: string) => {
+    try {
+      return decodeURIComponent(new URL(url).password) || undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  return [
+    config.auth.secret,
+    config.llm.apiKey,
+    config.sandbox?.token,
+    config.inngest.eventKey,
+    config.inngest.signingKey,
+    passwordIn(config.database.url),
+    passwordIn(config.database.migrationUrl),
+  ];
+}
+
+/**
+ * Background token refresh (M4.06). Finding sign-ins that run out soon spans
+ * workspaces, so it reads IDs through the owner connection, as vault rotation
+ * does; each refresh then acts as that person, through tenant-scoped queries.
+ */
+function createTokenRefresher(config: Config, mcp: McpConnections, logger: Logger): TokenRefresher {
+  let warned = false;
+  return {
+    async listDue(before) {
+      if (config.database.migrationUrl === config.database.url) {
+        if (!warned) {
+          logger.warn(
+            "mcp: background token refresh needs DATABASE_MIGRATION_URL (the owner connection); sign-ins are refreshed when used meanwhile",
+          );
+          warned = true;
+        }
+        return [];
+      }
+      const owner = createDatabase(config.database.migrationUrl, { max: 1 });
+      try {
+        return await listConnectionsDueForRefresh(owner.db, before);
+      } finally {
+        await owner.close();
+      }
+    },
+    async refresh(ctx, serverId) {
+      try {
+        const outcome = await mcp.refresh(ctx, serverId);
+        if (outcome === "sign_in_required") {
+          logger.info("mcp: a sign-in expired and needs the person again", { serverId });
+        }
+        return outcome;
+      } catch (error) {
+        logger.warn("mcp: couldn't refresh a sign-in; trying again at the next check", {
+          serverId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    },
+  };
+}
+
 export function createContainer(config: Config, overrides: ContainerOverrides = {}): Container {
-  const logger = overrides.logger ?? createLogger(config.log, { service: "api" });
+  // Every secret this process holds, so logs and traces never carry one
+  // (hard rule 4): the server's own from config, and what the vault decrypts.
+  const secrets = createSecretRegistry();
+  secrets.add(configSecrets(config));
+  const logger =
+    overrides.logger ??
+    createLogger(
+      {
+        ...config.log,
+        redact: secrets.redact,
+        ...(overrides.logWrite ? { write: overrides.logWrite } : {}),
+      },
+      { service: "api" },
+    );
   const database = createDatabase(config.database.url);
   const { db } = database;
   const auth = createAuth(db, config);
-  const vault = config.vault.key
-    ? createVault({ db, key: config.vault.key })
-    : createUnconfiguredVault();
-  const { llm, provider, tiers } = createLlm(config, vault);
+  // The vault key comes from the environment or the OS keychain (M4.02).
+  const keychain = () => createOsKeychain();
+  const vaultKeys = resolveVaultKeys(config.vault, keychain);
+  secrets.add([vaultKeys?.key, ...(vaultKeys?.previousKeys ?? [])]);
+  const fullVault = vaultKeys
+    ? createVault({
+        db,
+        key: vaultKeys.key,
+        previousKeys: vaultKeys.previousKeys,
+        registry: secrets,
+      })
+    : null;
+  const vault = fullVault ?? createUnconfiguredVault();
+  const vaultRotation: VaultRotation | null =
+    fullVault && vaultKeys
+      ? {
+          keys: vaultKeys,
+          run: (ownerDb) => rotateInstall(fullVault, ownerDb),
+          forgetPrevious: () => {
+            if (vaultKeys.source === "keychain") keychain().remove("vault-key.previous");
+          },
+        }
+      : null;
+  const made = createLlm(config, vault);
+  const { provider, tiers } = made;
+  const llm = overrides.llm ?? made.llm;
   const telemetry: TelemetryHandle = createTelemetry({
     serviceName: "one-for-all",
     version: config.version,
     endpoint: config.telemetry.otlpEndpoint,
+    redact: secrets.redact,
+    ...(overrides.telemetryExporter ? { exporter: overrides.telemetryExporter } : {}),
   });
 
   // Event bus: Postgres LISTEN/NOTIFY in self-host (ADR-0007).
@@ -169,6 +317,27 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
   const sandbox = config.sandbox ? createDockerSandbox(config.sandbox) : null;
   const artifacts = createArtifactStore(db);
   const approvals = createApprovalStore(db);
+  const connections = createConnectionStore(db);
+  // Apps through MCP (ADR-0011): sign-ins are sealed by the vault, so no vault, no connections.
+  const mcp = fullVault
+    ? createMcpConnections({
+        store: connections,
+        cipher: fullVault,
+        redirectUrl: new URL("/api/connections/callback", config.server.appUrl).href,
+      })
+    : null;
+  const toolkits = mcp
+    ? createMcpToolkits({
+        connections,
+        mcp,
+        onSkippedTool: (server, tool, reason) =>
+          logger.warn("mcp: left out a tool whose input can’t be checked", {
+            server,
+            tool,
+            reason,
+          }),
+      })
+    : null;
 
   const tools = createToolExecutor({
     registry: createToolRegistry(
@@ -178,11 +347,12 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
           ? createSearxngProvider({ baseUrl: config.search.searxngUrl })
           : null,
         sandbox,
-      }),
+      }).concat(overrides.extraTools ?? []),
     ),
-    policy: createPolicyEngine({ agents }),
+    policy: createPolicyEngine({ agents, rules: createPolicyRuleStore(db) }),
     calls: createToolCallStore(db),
     agents,
+    ...(toolkits ? { toolkits } : {}),
     redact: (ctx, text) => vault.redact(ctx, text),
     artifacts,
     // Saved logins, decrypted only here, when use_saved_login asks (ADR-0012).
@@ -207,6 +377,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     threads,
     memory,
     approvals,
+    redact: (ctx, text) => vault.redact(ctx, text),
     middleware: [createTelemetryMiddleware(telemetry)],
   };
 
@@ -215,7 +386,13 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     baseUrl: config.inngest.baseUrl,
     eventKey: config.inngest.eventKey,
   });
-  const functions = createFunctions(inngest, { harness, runs, approvals });
+  const tokenRefresh = mcp ? createTokenRefresher(config, mcp, logger) : null;
+  const functions = createFunctions(inngest, {
+    harness,
+    runs,
+    approvals,
+    ...(tokenRefresh ? { tokenRefresh } : {}),
+  });
 
   return {
     config,
@@ -223,6 +400,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     db,
     auth,
     vault,
+    vaultRotation,
     llm,
     llmProvider: provider,
     tiers,
@@ -234,9 +412,13 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     sandbox,
     artifacts,
     approvals,
+    connections,
+    mcp,
+    toolkits,
     dispatcher: overrides.dispatcher ?? createRunDispatcher(inngest),
     inngest,
     functions,
+    harness,
     setup: createSetupService({ db, auth }),
     sessions: createSessionService({ db, auth }),
     async close() {

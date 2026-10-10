@@ -17,11 +17,12 @@ import type { AppEnv } from "../types";
  * Approvals (ARCHITECTURE.md §6.2), pulled forward from M4 for M3.13:
  *   GET  /api/approvals       waiting for an answer (?agentId=&runId=)
  *   GET  /api/approvals/:id
- *   POST /api/approvals/:id   { decision: approve | reject }
+ *   POST /api/approvals/:id   { decision: approve | reject, scope?: once | site, edits? }
  *
  * The person who started the run answers, or an owner or admin. The row is
  * settled first (only while pending, so two answers cannot both win), then
- * the waiting run is woken. Every answer is audited.
+ * the waiting run is woken. Every answer is audited. `edits` changes text
+ * the card offered for editing before the call runs (ADR-0030).
  */
 export function approvalRoutes(
   deps: Pick<Container, "db" | "sessions" | "approvals" | "dispatcher" | "logger">,
@@ -41,7 +42,7 @@ export function approvalRoutes(
     .post("/:id", async (c) => {
       const tenant = c.get("tenant");
       const session = c.get("session");
-      const { decision } = await readJson(c, decideApprovalRequestSchema);
+      const { decision, scope, edits: asked } = await readJson(c, decideApprovalRequestSchema);
       const found = await deps.approvals.get(tenant, c.req.param("id"));
       if (!found) throw new NotFoundError("Approval");
       const run = await getRun(deps.db, tenant, found.runId);
@@ -51,10 +52,22 @@ export function approvalRoutes(
           "Only the person who asked, or an owner or admin, can answer this",
         );
       }
+      if (scope === "site" && (decision !== "approve" || !found.site)) {
+        throw new AppError(
+          "validation_failed",
+          "Only an approval that names a site can be approved for that site",
+        );
+      }
+      const edits = changedText(found, asked);
+      if (edits && decision !== "approve") {
+        throw new AppError("validation_failed", "Changes only go with an approval");
+      }
       const status = decision === "approve" ? "approved" : "rejected";
       const decided = await deps.approvals.decide(tenant, found.id, {
         status,
         decidedBy: tenant.userId,
+        scope,
+        edits,
       });
       if (!decided) {
         throw new AppError(
@@ -66,7 +79,14 @@ export function approvalRoutes(
         action: `approval.${status}`,
         targetType: "approval",
         targetId: found.id,
-        data: { tool: found.tool, runId: found.runId, agentId: found.agentId },
+        data: {
+          tool: found.tool,
+          runId: found.runId,
+          agentId: found.agentId,
+          ...(scope === "site" ? { allowedSite: found.site } : {}),
+          // Which arguments, not what they say: that can be private.
+          ...(edits ? { edited: Object.keys(edits) } : {}),
+        },
         ...requestMeta(c),
       });
       await deps.dispatcher.approvalDecided({
@@ -80,10 +100,33 @@ export function approvalRoutes(
     });
 }
 
+/**
+ * The text a person really changed, if any. Only arguments the card offered
+ * for editing; an unchanged value is left out, so the call runs as the agent
+ * wrote it there.
+ */
+function changedText(
+  approval: ApprovalRecord,
+  edits: Record<string, string> | undefined,
+): Record<string, string> | null {
+  if (!edits) return null;
+  const args = (approval.args ?? {}) as Record<string, unknown>;
+  const changed: Record<string, string> = {};
+  for (const [name, value] of Object.entries(edits)) {
+    if (!approval.editable.includes(name)) {
+      throw new AppError("validation_failed", `${name} can't be changed here`);
+    }
+    if (value !== args[name]) changed[name] = value;
+  }
+  return Object.keys(changed).length > 0 ? changed : null;
+}
+
 export function toApproval(row: ApprovalRecord): Approval {
   return {
     ...row,
     reasons: [...row.reasons],
+    editable: [...row.editable],
+    edits: row.edits ? { ...row.edits } : null,
     createdAt: row.createdAt.toISOString(),
     decidedAt: row.decidedAt?.toISOString() ?? null,
     expiresAt: row.expiresAt.toISOString(),

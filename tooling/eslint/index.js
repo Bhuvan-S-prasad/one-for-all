@@ -118,6 +118,27 @@ export const boundaries = {
   ],
 
   /**
+   * packages/mcp: the AI SDK's MCP client (`@ai-sdk/mcp`, ADR-0011) is not a
+   * model SDK; it is used here and nowhere else. Other model SDKs stay out.
+   */
+  mcpPackage: [
+    {
+      files: ["**/*.{ts,tsx,js,jsx,mts,cts}"],
+      rules: {
+        "no-restricted-imports": [
+          "error",
+          {
+            patterns: [
+              DEEP_IMPORT,
+              { ...MODEL_SDKS, regex: "^(?:ai|@ai-sdk/(?!mcp$)[^/]+|@openrouter/[^/]+)(?:/.*)?$" },
+            ],
+          },
+        ],
+      },
+    },
+  ],
+
+  /**
    * packages/llm: the gateway may use the AI SDK, but a provider's own SDK
    * appears only in that provider's file under src/providers/ (ADR-0022).
    */

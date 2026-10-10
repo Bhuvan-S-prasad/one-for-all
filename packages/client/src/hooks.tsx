@@ -1,9 +1,12 @@
 import type {
+  AddMcpServerInput,
   Agent,
   CreateAgentInput,
+  CreatePolicyRuleInput,
   FirstRunSetupRequest,
   LoginRequest,
   Message,
+  OwnClientInput,
   Run,
   SaveLoginRequest,
   SendMessageResponse,
@@ -24,6 +27,8 @@ import {
   healthQuery,
   llmSettingsQuery,
   loginsQuery,
+  mcpCatalogQuery,
+  mcpServersQuery,
   memoriesQuery,
   messagesQuery,
   queryKeys,
@@ -348,8 +353,17 @@ export function useDecideApproval() {
   const api = useApiClient();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, decision }: { id: string; decision: "approve" | "reject" }) =>
-      api.decideApproval(id, decision),
+    mutationFn: ({
+      id,
+      decision,
+      scope,
+      edits,
+    }: {
+      id: string;
+      decision: "approve" | "reject";
+      scope?: "once" | "site";
+      edits?: Record<string, string>;
+    }) => api.decideApproval(id, decision, scope, edits),
     onSettled: () => void queryClient.invalidateQueries({ queryKey: queryKeys.approvalLists }),
   });
 }
@@ -367,6 +381,109 @@ export function useSaveLogin() {
     mutationFn: (input: SaveLoginRequest) => api.saveLogin(input),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.logins }),
   });
+}
+
+// ── Connections (M4.03, M4.04) ───────────────────────────────────────────────
+
+export function useMcpServers() {
+  return useQuery(mcpServersQuery(useApiClient()));
+}
+
+export function useMcpCatalog() {
+  return useQuery(mcpCatalogQuery(useApiClient()));
+}
+
+/** Changes to servers and connections refresh both lists. */
+function useConnectionsMutation<I, O>(fn: (input: I) => Promise<O>) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: queryKeys.connections }),
+  });
+}
+
+export function useInstallCatalogEntry() {
+  const api = useApiClient();
+  return useConnectionsMutation(({ entry, client }: { entry: string; client?: OwnClientInput }) =>
+    api.installCatalogEntry(entry, client),
+  );
+}
+
+export function useSetMcpClient() {
+  const api = useApiClient();
+  return useConnectionsMutation(({ id, client }: { id: string; client: OwnClientInput }) =>
+    api.setMcpClient(id, client),
+  );
+}
+
+/** Starts signing in; the caller sends the browser to the address it returns. */
+export function useConnectMcpServer() {
+  const api = useApiClient();
+  return useConnectionsMutation((id: string) => api.connectMcpServer(id));
+}
+
+export function useDisconnectMcpServer() {
+  const api = useApiClient();
+  return useConnectionsMutation((id: string) => api.disconnectMcpServer(id));
+}
+
+export function useRemoveMcpServer() {
+  const api = useApiClient();
+  return useConnectionsMutation((id: string) => api.removeMcpServer(id));
+}
+
+export function useAddMcpServer() {
+  const api = useApiClient();
+  return useConnectionsMutation((input: AddMcpServerInput) => api.addMcpServer(input));
+}
+
+export function useRefreshMcpTools() {
+  const api = useApiClient();
+  return useConnectionsMutation((id: string) => api.refreshMcpTools(id));
+}
+
+/** A connected app's tools as agents see them; off until `serverId` is set. */
+export function useAppTools(serverId: string | null) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: queryKeys.appTools(serverId ?? ""),
+    queryFn: async () => (await api.appTools(serverId!)).items,
+    enabled: !!serverId,
+    staleTime: 60_000,
+  });
+}
+
+export function usePolicyRules() {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: queryKeys.policyRules,
+    queryFn: async () => (await api.listPolicyRules()).items,
+  });
+}
+
+function usePolicyRulesMutation<I, O>(fn: (input: I) => Promise<O>) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: queryKeys.policyRules }),
+  });
+}
+
+export function useCreatePolicyRule() {
+  const api = useApiClient();
+  return usePolicyRulesMutation((input: CreatePolicyRuleInput) => api.createPolicyRule(input));
+}
+
+export function useSetPolicyRuleEnabled() {
+  const api = useApiClient();
+  return usePolicyRulesMutation(({ id, enabled }: { id: string; enabled: boolean }) =>
+    api.setPolicyRuleEnabled(id, enabled),
+  );
+}
+
+export function useDeletePolicyRule() {
+  const api = useApiClient();
+  return usePolicyRulesMutation((id: string) => api.deletePolicyRule(id));
 }
 
 export function useDeleteLogin() {

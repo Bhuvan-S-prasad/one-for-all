@@ -163,6 +163,9 @@ importers:
       '@ofa/llm':
         specifier: workspace:*
         version: link:../../packages/llm
+      '@ofa/mcp':
+        specifier: workspace:*
+        version: link:../../packages/mcp
       '@ofa/memory':
         specifier: workspace:*
         version: link:../../packages/memory
@@ -406,6 +409,25 @@ importers:
         specifier: 4.23.15
         version: 4.23.15
 
+  packages/mcp:
+    dependencies:
+      '@ai-sdk/mcp':
+        specifier: 2.0.63
+        version: 2.0.63(zod@4.6.5)
+      '@ofa/core':
+        specifier: workspace:*
+        version: link:../core
+      '@ofa/tools':
+        specifier: workspace:*
+        version: link:../tools
+      zod:
+        specifier: 4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@ofa/policy':
+        specifier: workspace:*
+        version: link:../policy
+
   packages/memory:
     dependencies:
       '@ofa/core':
@@ -478,6 +500,9 @@ importers:
 
   packages/vault:
     dependencies:
+      '@ofa/config':
+        specifier: workspace:*
+        version: link:../config
       '@ofa/core':
         specifier: workspace:*
         version: link:../core
@@ -485,6 +510,9 @@ importers:
         specifier: workspace:*
         version: link:../db
     devDependencies:
+      drizzle-orm:
+        specifier: 0.45.3
+        version: 0.45.3(@opentelemetry/api@1.9.1)(@types/pg@8.15.6)(kysely@0.29.6)(postgres@3.4.9)
       tsx:
         specifier: 4.23.15
         version: 4.23.15
@@ -515,6 +543,12 @@ packages:
 
   '@ai-sdk/gateway@4.0.101':
     resolution: {integrity: sha512-lBMXWbNSAb3eQD/F8ja9Egi32PsL9lLajC4DUvionnWO8V+X0nYw9hWJVBJdZ0SftfE/OyKySkoHRfIg/UafYg==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
+  '@ai-sdk/mcp@2.0.63':
+    resolution: {integrity: sha512-D+3JXFWYEA2VmOEFyW/ZuTP65Z1NfxDY6u+nvpiHeIAXl/yqyAMSFoVvahQTQe45Ue3G1KwZYflwctXfl3Of2Q==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
@@ -3230,6 +3264,10 @@ packages:
     resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
     engines: {node: '>=12'}
 
+  pkce-challenge@5.0.1:
+    resolution: {integrity: sha512-wQ0b/W4Fr01qtpHlqSqspcj3EhBvimsdh0KlHhH8HRZnMsEa0ea2fTULOXOS9ccQr3om+GcGRk4e+isrZWV8qQ==}
+    engines: {node: '>=16.20.0'}
+
   postcss@8.5.28:
     resolution: {integrity: sha512-RRuzqDtt5Y9h3quz5hWhK+TPnsmVs6WwSU6LkJMeY4HstUEDuYTG8UJSdawMRzmzAtV+KEoG8N3Qg2qLy5vM/A==}
     engines: {node: ^10 || ^12 || >=14}
@@ -3698,6 +3736,14 @@ snapshots:
       '@ai-sdk/provider': 4.0.20
       '@ai-sdk/provider-utils': 5.0.52(zod@4.6.5)
       '@vercel/oidc': 3.2.0
+      zod: 4.6.5
+
+  '@ai-sdk/mcp@2.0.63(zod@4.6.5)':
+    dependencies:
+      '@ai-sdk/provider': 4.0.20
+      '@ai-sdk/provider-utils': 5.0.52(zod@4.6.5)
+      cross-spawn: 7.0.6
+      pkce-challenge: 5.0.1
       zod: 4.6.5
 
   '@ai-sdk/provider-utils@5.0.52(zod@4.6.5)':
@@ -6198,6 +6244,8 @@ snapshots:
   picocolors@1.1.1: {}
 
   picomatch@4.0.7: {}
+
+  pkce-challenge@5.0.1: {}
 
   postcss@8.5.28:
     dependencies:

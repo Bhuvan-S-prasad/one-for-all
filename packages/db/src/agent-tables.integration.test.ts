@@ -11,17 +11,24 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadRootEnv } from "./env";
 import {
+  createApprovalStore,
   createDatabase,
+  createPolicyRule,
+  createPolicyRuleStore,
   createRunStore,
   createThreadStore,
   createToolCallStore,
   deleteSecret,
   findSecretByName,
+  listConnectionsDueForRefresh,
+  listPolicyRules,
   listSecrets,
   schema,
+  setPolicyRuleEnabled,
   upsertSecret,
   withDatabaseName,
   withTenant,
+  type PolicyRuleInput,
 } from "./index";
 
 // M2 tables: grants, tool calls, memory, secrets (M2.02). Uses its own
@@ -227,6 +234,315 @@ describe.skipIf(!appUrl || !ownerUrl)("agent tables (integration)", () => {
     expect(await listSecrets(app.db, ctx)).toHaveLength(1);
     expect(await deleteSecret(app.db, ctx, first.id)).toBe(true);
     expect(await findSecretByName(app.db, ctx, write.name)).toBeNull();
+  });
+
+  describe("connections and policy rules (M4.01)", () => {
+    async function newServer(
+      slug: string,
+      extra: Partial<typeof schema.mcpServer.$inferInsert> = {},
+    ) {
+      const [row] = await withTenant(app.db, ctx, (tx) =>
+        tx
+          .insert(schema.mcpServer)
+          .values({
+            workspaceId: ctx.workspaceId,
+            slug,
+            name: slug,
+            url: `https://mcp.${slug}.example/mcp`,
+            ...extra,
+          })
+          .returning({ id: schema.mcpServer.id }),
+      );
+      return row?.id ?? "";
+    }
+
+    it("servers: one slug and one install of a catalog entry per workspace", async () => {
+      await newServer("notion", { catalogId: "notion" });
+      expect((await pgError(newServer("notion"))).code).toBe("23505");
+      expect((await pgError(newServer("notion2", { catalogId: "notion" }))).code).toBe("23505");
+      // Custom servers have no catalog entry, and there can be several.
+      await newServer("custom_a");
+      await newServer("custom_b");
+    });
+
+    it("servers: refuse a slug that can't prefix tool names, and a half-stored client", async () => {
+      expect((await pgError(newServer("Not-OK"))).code).toBe("23514");
+      const half = await pgError(
+        newServer("half", { clientCiphertext: "v1.a", clientKeyId: "k1" }),
+      );
+      expect(half.code).toBe("23514");
+      await newServer("whole", {
+        clientCiphertext: "v1.a",
+        clientKeyCiphertext: "v1.b",
+        clientKeyId: "k1",
+      });
+    });
+
+    it("connections: one per person per server, active only with credentials, gone with the server", async () => {
+      const mcpServerId = await newServer("linear");
+      const base = { workspaceId: ctx.workspaceId, mcpServerId, userId: ctx.userId };
+      const empty = await pgError(
+        withTenant(app.db, ctx, (tx) =>
+          tx.insert(schema.connection).values({ ...base, status: "active" }),
+        ),
+      );
+      expect(empty.code).toBe("23514");
+      await withTenant(app.db, ctx, (tx) =>
+        tx.insert(schema.connection).values({
+          ...base,
+          status: "active",
+          credentialsCiphertext: "v1.a",
+          keyCiphertext: "v1.b",
+          keyId: "k1",
+        }),
+      );
+      const second = await pgError(
+        withTenant(app.db, ctx, (tx) => tx.insert(schema.connection).values(base)),
+      );
+      expect(second.code).toBe("23505");
+
+      await withTenant(app.db, ctx, (tx) =>
+        tx.delete(schema.mcpServer).where(eq(schema.mcpServer.id, mcpServerId)),
+      );
+      const left = await withTenant(app.db, ctx, (tx) =>
+        tx.select().from(schema.connection).where(eq(schema.connection.mcpServerId, mcpServerId)),
+      );
+      expect(left).toHaveLength(0);
+    });
+
+    it("connections: can't point at another workspace's server", async () => {
+      const mcpServerId = await newServer("github");
+      const otherId = asId<WorkspaceId>(randomUUID());
+      await owner.db.insert(schema.workspace).values({ id: otherId, name: "Workspace D" });
+      await owner.db
+        .insert(schema.membership)
+        .values({ workspaceId: otherId, userId: ctx.userId, role: "owner" });
+      const other: TenantContext = { workspaceId: otherId, userId: ctx.userId };
+
+      const visible = await withTenant(app.db, other, (tx) =>
+        tx.select().from(schema.mcpServer).where(eq(schema.mcpServer.id, mcpServerId)),
+      );
+      expect(visible).toHaveLength(0);
+      const crossed = await pgError(
+        withTenant(app.db, other, (tx) =>
+          tx
+            .insert(schema.connection)
+            .values({ workspaceId: otherId, mcpServerId, userId: ctx.userId }),
+        ),
+      );
+      expect(crossed.code).toBe("23503"); // foreign key violation
+    });
+
+    it("due for refresh (M4.06): active sign-ins running out soon, across workspaces, IDs only", async () => {
+      const otherId = asId<WorkspaceId>(randomUUID());
+      await owner.db.insert(schema.workspace).values({ id: otherId, name: "Workspace E" });
+      await owner.db
+        .insert(schema.membership)
+        .values({ workspaceId: otherId, userId: ctx.userId, role: "owner" });
+      const other: TenantContext = { workspaceId: otherId, userId: ctx.userId };
+      const sealed = { credentialsCiphertext: "v1.a", keyCiphertext: "v1.b", keyId: "k1" };
+      const minutes = (n: number) => new Date(Date.now() + n * 60_000);
+      async function signedIn(
+        tenant: TenantContext,
+        slug: string,
+        values: Partial<typeof schema.connection.$inferInsert>,
+      ) {
+        const [server] = await withTenant(app.db, tenant, (tx) =>
+          tx
+            .insert(schema.mcpServer)
+            .values({
+              workspaceId: tenant.workspaceId,
+              slug,
+              name: slug,
+              url: "https://x.example/mcp",
+            })
+            .returning({ id: schema.mcpServer.id }),
+        );
+        await withTenant(app.db, tenant, (tx) =>
+          tx.insert(schema.connection).values({
+            workspaceId: tenant.workspaceId,
+            mcpServerId: server!.id,
+            userId: tenant.userId,
+            ...values,
+          }),
+        );
+        return server!.id;
+      }
+      const soon = await signedIn(ctx, "due_soon", {
+        status: "active",
+        expiresAt: minutes(5),
+        ...sealed,
+      });
+      const elsewhere = await signedIn(other, "due_elsewhere", {
+        status: "active",
+        expiresAt: minutes(-1),
+        ...sealed,
+      });
+      const ours = new Set([
+        soon,
+        elsewhere,
+        await signedIn(ctx, "due_later", { status: "active", expiresAt: minutes(120), ...sealed }),
+        await signedIn(ctx, "due_reauth", { status: "needs_reauth", expiresAt: minutes(5) }),
+        await signedIn(ctx, "due_never", { status: "active", expiresAt: null, ...sealed }),
+      ]);
+
+      const due = (await listConnectionsDueForRefresh(owner.db, minutes(15))).filter((c) =>
+        ours.has(c.mcpServerId),
+      );
+      // Soonest first; the later one, the one needing a sign-in and the one that never expires are left out.
+      expect(due.map((c) => c.mcpServerId)).toEqual([elsewhere, soon]);
+      expect(due[0]).toEqual({
+        workspaceId: otherId,
+        userId: ctx.userId,
+        mcpServerId: elsewhere,
+        expiresAt: expect.any(Date),
+      });
+      // The app's own connection sees no workspace without a tenant: it needs the owner one.
+      expect(await listConnectionsDueForRefresh(app.db, minutes(15))).toEqual([]);
+    });
+
+    it("policy rules: personal rules only tighten, and each rule exists once", async () => {
+      const rule = (extra: Partial<typeof schema.policyRule.$inferInsert>) =>
+        withTenant(app.db, ctx, (tx) =>
+          tx.insert(schema.policyRule).values({
+            workspaceId: ctx.workspaceId,
+            tool: "gmail.send",
+            effect: "ask_first",
+            ...extra,
+          }),
+        );
+      await rule({});
+      await rule({ userId: ctx.userId });
+      await rule({ tool: "web.*", effect: "allow_auto" });
+      await rule({ tool: "remember", effect: "allow_auto", agentId });
+
+      expect((await pgError(rule({ userId: ctx.userId, effect: "allow_auto" }))).code).toBe(
+        "23514",
+      );
+      // No user and no agent still counts as the same rule.
+      expect((await pgError(rule({}))).code).toBe("23505");
+      for (const tool of ["Gmail.send", "gmail.", "*.send", "gmail send"]) {
+        expect((await pgError(rule({ tool }))).code).toBe("23514");
+      }
+    });
+
+    it("policy rules: an agent's rules go with the agent", async () => {
+      const [other] = await withTenant(app.db, ctx, (tx) =>
+        tx
+          .insert(schema.agent)
+          .values({ workspaceId: ctx.workspaceId, slug: "mailer", name: "Mailer", spec: SPEC })
+          .returning({ id: schema.agent.id }),
+      );
+      const otherAgent = other?.id ?? "";
+      await withTenant(app.db, ctx, (tx) =>
+        tx.insert(schema.policyRule).values({
+          workspaceId: ctx.workspaceId,
+          agentId: otherAgent,
+          tool: "*",
+          effect: "ask_first",
+        }),
+      );
+      await withTenant(app.db, ctx, (tx) =>
+        tx.delete(schema.agent).where(eq(schema.agent.id, otherAgent)),
+      );
+      const left = await withTenant(app.db, ctx, (tx) =>
+        tx.select().from(schema.policyRule).where(eq(schema.policyRule.agentId, otherAgent)),
+      );
+      expect(left).toHaveLength(0);
+    });
+  });
+
+  describe("policy rules and site answers (M4.07)", () => {
+    it("a run sees enabled rules for its agent or all, the workspace's and its person's own", async () => {
+      const otherUser = asId<UserId>(randomUUID());
+      await owner.db
+        .insert(schema.user)
+        .values({ id: otherUser, name: "Dana", email: `dana-${otherUser}@example.com` });
+      const [otherAgent] = await withTenant(app.db, ctx, (tx) =>
+        tx
+          .insert(schema.agent)
+          .values({ workspaceId: ctx.workspaceId, slug: "scout", name: "Scout", spec: SPEC })
+          .returning({ id: schema.agent.id }),
+      );
+      const add = (input: Partial<PolicyRuleInput> & Pick<PolicyRuleInput, "tool">) =>
+        createPolicyRule(app.db, ctx, {
+          effect: "ask_first",
+          scope: "workspace",
+          agentId: null,
+          description: "",
+          ...input,
+        });
+      await add({ tool: "rules.everyone" });
+      await add({ tool: "rules.mine", scope: "personal" });
+      await add({ tool: "rules.this_agent", agentId });
+      await add({ tool: "rules.other_agent", agentId: otherAgent?.id ?? null });
+      const off = await add({ tool: "rules.disabled" });
+      await setPolicyRuleEnabled(app.db, ctx, off?.id ?? "", false);
+      // Someone else's personal rule, written as them.
+      await createPolicyRule(
+        app.db,
+        { ...ctx, userId: otherUser },
+        {
+          tool: "rules.theirs",
+          effect: "ask_first",
+          scope: "personal",
+          agentId: null,
+          description: "",
+        },
+      );
+      expect(await add({ tool: "rules.everyone" })).toBeNull(); // already there
+
+      const store = createPolicyRuleStore(app.db);
+      const seen = await store.listForRun({
+        ...ctx,
+        agentId: asId(agentId),
+        runId: asId(randomUUID()),
+      });
+      expect(
+        seen
+          .map((r) => r.tool)
+          .filter((t) => t.startsWith("rules."))
+          .sort(),
+      ).toEqual(["rules.everyone", "rules.mine", "rules.this_agent"]);
+      expect(seen.find((r) => r.tool === "rules.mine")?.scope).toBe("personal");
+      // The list for Settings: the workspace's and mine, never theirs.
+      const listed = (await listPolicyRules(app.db, ctx)).map((r) => r.tool);
+      expect(listed).toContain("rules.disabled");
+      expect(listed).not.toContain("rules.theirs");
+    });
+
+    it("an approval can be answered for its site only if it names one", async () => {
+      const runId = await newRun();
+      const rc: RunContext = { ...ctx, agentId: asId(agentId), runId: asId(runId) };
+      const approvals = createApprovalStore(app.db);
+      const input = {
+        tool: "browser.click",
+        args: {},
+        summary: "Click",
+        reasons: [],
+        verdict: "approve" as const,
+        expiresAt: new Date(Date.now() + 60_000),
+      };
+      const withSite = await approvals.request(rc, {
+        ...input,
+        toolCallId: "tool-0-0",
+        site: "shop.example",
+      });
+      const without = await approvals.request(rc, { ...input, toolCallId: "tool-1-0" });
+      expect(withSite).toMatchObject({ site: "shop.example", scope: "once" });
+      const decided = await approvals.decide(ctx, withSite.id, {
+        status: "approved",
+        decidedBy: ctx.userId,
+        scope: "site",
+      });
+      expect(decided?.scope).toBe("site");
+      const plain = await approvals.decide(ctx, without.id, {
+        status: "approved",
+        decidedBy: ctx.userId,
+        scope: "site",
+      });
+      expect(plain?.scope).toBe("once");
+    });
   });
 
   describe("runtime stores", () => {

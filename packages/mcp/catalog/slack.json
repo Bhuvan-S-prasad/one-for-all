@@ -1,0 +1,23 @@
+{
+  "id": "slack",
+  "name": "Slack",
+  "description": "Read channels and messages, search, and post in Slack.",
+  "url": "https://mcp.slack.com/mcp",
+  "authOrigin": "https://mcp.slack.com",
+  "setup": "own_client",
+  "scopes": [
+    "channels:history",
+    "channels:read",
+    "groups:history",
+    "groups:read",
+    "im:history",
+    "im:read",
+    "mpim:history",
+    "mpim:read",
+    "search:read.public",
+    "users:read",
+    "chat:write"
+  ],
+  "guide": "docs/guides/slack-app-manifest.md",
+  "reviewed": "2026-10-06"
+}

@@ -9,6 +9,8 @@ export interface Config {
     readonly host: string;
     readonly port: number;
     readonly appUrl: string;
+    /** Where people use the web app: the Vite dev server in development, else the app itself. */
+    readonly webUrl: string;
     /** Origins allowed to call the API (ADR-0017). */
     readonly allowedOrigins: readonly string[];
     /** Host header values accepted; anything else is rejected (DNS-rebinding defence). */
@@ -25,7 +27,11 @@ export interface Config {
     readonly migrationsDir: string | undefined;
   };
   readonly auth: { readonly secret: string };
-  readonly vault: { readonly key: string | undefined };
+  readonly vault: {
+    readonly source: "env" | "keychain";
+    readonly key: string | undefined;
+    readonly previousKeys: readonly string[];
+  };
   readonly llm: {
     readonly provider: string;
     readonly apiKey: string | undefined;
@@ -110,6 +116,7 @@ export function loadConfig(source: Record<string, string | undefined> = process.
       host: env.HOST,
       port: env.PORT,
       appUrl: env.APP_URL,
+      webUrl: new URL(env.WEB_DEV_URL ?? env.APP_URL).origin,
       allowedOrigins,
       allowedHosts,
       webDistDir: env.WEB_DIST_DIR,
@@ -121,7 +128,11 @@ export function loadConfig(source: Record<string, string | undefined> = process.
       migrationsDir: env.MIGRATIONS_DIR,
     },
     auth: { secret: env.AUTH_SECRET },
-    vault: { key: env.VAULT_KEY },
+    vault: {
+      source: env.VAULT_KEY_SOURCE,
+      key: env.VAULT_KEY,
+      previousKeys: env.VAULT_PREVIOUS_KEYS ?? [],
+    },
     llm: {
       provider: env.LLM_PROVIDER,
       apiKey: env.LLM_API_KEY,

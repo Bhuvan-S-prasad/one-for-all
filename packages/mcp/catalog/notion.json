@@ -1,0 +1,9 @@
+{
+  "id": "notion",
+  "name": "Notion",
+  "description": "Search, read and write pages and databases in your Notion workspace.",
+  "url": "https://mcp.notion.com/mcp",
+  "authOrigin": "https://mcp.notion.com",
+  "setup": "automatic",
+  "reviewed": "2026-10-06"
+}

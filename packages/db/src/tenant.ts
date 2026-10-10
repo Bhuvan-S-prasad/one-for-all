@@ -28,6 +28,9 @@ export const TENANT_TABLES = [
   "audit_log",
   "artifact",
   "approval",
+  "mcp_server",
+  "connection",
+  "policy_rule",
 ] as const;
 
 /**

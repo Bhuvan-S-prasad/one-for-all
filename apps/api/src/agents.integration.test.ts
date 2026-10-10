@@ -11,6 +11,8 @@ import {
   llmSettingsSchema,
   memoryItemSchema,
   memoryListSchema,
+  policyRuleListSchema,
+  policyRuleSchema,
   realtimeMessageSchema,
   runSchema,
   sendMessageResponseSchema,
@@ -455,6 +457,127 @@ describe.skipIf(!hasDb)("M2 API (integration)", async () => {
       approvalListSchema.parse(await (await get(`/api/approvals?agentId=${agentId}`)).json()).items,
     ).toEqual([]);
     expect(await container.approvals.expireForRun(tenant(), retryRunId)).toBe(0);
+  });
+
+  it("approves for a site only when the request names one", async () => {
+    const runCtx = { ...tenant(), agentId: asId<AgentId>(agentId), runId: asId<RunId>(retryRunId) };
+    const base = {
+      tool: "browser.click",
+      args: {},
+      summary: "Click the button “Next” on shop.example",
+      reasons: ["outbound tool in a run that read untrusted content"],
+      verdict: "approve" as const,
+      expiresAt: new Date(Date.now() + 60_000),
+    };
+    const plain = await container.approvals.request(runCtx, { ...base, toolCallId: "tool-3-0" });
+    const sited = await container.approvals.request(runCtx, {
+      ...base,
+      toolCallId: "tool-4-0",
+      site: "shop.example",
+    });
+    const site = { decision: "approve", scope: "site" };
+    expect((await send("POST", `/api/approvals/${plain.id}`, site)).status).toBe(422);
+    const rejectForSite = { decision: "reject", scope: "site" };
+    expect((await send("POST", `/api/approvals/${sited.id}`, rejectForSite)).status).toBe(422);
+    const ok = await send("POST", `/api/approvals/${sited.id}`, site);
+    expect(ok.status).toBe(200);
+    expect(approvalSchema.parse(await ok.json())).toMatchObject({
+      status: "approved",
+      site: "shop.example",
+      scope: "site",
+    });
+    await send("POST", `/api/approvals/${plain.id}`, { decision: "reject" });
+  });
+
+  it("takes changed text with an approval, only where the card offered it (ADR-0030)", async () => {
+    const runCtx = { ...tenant(), agentId: asId<AgentId>(agentId), runId: asId<RunId>(retryRunId) };
+    const base = {
+      tool: "notes.create_page",
+      args: { parent: "p1", title: "Plan", body: "Draft" },
+      summary: "Use Notes: Create page",
+      reasons: ["granted as part of notes.*; tools that change things ask first"],
+      verdict: "approve" as const,
+      editable: ["title", "body"],
+      showArgs: true,
+      expiresAt: new Date(Date.now() + 60_000),
+    };
+    const page = await container.approvals.request(runCtx, { ...base, toolCallId: "tool-5-0" });
+    const other = await container.approvals.request(runCtx, { ...base, toolCallId: "tool-6-0" });
+    const listed = approvalListSchema
+      .parse(await (await get(`/api/approvals?agentId=${agentId}`)).json())
+      .items.find((a) => a.id === page.id);
+    expect(listed).toMatchObject({ editable: ["title", "body"], showArgs: true, edits: null });
+
+    // Not offered for editing: refused, and nothing is settled.
+    const parent = { decision: "approve", edits: { parent: "p2" } };
+    expect((await send("POST", `/api/approvals/${page.id}`, parent)).status).toBe(422);
+    // Changes only go with a yes.
+    const no = { decision: "reject", edits: { title: "Other" } };
+    expect((await send("POST", `/api/approvals/${page.id}`, no)).status).toBe(422);
+
+    // Only what really changed is kept.
+    const ok = await send("POST", `/api/approvals/${page.id}`, {
+      decision: "approve",
+      edits: { title: "A better plan", body: "Draft" },
+    });
+    expect(ok.status).toBe(200);
+    expect(approvalSchema.parse(await ok.json())).toMatchObject({
+      status: "approved",
+      edits: { title: "A better plan" },
+    });
+    expect((await container.approvals.get(tenant(), page.id))?.edits).toEqual({
+      title: "A better plan",
+    });
+    // Unchanged text is no change at all.
+    const same = await send("POST", `/api/approvals/${other.id}`, {
+      decision: "approve",
+      edits: { title: "Plan" },
+    });
+    expect(approvalSchema.parse(await same.json())).toMatchObject({ edits: null });
+  });
+
+  it("manages policy rules: workspace ones by owners, personal ones only ask first", async () => {
+    const empty = policyRuleListSchema.parse(await (await get("/api/policy-rules")).json());
+    expect(empty.items).toEqual([]);
+
+    const created = await send("POST", "/api/policy-rules", {
+      tool: "gmail.send",
+      effect: "ask_first",
+      description: "Mail goes to customers",
+    });
+    expect(created.status).toBe(201);
+    const rule = policyRuleSchema.parse(await created.json());
+    expect(rule).toMatchObject({ scope: "workspace", effect: "ask_first", enabled: true });
+
+    const again = await send("POST", "/api/policy-rules", {
+      tool: "gmail.send",
+      effect: "ask_first",
+    });
+    expect(again.status).toBe(409);
+    const looser = { tool: "web.*", effect: "allow_auto", scope: "personal" };
+    expect((await send("POST", "/api/policy-rules", looser)).status).toBe(422);
+    const badTool = { tool: "Gmail Send", effect: "ask_first" };
+    expect((await send("POST", "/api/policy-rules", badTool)).status).toBe(422);
+    const noAgent = {
+      tool: "*",
+      effect: "ask_first",
+      agentId: "00000000-0000-4000-8000-000000000000",
+    };
+    expect((await send("POST", "/api/policy-rules", noAgent)).status).toBe(422);
+    const mine = await send("POST", "/api/policy-rules", {
+      tool: "*",
+      effect: "ask_first",
+      scope: "personal",
+      agentId,
+    });
+    expect(policyRuleSchema.parse(await mine.json())).toMatchObject({ scope: "personal", agentId });
+
+    const off = await send("PATCH", `/api/policy-rules/${rule.id}`, { enabled: false });
+    expect(policyRuleSchema.parse(await off.json()).enabled).toBe(false);
+    expect((await send("DELETE", `/api/policy-rules/${rule.id}`)).status).toBe(204);
+    expect((await send("DELETE", `/api/policy-rules/${rule.id}`)).status).toBe(404);
+    const left = policyRuleListSchema.parse(await (await get("/api/policy-rules")).json());
+    expect(left.items.map((r) => r.scope)).toEqual(["personal"]);
   });
 
   it("counts today's model requests against the daily quota, and runs per agent", async () => {

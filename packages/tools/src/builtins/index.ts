@@ -3,6 +3,7 @@ import type { ToolDefinition } from "../define";
 import { artifactsReadTool } from "./artifacts";
 import { browserTools, fileTools, shellTool, useSavedLoginTool } from "./computer";
 import { recallTool, rememberTool, todoTool } from "./memory";
+import { loadToolkitTool } from "./toolkits";
 import { readUrlTool, webSearchTool, type Fetcher, type WebSearchProvider } from "./web";
 
 export interface BuiltinToolDeps {
@@ -26,5 +27,6 @@ export function builtinTools(deps: BuiltinToolDeps): ToolDefinition<never>[] {
     shellTool(deps.sandbox ?? null),
     ...fileTools(deps.sandbox ?? null),
     artifactsReadTool(),
+    loadToolkitTool(),
   ] as unknown as ToolDefinition<never>[];
 }

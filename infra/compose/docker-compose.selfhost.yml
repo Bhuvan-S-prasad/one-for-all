@@ -41,6 +41,8 @@ services:
       DATABASE_MIGRATION_URL: postgres://${POSTGRES_USER:-oneforall}:${POSTGRES_PASSWORD:?run infra/scripts/init-env.sh first}@postgres:5432/${POSTGRES_DB:-oneforall}
       AUTH_SECRET: ${AUTH_SECRET:?run infra/scripts/init-env.sh first}
       VAULT_KEY: ${VAULT_KEY:?run infra/scripts/init-env.sh first}
+      # While rotating: the old key, until the app logs that it can go (M4.02).
+      VAULT_PREVIOUS_KEYS: ${VAULT_PREVIOUS_KEYS:-}
       INNGEST_DEV: "0"
       INNGEST_BASE_URL: http://inngest:8288
       SEARXNG_URL: http://searxng:8080

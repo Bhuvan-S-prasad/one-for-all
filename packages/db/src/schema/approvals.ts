@@ -1,5 +1,15 @@
 import { sql } from "drizzle-orm";
-import { check, foreignKey, index, jsonb, pgTable, text, unique, uuid } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  check,
+  foreignKey,
+  index,
+  jsonb,
+  pgTable,
+  text,
+  unique,
+  uuid,
+} from "drizzle-orm/pg-core";
 import { agent } from "./agents";
 import { user } from "./auth";
 import { createdAt, id, timestampAt } from "./columns";
@@ -31,6 +41,19 @@ export const approval = pgTable(
       .notNull()
       .default(sql`'[]'::jsonb`),
     verdict: policyVerdict("verdict").notNull(),
+    /** The site the person may allow for the rest of the run (M4.07); null when only a one-off answer fits. */
+    site: text("site"),
+    /** `site`: the answer covers every call like it on that site for the rest of the run. */
+    scope: text("scope").notNull().default("once"),
+    /** Top-level text arguments the person may change before approving (ADR-0030). */
+    editable: jsonb("editable")
+      .$type<string[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    /** The card lists the arguments: the summary doesn't say them. */
+    showArgs: boolean("show_args").notNull().default(false),
+    /** What the person changed before approving, by argument; null when nothing. */
+    edits: jsonb("edits").$type<Record<string, string>>(),
     status: text("status").notNull().default("pending"),
     decidedBy: text("decided_by").references(() => user.id, { onDelete: "set null" }),
     createdAt: createdAt(),
@@ -50,6 +73,11 @@ export const approval = pgTable(
     }).onDelete("cascade"),
     unique("approval_run_call_uq").on(t.runId, t.toolCallId),
     check("approval_status_ck", sql`${t.status} in ('pending', 'approved', 'rejected', 'expired')`),
+    check("approval_edits_ck", sql`${t.edits} is null or ${t.status} = 'approved'`),
+    check(
+      "approval_scope_ck",
+      sql`${t.scope} = 'once' or (${t.scope} = 'site' and ${t.site} is not null)`,
+    ),
     index("approval_workspace_status_idx").on(t.workspaceId, t.status, t.createdAt),
   ],
 );

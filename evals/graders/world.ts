@@ -15,6 +15,7 @@ import {
 } from "@ofa/harness";
 import { createPolicyEngine } from "@ofa/policy";
 import { builtinTools, createToolExecutor, createToolRegistry } from "@ofa/tools";
+import { fixtureMailbox } from "../fixtures/mailbox";
 import { fixtureBrowser, fixtureComputer } from "../fixtures/site";
 import { fixtureFetcher, fixtureSearch } from "../fixtures/web";
 import type { EvalCase, Transcript } from "./types";
@@ -99,15 +100,17 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
   ]);
 
   const browser = evalCase.site ? fixtureBrowser(evalCase.site) : null;
+  const mailbox = evalCase.mailbox ? fixtureMailbox(evalCase.mailbox) : null;
   const tools = createToolExecutor({
-    registry: createToolRegistry(
-      builtinTools({
+    registry: createToolRegistry([
+      ...builtinTools({
         memory: runtime.memory,
         search: fixtureSearch(evalCase.web),
         fetcher: fixtureFetcher(evalCase.web),
         sandbox: browser ? fixtureComputer(browser) : null,
       }),
-    ),
+      ...((mailbox?.tools ?? []) as unknown as ReturnType<typeof builtinTools>),
+    ]),
     policy: createPolicyEngine({ agents: runtime.agents }),
     calls: memoryToolCalls(),
     agents: runtime.agents,
@@ -163,6 +166,7 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
       .map((e) => ({ name: String(e.payload.tool), args: e.payload.args })),
     memories: [...runtime.memory.records],
     site: browser ? browser.record : null,
+    mail: mailbox ? mailbox.record : null,
     approvals: [...approvals.records],
     durationMs: Date.now() - started,
   };

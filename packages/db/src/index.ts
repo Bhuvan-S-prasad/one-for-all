@@ -19,6 +19,7 @@ export {
 } from "./repos/agents";
 export { createApprovalStore } from "./repos/approvals";
 export { createArtifactStore } from "./repos/artifacts";
+export { createConnectionStore, listConnectionsDueForRefresh } from "./repos/connections";
 export { recordAudit, type AuditEntry } from "./repos/audit";
 export {
   directThread,
@@ -67,6 +68,23 @@ export {
   type SecretRecord,
   type SecretWrite,
 } from "./repos/secrets";
+export {
+  createPolicyRule,
+  createPolicyRuleStore,
+  deletePolicyRule,
+  findPolicyRule,
+  listPolicyRules,
+  setPolicyRuleEnabled,
+  type PolicyRuleInput,
+  type PolicyRuleRecord,
+} from "./repos/policy-rules";
+export {
+  listEnvelopes,
+  listWorkspaceOwners,
+  rewrapStoredEnvelope,
+  type EnvelopeTable,
+  type StoredEnvelope,
+} from "./repos/envelopes";
 export {
   bootstrapOwner,
   findInstallOwner,

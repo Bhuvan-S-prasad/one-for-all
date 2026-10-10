@@ -267,6 +267,11 @@ export function createMemoryApprovals(): ApprovalStore & { readonly records: App
       if (found) return found;
       const record: ApprovalRecord = {
         ...input,
+        site: input.site ?? null,
+        scope: "once",
+        editable: [...(input.editable ?? [])],
+        showArgs: input.showArgs ?? false,
+        edits: null,
         id: `approval_${++ids}`,
         runId: ctx.runId,
         agentId: ctx.agentId,
@@ -285,7 +290,13 @@ export function createMemoryApprovals(): ApprovalStore & { readonly records: App
     async decide(_ctx, id, input) {
       const found = records.find((r) => r.id === id);
       if (!found || found.status !== "pending") return null;
-      return replace({ ...found, ...input, decidedAt: new Date() });
+      const scope =
+        input.status === "approved" && input.scope === "site" && found.site ? "site" : "once";
+      const edits =
+        input.status === "approved" && input.edits && Object.keys(input.edits).length > 0
+          ? { ...input.edits }
+          : null;
+      return replace({ ...found, ...input, scope, edits, decidedAt: new Date() });
     },
     async listPending(_ctx, filter = {}) {
       return records.filter(

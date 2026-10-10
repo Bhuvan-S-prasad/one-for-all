@@ -24,6 +24,7 @@
     "@ofa/events": "workspace:*",
     "@ofa/harness": "workspace:*",
     "@ofa/llm": "workspace:*",
+    "@ofa/mcp": "workspace:*",
     "@ofa/memory": "workspace:*",
     "@ofa/orchestrator": "workspace:*",
     "@ofa/policy": "workspace:*",

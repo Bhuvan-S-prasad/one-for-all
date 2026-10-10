@@ -1,0 +1,24 @@
+{
+  "name": "@ofa/mcp",
+  "version": "0.0.0",
+  "private": true,
+  "description": "MCP client: remote servers over HTTP, OAuth sign-in kept in the database (PKCE, client registration, refresh), sign-in origin checks. Server-only.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@ai-sdk/mcp": "2.0.63",
+    "@ofa/core": "workspace:*",
+    "@ofa/tools": "workspace:*",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@ofa/policy": "workspace:*"
+  }
+}

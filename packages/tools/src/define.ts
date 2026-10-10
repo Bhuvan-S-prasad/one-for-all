@@ -29,12 +29,42 @@ export interface ToolRunContext extends RunContext {
   readonly logins?: {
     get(site: string): Promise<{ readonly username: string; readonly password: string } | null>;
   };
+  /** The apps whose tools this agent may load (M4.05), for `load_toolkit`. */
+  readonly toolkits?: {
+    list(): Promise<readonly ToolkitSummary[]>;
+  };
   /** This run's artifacts (M3.06); absent when the server keeps none. Reads see only this agent's. */
   readonly artifacts?: {
     put(input: ArtifactInput): Promise<ArtifactRecord>;
     get(id: string): Promise<ArtifactRecord | null>;
     read(id: string): Promise<Uint8Array | null>;
   };
+}
+
+/**
+ * One connected app's tools (M4.05): an MCP server's tools, plus any we wrote
+ * for it (ADR-0029). `app` is the slug that starts every tool name.
+ */
+export interface Toolkit {
+  readonly app: string;
+  readonly name: string;
+  readonly description: string;
+  readonly tools: readonly ToolDefinition<unknown>[];
+}
+
+/** What an agent can see of a toolkit before loading it. */
+export interface ToolkitSummary {
+  readonly app: string;
+  readonly name: string;
+  readonly description: string;
+  /** Tools this agent may use, by name. */
+  readonly tools: readonly { readonly name: string; readonly description: string }[];
+  readonly loaded: boolean;
+}
+
+/** The toolkits a workspace has (its connected apps). */
+export interface ToolkitSource {
+  toolkits(ctx: RunContext): Promise<readonly Toolkit[]>;
 }
 
 export interface ToolRunResult {
@@ -71,6 +101,49 @@ export interface ToolDefinition<Input = unknown> {
    * change anything. Without it, the card shows the tool and its arguments.
    */
   describe?(args: Input, ctx: ToolRunContext): Promise<string>;
+  /**
+   * The site this call acts on (`shop.example`), so a person can allow it for
+   * the rest of a run that read outside content (M4.07). Must not change
+   * anything; null when there is none.
+   */
+  site?(args: Input, ctx: ToolRunContext): Promise<string | null>;
+  /**
+   * Top-level text arguments a person may change before approving a held
+   * call (ADR-0030): the message of an email, not the address it goes to.
+   * The call then runs with their version, checked against the schema again.
+   */
+  readonly editable?: readonly string[];
+  /** The approval card lists the arguments, because `describe` doesn't say them. */
+  readonly showArgs?: boolean;
+}
+
+/** Argument names that hold words a person writes: a message, a title, a comment. */
+const WRITTEN_TEXT =
+  /(text|body|content|message|subject|title|description|comment|markdown|summary|notes?|reply|caption)$/i;
+
+/**
+ * The text a person may change before approving a call to a tool described
+ * by `schema` (ADR-0030): top-level free-text strings with names like
+ * `body` or `page_title`. Never identifiers, addresses, enums or patterns.
+ */
+export function editableTextFields(schema: JsonSchema): string[] {
+  const properties = (schema as { properties?: Record<string, unknown> }).properties ?? {};
+  return Object.entries(properties)
+    .filter(([name, value]) => {
+      if (!WRITTEN_TEXT.test(name) || !value || typeof value !== "object") return false;
+      const prop = value as Record<string, unknown>;
+      const types = Array.isArray(prop.type) ? prop.type : [prop.type];
+      return (
+        types.includes("string") &&
+        types.every((t) => t === "string" || t === "null") &&
+        prop.enum === undefined &&
+        prop.const === undefined &&
+        prop.pattern === undefined &&
+        prop.format === undefined
+      );
+    })
+    .map(([name]) => name)
+    .slice(0, 10);
 }
 
 /** Keeps the input type flowing from the schema into `run`. */
@@ -140,6 +213,8 @@ export interface ToolRegistry {
   descriptors(): readonly ToolDescriptor[];
   /** Check arguments against the tool's schema; the message is written for the model. */
   validate(name: string, args: unknown): Validation;
+  /** This registry plus more tools (a workspace's toolkits); later duplicates are dropped. */
+  extend(tools: readonly ToolDefinition<unknown>[]): ToolRegistry;
 }
 
 export function createToolRegistry(tools: readonly ToolDefinition<never>[]): ToolRegistry {
@@ -150,6 +225,11 @@ export function createToolRegistry(tools: readonly ToolDefinition<never>[]): Too
   }
   const descriptors = tools.map(toDescriptor);
   return {
+    extend(more) {
+      const extra = more.filter((tool) => !byName.has(tool.name));
+      const unique = [...new Map(extra.map((tool) => [tool.name, tool])).values()];
+      return createToolRegistry([...tools, ...(unique as unknown as ToolDefinition<never>[])]);
+    },
     get: (name) => byName.get(name),
     descriptors: () => descriptors,
     validate(name, args) {

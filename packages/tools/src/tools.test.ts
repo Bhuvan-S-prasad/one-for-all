@@ -18,8 +18,11 @@ import {
   createToolRegistry,
   defineJsonSchemaTool,
   defineTool,
+  editableTextFields,
   htmlToText,
   isPrivateAddress,
+  LOAD_ALL_LIMIT,
+  loadToolkitTool,
   READ_CHUNK_CHARS,
   safeFetch,
   toDescriptor,
@@ -71,6 +74,7 @@ function memoryCalls(): ToolCallStore & { rows: Map<string, ToolCallRecord> } {
 }
 
 let sent = 0;
+let siteAsked = 0;
 const echo = defineTool({
   name: "test.echo",
   description: "Echo",
@@ -88,6 +92,10 @@ const send = defineTool({
   async run() {
     sent += 1;
     return { content: "sent", untrusted: false };
+  },
+  async site({ to }) {
+    siteAsked += 1;
+    return to.endsWith(".example") ? to : null;
   },
 });
 
@@ -158,6 +166,60 @@ describe("tool executor", () => {
     });
   });
 
+  it("in a tainted run, names the site a person can allow, and honours an allowed one", async () => {
+    const e = executor([{ tool: "test.send", mode: "auto" }]);
+    siteAsked = 0;
+    expect(await e.execute(request("test.send", { to: "shop.example" }, "s1"), ctx)).toMatchObject({
+      status: "ok",
+    });
+    expect(siteAsked).toBe(0); // Not tainted: the site does not matter.
+    expect(
+      await e.execute(request("test.send", { to: "shop.example" }, "s2", true), ctx),
+    ).toMatchObject({ status: "blocked", verdict: "approve", allowSite: "shop.example" });
+    const allowed = {
+      ...request("test.send", { to: "shop.example" }, "s3", true),
+      allowedSites: ["shop.example"],
+    };
+    expect(await e.execute(allowed, ctx)).toMatchObject({ status: "ok", verdict: "auto" });
+    const elsewhere = { ...allowed, args: { to: "evil.example" }, idempotencyKey: "s4" };
+    expect(await e.execute(elsewhere, ctx)).toMatchObject({
+      status: "blocked",
+      allowSite: "evil.example",
+    });
+  });
+
+  it("offers a held call's written text for editing, only where the agent wrote some (ADR-0030)", async () => {
+    const post = defineJsonSchemaTool({
+      name: "test.post",
+      description: "Post",
+      inputSchema: {
+        type: "object",
+        properties: {
+          channel: { type: "string" },
+          text: { type: "string" },
+          title: { type: "string" },
+        },
+      },
+      annotations: { outbound: true },
+      editable: ["text", "title"],
+      showArgs: true,
+      async run() {
+        return { content: "posted", untrusted: false };
+      },
+    });
+    const agent = agentWith([{ tool: "test.post", mode: "approve" }]);
+    const agents = { get: async () => agent };
+    const e = createToolExecutor({
+      registry: createToolRegistry([post] as unknown as ToolDefinition<never>[]),
+      policy: createPolicyEngine({ agents }),
+      calls: memoryCalls(),
+      agents,
+    });
+    expect(
+      await e.execute(request("test.post", { channel: "c1", text: "Hello" }), ctx),
+    ).toMatchObject({ status: "blocked", editable: ["text"], showArgs: true });
+  });
+
   it("runs a held call once a person approved it, but never a denied one", async () => {
     const before = sent;
     const e = executor([{ tool: "test.send", mode: "approve" }]);
@@ -210,6 +272,58 @@ describe("tool executor", () => {
       properties: { text: { type: "string", minLength: 1 } },
       required: ["text"],
     });
+  });
+});
+
+describe("load_toolkit", () => {
+  const big = {
+    app: "notion",
+    name: "Notion",
+    description: "Pages and databases",
+    tools: Array.from({ length: LOAD_ALL_LIMIT + 1 }, (_, i) => ({
+      name: `notion.tool_${i}`,
+      description: `Tool ${i}\nmore detail`,
+    })),
+    loaded: false,
+  };
+  const runCtx = { ...ctx, toolkits: { list: async () => [big] } } as never;
+
+  it("asks the agent to pick from an app too large to load whole, listing its tools", async () => {
+    const tool = loadToolkitTool();
+    await expect(tool.run({ app: "Notion" }, runCtx)).rejects.toMatchObject({
+      code: "choose_tools",
+      message: expect.stringContaining(
+        `Notion has ${LOAD_ALL_LIMIT + 1} tools, too many to load at once. Call load_toolkit again with app "notion"`,
+      ),
+    });
+    await expect(tool.run({ app: "notion" }, runCtx)).rejects.toThrow("- notion.tool_0: Tool 0\n");
+    const picked = await tool.run({ app: "notion", tools: ["tool_1", "notion.tool_2"] }, runCtx);
+    expect(picked.content).toBe(
+      "Loaded from Notion, for the rest of this task:\n- notion.tool_1: Tool 1\n- notion.tool_2: Tool 2",
+    );
+  });
+});
+
+describe("editable text (ADR-0030)", () => {
+  it("offers written text, never identifiers, addresses, choices or patterns", () => {
+    expect(
+      editableTextFields({
+        type: "object",
+        properties: {
+          to: { type: "string" },
+          subject: { type: "string" },
+          body: { type: ["string", "null"] },
+          page_title: { type: "string" },
+          thread_id: { type: "string" },
+          description: { type: "string", enum: ["a", "b"] },
+          summary: { type: "string", format: "uri" },
+          comment: { type: "string", pattern: "^x" },
+          message: { type: "object" },
+          notes: { type: ["string", "number"] },
+        },
+      }),
+    ).toEqual(["subject", "body", "page_title"]);
+    expect(editableTextFields({ type: "object" })).toEqual([]);
   });
 });
 

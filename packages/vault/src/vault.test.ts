@@ -1,13 +1,17 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  createKeyring,
   createRedactor,
+  createSecretRegistry,
   decryptEnvelope,
   encryptEnvelope,
   parseVaultKey,
   REDACTED,
   redactSecrets,
   redactValue,
+  rewrapEnvelope,
+  secretsInRecord,
   VaultKeyError,
 } from "./index";
 
@@ -15,13 +19,14 @@ import {
 const key = randomBytes(32);
 const otherKey = randomBytes(32);
 const aad = "ofa:secret:ws_1:llm.test.api_key";
+const keys = createKeyring(key);
 
 describe("envelope encryption", () => {
   it("round-trips a value and never stores it in the clear", () => {
     const value = "test-value-not-a-real-key-0001";
     const envelope = encryptEnvelope(key, value, aad);
     expect(JSON.stringify(envelope)).not.toContain(value);
-    expect(decryptEnvelope(key, envelope, aad)).toBe(value);
+    expect(decryptEnvelope(keys, envelope, aad)).toBe(value);
   });
 
   it("uses a fresh data key and IV each time", () => {
@@ -33,12 +38,12 @@ describe("envelope encryption", () => {
 
   it("refuses a different vault key with a clear error", () => {
     const envelope = encryptEnvelope(key, "value-12345678", aad);
-    expect(() => decryptEnvelope(otherKey, envelope, aad)).toThrow(VaultKeyError);
+    expect(() => decryptEnvelope(createKeyring(otherKey), envelope, aad)).toThrow(VaultKeyError);
   });
 
   it("refuses a ciphertext moved to another workspace or name", () => {
     const envelope = encryptEnvelope(key, "value-12345678", aad);
-    expect(() => decryptEnvelope(key, envelope, "ofa:secret:ws_2:llm.test.api_key")).toThrow();
+    expect(() => decryptEnvelope(keys, envelope, "ofa:secret:ws_2:llm.test.api_key")).toThrow();
   });
 
   it("detects tampering", () => {
@@ -48,13 +53,78 @@ describe("envelope encryption", () => {
     flipped[0] = (flipped[0] ?? 0) ^ 1;
     parts[3] = flipped.toString("base64url");
     expect(() =>
-      decryptEnvelope(key, { ...envelope, valueCiphertext: parts.join(".") }, aad),
+      decryptEnvelope(keys, { ...envelope, valueCiphertext: parts.join(".") }, aad),
     ).toThrow();
   });
 
   it("checks the vault key length", () => {
     expect(() => parseVaultKey(Buffer.alloc(16).toString("base64"))).toThrow(VaultKeyError);
     expect(parseVaultKey(key.toString("base64"))).toHaveLength(32);
+  });
+});
+
+describe("key rotation", () => {
+  it("reads values a previous key wrapped", () => {
+    const envelope = encryptEnvelope(otherKey, "value-12345678", aad);
+    expect(decryptEnvelope(createKeyring(key, [otherKey]), envelope, aad)).toBe("value-12345678");
+  });
+
+  it("re-wraps only the data key, after which the old key is not needed", () => {
+    const envelope = encryptEnvelope(otherKey, "value-12345678", aad);
+    const rotating = createKeyring(key, [otherKey]);
+    const rewrapped = rewrapEnvelope(rotating, envelope, aad);
+    expect(rewrapped.valueCiphertext).toBe(envelope.valueCiphertext);
+    expect(rewrapped.keyCiphertext).not.toBe(envelope.keyCiphertext);
+    expect(rewrapped.keyId).toBe(rotating.currentId);
+    expect(decryptEnvelope(keys, rewrapped, aad)).toBe("value-12345678");
+    // Already current: returned as it is.
+    expect(rewrapEnvelope(rotating, rewrapped, aad)).toBe(rewrapped);
+  });
+
+  it("keeps the binding while re-wrapping", () => {
+    const envelope = encryptEnvelope(otherKey, "value-12345678", aad);
+    expect(() =>
+      rewrapEnvelope(createKeyring(key, [otherKey]), envelope, "ofa:secret:ws_2:other"),
+    ).toThrow();
+  });
+
+  it("lists previous keys once, and never the current one", () => {
+    const ring = createKeyring(key, [otherKey, otherKey, key]);
+    expect(ring.previousIds).toHaveLength(1);
+    expect(ring.get(ring.previousIds[0] ?? "")).toBe(otherKey);
+  });
+});
+
+describe("record values", () => {
+  it("redacts the secret fields of a token set, not its ordinary ones", () => {
+    const tokens = JSON.stringify({
+      access_token: "access-0000-1111",
+      refresh_token: "refresh-2222-3333",
+      token_type: "Bearer",
+      scope: "https://www.googleapis.com/auth/gmail.compose",
+      client: { client_id: "public-id-123", client_secret: "client-secret-4444" },
+    });
+    expect(secretsInRecord(tokens).sort()).toEqual([
+      "access-0000-1111",
+      "client-secret-4444",
+      "refresh-2222-3333",
+    ]);
+  });
+
+  it("treats a value that isn't JSON as one secret", () => {
+    expect(secretsInRecord("plain-secret-value")).toEqual(["plain-secret-value"]);
+  });
+});
+
+describe("secret registry", () => {
+  it("redacts every value it was given, and ignores short or empty ones", () => {
+    const registry = createSecretRegistry();
+    expect(registry.redact("nothing yet")).toBe("nothing yet");
+    registry.add(["first-secret-01", undefined, null, "short"]);
+    registry.add(["second-secret-02", "first-secret-01"]);
+    expect(registry.redact("first-secret-01 second-secret-02 short")).toBe(
+      `${REDACTED} ${REDACTED} short`,
+    );
   });
 });
 

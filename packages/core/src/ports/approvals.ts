@@ -9,6 +9,10 @@ import type { Verdict } from "./policy";
 export const APPROVAL_STATUSES = ["pending", "approved", "rejected", "expired"] as const;
 export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
 
+/** An answer for this one call, or for every call like it on the same site for the rest of the run. */
+export const APPROVAL_SCOPES = ["once", "site"] as const;
+export type ApprovalScope = (typeof APPROVAL_SCOPES)[number];
+
 /** How long a run waits for an answer before carrying on without the action. */
 export const APPROVAL_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
@@ -27,6 +31,15 @@ export interface ApprovalRecord {
   readonly summary: string;
   readonly reasons: readonly string[];
   readonly verdict: Verdict;
+  /** The site the person may allow for the rest of the run; null when only a one-off answer fits. */
+  readonly site: string | null;
+  readonly scope: ApprovalScope;
+  /** Top-level text arguments the person may change before approving (ADR-0030). */
+  readonly editable: readonly string[];
+  /** The card lists the arguments, because the summary doesn't say them. */
+  readonly showArgs: boolean;
+  /** What the person changed, by argument; the call ran with these. Null when nothing was. */
+  readonly edits: Readonly<Record<string, string>> | null;
   readonly status: ApprovalStatus;
   readonly decidedBy: string | null;
   readonly createdAt: Date;
@@ -41,6 +54,9 @@ export interface ApprovalInput {
   readonly summary: string;
   readonly reasons: readonly string[];
   readonly verdict: Verdict;
+  readonly site?: string | null;
+  readonly editable?: readonly string[];
+  readonly showArgs?: boolean;
   readonly expiresAt: Date;
 }
 
@@ -55,6 +71,10 @@ export interface ApprovalStore {
     input: {
       readonly status: Exclude<ApprovalStatus, "pending">;
       readonly decidedBy: string | null;
+      /** `site` only for an approval that has one. */
+      readonly scope?: ApprovalScope;
+      /** Only when approving, and only for editable arguments. */
+      readonly edits?: Readonly<Record<string, string>> | null;
     },
   ): Promise<ApprovalRecord | null>;
   /** Pending approvals, newest first, optionally for one agent or run. */

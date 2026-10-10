@@ -13,9 +13,11 @@ import {
   type StepRunner,
   type TenantContext,
   type ThreadId,
+  type TokenRefresher,
+  type TokenRefreshOutcome,
 } from "@ofa/core";
 import { learnFromRun, runAgent, runEvent, type HarnessDeps } from "@ofa/harness";
-import { NonRetriableError, RetryAfterError, type Inngest } from "inngest";
+import { NonRetriableError, RetryAfterError, type Inngest, type InngestFunction } from "inngest";
 
 // Durable functions (ADR-0006). The orchestrator decides when and how often an
 // agent runs; what happens inside a run is the harness's job (L3 → L4).
@@ -25,7 +27,13 @@ export interface OrchestratorDeps {
   readonly runs: RunStore;
   /** Open approval requests of a stopped run are expired. */
   readonly approvals?: ApprovalStore;
+  /** Keeps idle app sign-ins working (M4.06); absent without the MCP client. */
+  readonly tokenRefresh?: TokenRefresher;
 }
+
+/** How often sign-ins are checked, and how far ahead of expiry they are refreshed. */
+export const TOKEN_REFRESH_CRON = "*/10 * * * *";
+export const TOKEN_REFRESH_AHEAD_MS = 15 * 60_000;
 
 /** Errors that waiting will not fix: a missing key, a malformed request. */
 const NOT_RETRYABLE = new Set(["auth", "bad_request", "context_length"]);
@@ -230,5 +238,55 @@ export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
     },
   );
 
-  return [agentRun, agentRunCancelled, agentLearn];
+  const functions: InngestFunction.Any[] = [agentRun, agentRunCancelled, agentLearn];
+  if (deps.tokenRefresh) functions.push(tokenRefreshFunction(inngest, deps.tokenRefresh));
+  return functions;
+}
+
+/**
+ * Refresh app sign-ins shortly before their access tokens run out (M4.06), so
+ * a routine or a run that starts after a quiet hour finds them working. Each
+ * sign-in is its own step: one provider that is down doesn't hold up the rest,
+ * and it is tried again at the next tick.
+ */
+function tokenRefreshFunction(inngest: Inngest.Any, refresher: TokenRefresher) {
+  return inngest.createFunction(
+    {
+      id: "token-refresh",
+      name: "Refresh app sign-ins",
+      triggers: [{ cron: TOKEN_REFRESH_CRON }],
+      concurrency: [{ limit: 1 }],
+      retries: 1,
+    },
+    async ({ step }) => refreshDue(refresher, inngestSteps(step)),
+  );
+}
+
+/** One tick of the token refresh: what each due sign-in came to, counted. */
+export async function refreshDue(
+  refresher: TokenRefresher,
+  steps: StepRunner,
+  now: () => number = Date.now,
+): Promise<Partial<Record<TokenRefreshOutcome | "failed", number>> & { due: number }> {
+  const due = await steps.run("list-due", async () =>
+    (await refresher.listDue(new Date(now() + TOKEN_REFRESH_AHEAD_MS))).map((c) => ({
+      workspaceId: c.workspaceId,
+      userId: c.userId,
+      mcpServerId: c.mcpServerId,
+    })),
+  );
+  const counts: Partial<Record<TokenRefreshOutcome | "failed", number>> = {};
+  for (const c of due) {
+    const outcome = await steps.run(`refresh-${c.mcpServerId}-${c.userId}`, async () => {
+      const ctx: TenantContext = { workspaceId: asId(c.workspaceId), userId: asId(c.userId) };
+      try {
+        return await refresher.refresh(ctx, c.mcpServerId);
+      } catch {
+        // The refresher logs why; the sign-in is left as it was.
+        return "failed" as const;
+      }
+    });
+    counts[outcome] = (counts[outcome] ?? 0) + 1;
+  }
+  return { due: due.length, ...counts };
 }
