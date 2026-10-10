@@ -17,6 +17,7 @@ import type { ComputerControl } from "./control";
 //
 // Close codes the client acts on:
 //   4001  someone else has control: watch instead
+//   4002  this person took control in another window
 //   4004  no such agent, or no computer on this server
 //   4500  the view could not start (the reason says why)
 
@@ -46,12 +47,11 @@ export function desktopHandler(
           if (!deps.sandbox) return ws.close(4004, "This server has no computer for agents.");
           const agent = await getAgent(deps.db, tenant, agentId);
           if (!agent) return ws.close(4004, "No such agent.");
-          if (wantsControl && controllers.has(agentId)) {
+          if (wantsControl && !controllers.claim(agentId, tenant.userId, ws)) {
             return ws.close(4001, "Someone else has control of this computer. You can watch.");
           }
           const handle = await deps.sandbox.acquire(tenant);
           if (wantsControl) {
-            controllers.set(agentId, ws);
             control = true;
             await handle.takeover(agentId, true);
             await audit("computer.takeover_started");
@@ -84,11 +84,11 @@ export function desktopHandler(
         }
       },
 
-      async onClose() {
+      async onClose(_event, ws) {
         closed = true;
         stream?.close();
-        if (control) {
-          controllers.delete(agentId);
+        // Hand back only if control didn't move to a newer window of this person.
+        if (control && controllers.release(agentId, ws)) {
           try {
             await (await deps.sandbox?.acquire(tenant))?.takeover(agentId, false);
           } catch (error) {

@@ -50,7 +50,7 @@ import {
   SkillSuggestions,
   skillQuery,
 } from "@/components/chat/skill-picker";
-import { ComputerOverlay, ComputerPanel, usesBrowser } from "@/components/computer/computer-panel";
+import { ComputerOverlay, ComputerPanel, usesComputer } from "@/components/computer/computer-panel";
 import { Familiar } from "@/components/familiar";
 import { ErrorAlert } from "@/components/ui/alert";
 import { starters } from "@/lib/agents";
@@ -154,10 +154,10 @@ function Chat({ agent }: { agent: Agent }) {
   // The agent's computer (M3.10): a side panel on wide screens, full screen on phones.
   const [computerOpen, setComputerOpen] = useStoredFlag("ofa-computer-panel", false);
   const [overlay, setOverlay] = useState<null | "watch" | "control">(null);
-  const hasBrowser = usesBrowser(agent);
+  const hasComputer = usesComputer(agent);
   // The side panel exists only on wide screens; phones use the full-screen view.
   const wide = useWide();
-  const panelShown = hasBrowser && computerOpen && wide;
+  const panelShown = hasComputer && computerOpen && wide;
   const celebrate = useJustFinished(run);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const clearDraft = useCallback(
@@ -284,7 +284,7 @@ function Chat({ agent }: { agent: Agent }) {
         onTogglePanel={run ? () => setPanelOpen(!panelOpen) : undefined}
         computerOpen={panelShown}
         onComputer={
-          hasBrowser
+          hasComputer
             ? () => {
                 // Wide screens get the side panel; phones the full-screen view.
                 if (wide) setComputerOpen(!computerOpen);

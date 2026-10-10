@@ -28,7 +28,7 @@ import { setupRoutes } from "./routes/setup";
 import { threadRoutes } from "./routes/threads";
 import type { AppEnv } from "./types";
 import { mountWebApp } from "./web";
-import { computerControl } from "./ws/control";
+import { ComputerControl } from "./ws/control";
 import { desktopHandler } from "./ws/desktop";
 import { realtimeHandler } from "./ws/gateway";
 import { screenHandler } from "./ws/screen";
@@ -117,7 +117,7 @@ export function createApp(container: Container): App {
   );
   // Watching and taking over an agent's computer: its browser page (M3.07)
   // or its whole desktop (ADR-0040). One person has control at a time.
-  const controllers = computerControl();
+  const controllers = new ComputerControl();
   app.get(
     "/api/agents/:id/screen",
     requireSession(container.sessions),

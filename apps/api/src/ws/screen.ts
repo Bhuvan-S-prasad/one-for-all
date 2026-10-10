@@ -46,8 +46,7 @@ export function screenHandler(
           if (!agent) throw new Error("No such agent.");
           const handle = await deps.sandbox.acquire(tenant);
 
-          if (wantsControl && !controllers.has(agentId)) {
-            controllers.set(agentId, ws);
+          if (wantsControl && controllers.claim(agentId, tenant.userId, ws)) {
             control = true;
             await handle.takeover(agentId, true);
             await audit("computer.takeover_started");
@@ -67,7 +66,7 @@ export function screenHandler(
           send(ws, {
             type: "status",
             control,
-            takenOverByOther: !control && controllers.has(agentId),
+            takenOverByOther: !control && controllers.heldByOther(agentId, tenant.userId),
           });
         } catch (error) {
           send(ws, {
@@ -99,11 +98,11 @@ export function screenHandler(
         }
       },
 
-      async onClose() {
+      async onClose(_event, ws) {
         closed = true;
         session?.close();
-        if (control) {
-          controllers.delete(agentId);
+        // Hand back only if control didn't move to a newer window of this person.
+        if (control && controllers.release(agentId, ws)) {
           try {
             await (await deps.sandbox?.acquire(tenant))?.takeover(agentId, false);
           } catch (error) {
