@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 #
 # The agents' computer (ADR-0025, superseding ADR-0009's image choice): Debian
-# slim with Chromium, a virtual display, a shell and files, run by a small
-# service (`server.mjs`). The same image also runs the egress proxy
+# slim with Chromium, a light desktop on a virtual display (ADR-0040), a shell
+# and files, run by a small service (`server.mjs`). The same image also runs the egress proxy
 # (`egress.mjs`), the sandbox's only way out (M3.02).
 #
 #   docker build -t one-for-all-sandbox infra/docker/sandbox
@@ -24,11 +24,43 @@ FROM node:${NODE_VERSION}-bookworm-slim
 # chromium: the browser agents drive over CDP (Debian builds it for arm64 too).
 # xvfb: a screen per agent, so the browser is real and can be watched (M3.07).
 # util-linux gives setpriv, which starts agent processes under their own user.
+#
+# The light desktop on each agent's screen (ADR-0040): openbox (windows),
+# tint2 (the dock), pcmanfm (desktop icons and files), xterm with tmux (the
+# terminal), mousepad (text), abiword and gnumeric (Word and Excel files),
+# x11vnc (watching), xdotool and scrot (input and screenshots, ADR-0041),
+# and dbus with the AT-SPI bridge (the accessibility tree of desktop apps).
 RUN apt-get update \
   && apt-get install --yes --no-install-recommends \
-    bash ca-certificates chromium curl file fonts-liberation fonts-noto-core git \
-    jq less procps python3 tini unzip util-linux xauth xvfb zip \
-  && rm -rf /var/lib/apt/lists/*
+    bash ca-certificates chromium curl file fonts-dejavu-core fonts-liberation \
+    fonts-noto-core git jq less procps python3 tini unzip util-linux xauth xvfb zip \
+    abiword adwaita-icon-theme at-spi2-core dbus gnumeric libatk-adaptor mousepad \
+    openbox pcmanfm python3-pyatspi scrot tint2 tmux x11vnc xdotool xterm \
+  && rm -rf /var/lib/apt/lists/* \
+  && dbus-uuidgen --ensure=/etc/machine-id
+
+# The desktop's look and launchers (ADR-0040). Openbox keeps Debian's
+# defaults but one desktop, a dark theme, no animation, and Chromium maximised.
+COPY desktop/tint2rc /etc/xdg/tint2/one-for-all.tint2rc
+COPY desktop/pcmanfm.conf desktop/desktop-items-0.conf /etc/xdg/pcmanfm/one-for-all/
+COPY desktop/libfm.conf /etc/xdg/libfm/libfm.conf
+COPY desktop/tmux.conf /etc/tmux.conf
+COPY desktop/applications/ /usr/share/applications/
+COPY --chmod=755 desktop/one-for-all-terminal desktop/one-for-all-browser /usr/local/bin/
+COPY desktop/wallpaper.mjs /tmp/wallpaper.mjs
+RUN mkdir -p /usr/share/backgrounds \
+  && node /tmp/wallpaper.mjs /usr/share/backgrounds/one-for-all.png \
+  && rm /tmp/wallpaper.mjs \
+  && sed -i \
+    -e 's|<name>Clearlooks</name>|<name>Onyx-Citrus</name>|' \
+    -e 's|<number>4</number>|<number>1</number>|' \
+    -e 's|<animateIconify>yes</animateIconify>|<animateIconify>no</animateIconify>|' \
+    -e 's|</applications>|  <application class="Chromium"><maximized>yes</maximized></application>\n</applications>|' \
+    /etc/xdg/openbox/rc.xml \
+  && grep -q 'Onyx-Citrus' /etc/xdg/openbox/rc.xml \
+  && grep -q '<number>1</number>' /etc/xdg/openbox/rc.xml \
+  && grep -q 'class="Chromium"' /etc/xdg/openbox/rc.xml \
+  && test -d /usr/share/themes/Onyx-Citrus
 
 # Agents' homes (one private directory each) and the shared workspace. Both
 # are volumes; the service fixes ownership on start.

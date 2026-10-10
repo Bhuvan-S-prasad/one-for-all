@@ -16,7 +16,7 @@
 //   POST /files/read  {agent, path}    {content: base64, size}
 //   POST /files/write {agent, path, content: base64}
 //   POST /files/list  {agent, path}
-//   POST /browser {agent}              start the agent's browser; {path} of its CDP endpoint
+//   POST /browser {agent}              start the agent's desktop and browser; {path} of its CDP endpoint
 //   POST /restart {agent?}             stop an agent's processes (or every agent's)
 //   POST /takeover {agent, on}         a person has the agent's browser (M3.07): the
 //                                      agent's own requests for it are refused meanwhile
@@ -36,12 +36,14 @@ const PORT = Number(process.env.SANDBOX_PORT ?? 7070);
 const TOKEN = process.env.SANDBOX_TOKEN ?? "";
 /** The egress proxy (M3.02); the sandbox network has no other way out. */
 const PROXY = process.env.SANDBOX_PROXY ?? "";
-const BROWSER_IDLE_MS = Number(process.env.SANDBOX_BROWSER_IDLE_MS ?? 10 * 60_000);
+/** An agent's desktop and browser close after this long unused (ADR-0040). */
+const IDLE_MS = Number(process.env.SANDBOX_BROWSER_IDLE_MS ?? 10 * 60_000);
 /**
- * Browsers open at once. Each is ~200 MB and ~130 threads; past the limit the
- * least recently used one closes (its profile, and so its logins, stay).
+ * Desktops open at once, each with its browser (~200 MB and ~130 threads for
+ * Chromium, a little more for the desktop); past the limit the least recently
+ * used one closes (its home and profile, and so its logins, stay).
  */
-const MAX_BROWSERS = Number(process.env.SANDBOX_MAX_BROWSERS ?? 3);
+const MAX_DESKTOPS = Number(process.env.SANDBOX_MAX_BROWSERS ?? 3);
 
 const HOMES = "/home/agents";
 const STATE_DIR = `${HOMES}/.state`;
@@ -126,6 +128,7 @@ async function agentUser(agentId) {
 
 /** A clean environment for agent processes: never the service's own (it holds the token). */
 function agentEnv(user, extra = {}) {
+  const run = `${user.home}/.run`;
   const env = {
     HOME: user.home,
     USER: `agent${user.slot}`,
@@ -135,6 +138,14 @@ function agentEnv(user, extra = {}) {
     TMPDIR: "/tmp",
     TERM: "dumb",
     DISPLAY: user.display,
+    // The display's key: its socket sits in the shared /tmp, so without it
+    // any agent could watch or type into another's screen.
+    XAUTHORITY: `${user.home}/.Xauthority`,
+    // The desktop's session bus (ADR-0040), private to the agent: apps it
+    // starts appear on its desktop and publish their accessibility tree.
+    XDG_RUNTIME_DIR: run,
+    DBUS_SESSION_BUS_ADDRESS: `unix:path=${run}/bus`,
+    GTK_THEME: "Adwaita:dark",
     ...extra,
   };
   if (PROXY) {
@@ -215,19 +226,25 @@ function killGroup(pid) {
   }
 }
 
-// ── Browsers ────────────────────────────────────────────────────────────────
+// ── Desktops and browsers ───────────────────────────────────────────────────
+//
+// Each agent's computer is a light desktop on its own display (ADR-0040):
+// Xvfb, a private session bus, openbox, the pcmanfm desktop and the tint2
+// dock, all running as the agent. Its Chromium is an ordinary window there;
+// closing it leaves the desktop, and the next browser tool reopens it.
 
-/** Agents whose browser a person has taken over (M3.07). In memory: a restart hands it back. */
+/** Agents whose computer a person has taken over (M3.07). In memory: a restart hands it back. */
 const takenOver = new Set();
 
-/** agentId → { user, xvfb, chrome, wsPath, timer } */
-const browsers = new Map();
+/** agentId → { user, xvfb, session, chrome, wsPath, timer, usedAt } */
+const desktops = new Map();
 const starting = new Map();
+const browserStarting = new Map();
 
 function touch(entry) {
   entry.usedAt = Date.now();
   clearTimeout(entry.timer);
-  entry.timer = setTimeout(() => stopBrowser(entry.user.agentId, "idle"), BROWSER_IDLE_MS);
+  entry.timer = setTimeout(() => stopDesktop(entry.user.agentId, "idle"), IDLE_MS);
   entry.timer.unref();
 }
 
@@ -239,20 +256,91 @@ async function cdpVersion(port) {
   return response.json();
 }
 
-async function startBrowser(user) {
+async function startDesktop(user) {
   // Xvfb keeps its lock and socket in the shared /tmp.
   await mkdir("/tmp/.X11-unix", { recursive: true, mode: 0o1777 });
   await chmod("/tmp/.X11-unix", 0o1777);
   const n = user.display.slice(1);
   await rm(`/tmp/.X${n}-lock`, { force: true });
   await rm(`/tmp/.X11-unix/X${n}`, { force: true });
-  const xvfb = spawnAs(user, ["Xvfb", user.display, "-screen", "0", SCREEN, "-nolisten", "tcp"], {
-    stdio: "ignore",
+  // A fresh key for the display, readable by the agent alone.
+  const auth = `${user.home}/.Xauthority`;
+  const key = await runAs(
+    user,
+    'umask 077 && rm -f -- "$1" && xauth -q -f "$1" add "$2" . "$(mcookie)"',
+    [auth, user.display],
+  );
+  if (key.exitCode !== 0) throw httpError(503, "The computer's screen did not start");
+  const xvfb = spawnAs(
+    user,
+    ["Xvfb", user.display, "-screen", "0", SCREEN, "-nolisten", "tcp", "-auth", auth],
+    { stdio: "ignore" },
+  );
+  const entry = { user, xvfb, session: [], chrome: null, wsPath: null, timer: undefined };
+  xvfb.on("exit", () => {
+    if (desktops.get(user.agentId) === entry) stopDesktop(user.agentId, "display closed");
   });
 
-  // A crash leaves the profile locked; nothing else uses this profile.
+  try {
+    let ready = false;
+    for (let i = 0; i < 40 && !ready && xvfb.exitCode === null; i += 1) {
+      ready = await stat(`/tmp/.X11-unix/X${n}`).then(
+        () => true,
+        () => new Promise((r) => setTimeout(() => r(false), 125)),
+      );
+    }
+    if (!ready) throw httpError(503, "The computer's screen did not start");
+
+    // The session bus lives in a private folder in the agent's home (this
+    // service cannot look inside it, so the agent waits for its own socket).
+    const run = `${user.home}/.run`;
+    const start = (argv) => entry.session.push(spawnAs(user, argv, { stdio: "ignore" }));
+    await runAs(user, 'mkdir -p -m 700 -- "$1" && chmod 700 -- "$1" && rm -f -- "$1/bus"', [run]);
+    start([
+      "dbus-daemon",
+      "--session",
+      "--nofork",
+      "--nopidfile",
+      `--address=unix:path=${run}/bus`,
+    ]);
+    const bus = await runAs(
+      user,
+      'for i in $(seq 40); do [ -S "$1/bus" ] && exit 0; sleep 0.1; done; exit 1',
+      [run],
+    );
+    if (bus.exitCode !== 0) throw httpError(503, "The computer's desktop did not start");
+
+    // Desktop icons: the shared workspace beside the agent's own files.
+    await runAs(
+      user,
+      'mkdir -p -- "$HOME/Desktop" && ln -sfn /workspace "$HOME/Desktop/Workspace"',
+      [],
+    );
+    start(["openbox", "--sm-disable"]);
+    start(["pcmanfm", "--desktop", "--profile", "one-for-all"]);
+    start(["tint2", "-c", "/etc/xdg/tint2/one-for-all.tint2rc"]);
+  } catch (error) {
+    for (const child of entry.session) killGroup(child.pid);
+    killGroup(xvfb.pid);
+    throw error;
+  }
+
+  desktops.set(user.agentId, entry);
+  touch(entry);
+  log("desktop started", { agent: user.agentId, slot: user.slot });
+  return entry;
+}
+
+async function startBrowser(entry) {
+  const { user } = entry;
+  // A crash leaves the profile locked, and the dock's Browser may have
+  // started Chromium without DevTools: replace it with one the tools can use.
   const profile = `${user.home}/chromium`;
-  await runAs(user, 'mkdir -p -- "$1" && rm -f -- "$1"/Singleton*', [profile]);
+  await runAs(
+    user,
+    'pkill -KILL -u "$(id -u)" -x chromium; mkdir -p -- "$1" && rm -f -- "$1"/Singleton*',
+    [profile],
+  );
   const flags = [
     `--user-data-dir=${profile}`,
     `--remote-debugging-port=${user.cdpPort}`,
@@ -271,25 +359,25 @@ async function startBrowser(user) {
     "--disable-component-extensions-with-background-pages",
     "--renderer-process-limit=4",
     "--password-store=basic",
+    "--start-maximized",
     "--window-position=0,0",
     `--window-size=${SCREEN.split("x").slice(0, 2).join(",")}`,
     ...(PROXY ? [`--proxy-server=${PROXY}`, "--proxy-bypass-list=<-loopback>"] : []),
     "about:blank",
   ];
   const chrome = spawnAs(user, ["chromium", ...flags], { stdio: "ignore" });
-
-  const entry = { user, xvfb, chrome, wsPath: null, timer: undefined };
+  entry.chrome = chrome;
+  entry.wsPath = null;
   chrome.on("exit", () => {
-    if (browsers.get(user.agentId) === entry) browsers.delete(user.agentId);
-    killGroup(xvfb.pid);
-    clearTimeout(entry.timer);
+    if (entry.chrome !== chrome) return;
+    entry.chrome = null;
+    entry.wsPath = null;
   });
 
   for (let i = 0; i < 60; i += 1) {
     try {
       const info = await cdpVersion(user.cdpPort);
       entry.wsPath = new URL(info.webSocketDebuggerUrl).pathname;
-      browsers.set(user.agentId, entry);
       touch(entry);
       log("browser started", { agent: user.agentId, slot: user.slot });
       return entry;
@@ -299,42 +387,56 @@ async function startBrowser(user) {
     }
   }
   killGroup(chrome.pid);
-  killGroup(xvfb.pid);
   throw httpError(503, "The browser did not start");
 }
 
-async function browserFor(agentId) {
+/** The agent's desktop, started if needed. */
+async function desktopFor(agentId) {
   const user = await agentUser(agentId);
-  const running = browsers.get(agentId);
-  if (running && running.chrome.exitCode === null) {
+  const running = desktops.get(agentId);
+  if (running) {
     touch(running);
     return running;
   }
   if (!starting.has(agentId)) {
-    // Make room: close the least recently used browsers beyond the limit.
-    const open = [...browsers.values()].sort((a, b) => a.usedAt - b.usedAt);
-    while (open.length >= MAX_BROWSERS) stopBrowser(open.shift().user.agentId, "making room");
+    // Make room: close the least recently used desktops beyond the limit.
+    const open = [...desktops.values()].sort((a, b) => a.usedAt - b.usedAt);
+    while (open.length >= MAX_DESKTOPS) stopDesktop(open.shift().user.agentId, "making room");
     starting.set(
       agentId,
-      startBrowser(user).finally(() => starting.delete(agentId)),
+      startDesktop(user).finally(() => starting.delete(agentId)),
     );
   }
   return starting.get(agentId);
 }
 
-function stopBrowser(agentId, reason) {
-  const entry = browsers.get(agentId);
+/** The agent's desktop with its browser running. */
+async function browserFor(agentId) {
+  const entry = await desktopFor(agentId);
+  if (entry.chrome && entry.chrome.exitCode === null && entry.wsPath) return entry;
+  if (!browserStarting.has(agentId)) {
+    browserStarting.set(
+      agentId,
+      startBrowser(entry).finally(() => browserStarting.delete(agentId)),
+    );
+  }
+  return browserStarting.get(agentId);
+}
+
+function stopDesktop(agentId, reason) {
+  const entry = desktops.get(agentId);
   if (!entry) return;
-  browsers.delete(agentId);
+  desktops.delete(agentId);
   clearTimeout(entry.timer);
-  killGroup(entry.chrome.pid);
+  if (entry.chrome) killGroup(entry.chrome.pid);
+  for (const child of entry.session) killGroup(child.pid);
   killGroup(entry.xvfb.pid);
-  log("browser stopped", { agent: agentId, reason });
+  log("desktop stopped", { agent: agentId, reason });
 }
 
 /** Stop everything an agent's user is running. */
 async function stopAgent(agentId) {
-  stopBrowser(agentId, "restart");
+  stopDesktop(agentId, "restart");
   await loadState();
   const slot = slots.get(agentId);
   if (slot === undefined) return;
@@ -475,7 +577,7 @@ const routes = {
 
   async "POST /restart"(body) {
     if (body.agent === undefined) {
-      await Promise.all([...browsers.keys()].map((id) => stopAgent(id)));
+      await Promise.all([...desktops.keys()].map((id) => stopAgent(id)));
       await loadState();
       await Promise.all([...slots.keys()].map((id) => stopAgent(id)));
     } else {
@@ -509,8 +611,8 @@ const server = http.createServer(async (req, res) => {
 server.on("upgrade", (req, socket, head) => {
   const url = new URL(req.url ?? "/", "http://sandbox");
   const match = /^\/cdp\/([A-Za-z0-9-]{1,64})(\/devtools\/.+)$/.exec(url.pathname);
-  const entry = match ? browsers.get(match[1]) : undefined;
-  if (!authorized(req, url) || !entry || entry.chrome.exitCode !== null) {
+  const entry = match ? desktops.get(match[1]) : undefined;
+  if (!authorized(req, url) || !entry?.chrome || entry.chrome.exitCode !== null) {
     socket.end(`HTTP/1.1 ${authorized(req, url) ? "404 Not Found" : "401 Unauthorized"}\r\n\r\n`);
     return;
   }
@@ -562,7 +664,7 @@ server.listen(PORT, "0.0.0.0", () => log("sandbox ready", { port: PORT, proxy: P
 
 for (const signal of ["SIGTERM", "SIGINT"]) {
   process.on(signal, () => {
-    for (const id of [...browsers.keys()]) stopBrowser(id, "shutdown");
+    for (const id of [...desktops.keys()]) stopDesktop(id, "shutdown");
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 3_000).unref();
   });

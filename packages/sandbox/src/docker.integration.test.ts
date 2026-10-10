@@ -120,6 +120,34 @@ describe.skipIf(!up)("Docker sandbox (integration)", { timeout: 60_000 }, () => 
     await expect(browser.press("F13")).rejects.toMatchObject({ code: "bad_request" });
   });
 
+  it("puts a light desktop on the agent's screen, run as the agent and closed to others", async () => {
+    await handle.browser(alice);
+    const running = await handle.exec(
+      alice,
+      'for p in Xvfb dbus-daemon openbox pcmanfm tint2 chromium; do pgrep -u "$(id -u)" -x "$p" >/dev/null && echo "$p"; done',
+    );
+    expect(running.stdout.trim().split("\n")).toEqual([
+      "Xvfb",
+      "dbus-daemon",
+      "openbox",
+      "pcmanfm",
+      "tint2",
+      "chromium",
+    ]);
+    // Chromium is a window on it, and the agent's own programs reach the screen.
+    const own = await handle.exec(
+      alice,
+      "xdotool getdisplaygeometry; xdotool search --onlyvisible --class chromium | wc -l",
+    );
+    const [geometry, windows] = own.stdout.trim().split("\n");
+    expect(geometry).toBe("1280 800");
+    expect(Number(windows)).toBeGreaterThan(0);
+    // Another agent can't open it: the display has a key only its agent reads.
+    const display = (await handle.exec(alice, "echo $DISPLAY")).stdout.trim();
+    const peek = await handle.exec(bob, `DISPLAY=${display} xdotool getdisplaygeometry`);
+    expect(peek.exitCode).not.toBe(0);
+  });
+
   it("can't open private addresses in the browser either", async () => {
     const browser = await handle.browser(alice);
     await expect(browser.open("http://10.0.0.1/")).rejects.toMatchObject({

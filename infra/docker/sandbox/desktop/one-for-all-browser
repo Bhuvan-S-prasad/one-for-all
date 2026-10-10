@@ -1,0 +1,9 @@
+#!/bin/sh
+# The dock's Browser (ADR-0040): a new window in the agent's own Chromium,
+# the one its browser tools drive. If none is running this starts one; the
+# sandbox service replaces it with its own (with DevTools on) when a browser
+# tool next needs it.
+set -- --user-data-dir="$HOME/chromium" --no-sandbox --no-first-run \
+  --no-default-browser-check --disable-gpu --password-store=basic "$@"
+[ -n "$https_proxy" ] && set -- --proxy-server="$https_proxy" --proxy-bypass-list='<-loopback>' "$@"
+exec chromium "$@"
