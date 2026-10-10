@@ -33,6 +33,12 @@ export const queryKeys = {
   connections: ["connections"] as const,
   appTools: (serverId: string) => ["connections", "tools", serverId] as const,
   policyRules: ["policy-rules"] as const,
+  routines: (agentId?: string) => ["routines", "list", agentId ?? "all"] as const,
+  routineLists: ["routines", "list"] as const,
+  routineRuns: (id: string) => ["routines", id, "runs"] as const,
+  schedules: (agentId?: string) => ["schedules", agentId ?? "all"] as const,
+  scheduleLists: ["schedules"] as const,
+  workspaceSettings: ["settings", "workspace"] as const,
 };
 
 /** Shared by hooks and router loaders, so both read the same cache entry. */

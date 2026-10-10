@@ -39,17 +39,35 @@ export async function listMembershipsForUser(
 export interface WorkspaceRecord {
   readonly id: WorkspaceId;
   readonly name: string;
+  /** Where routines and reminders read clock times (M5.06). */
+  readonly timeZone: string;
   readonly createdAt: Date;
 }
 
 export async function getWorkspace(db: Database, ctx: TenantContext): Promise<WorkspaceRecord> {
   const rows = await withTenant(db, ctx, (tx) =>
     tx
-      .select({ id: workspace.id, name: workspace.name, createdAt: workspace.createdAt })
+      .select({
+        id: workspace.id,
+        name: workspace.name,
+        timeZone: workspace.timeZone,
+        createdAt: workspace.createdAt,
+      })
       .from(workspace)
       .where(eq(workspace.id, ctx.workspaceId)),
   );
   const row = rows[0];
   if (!row) throw new NotFoundError("Workspace");
   return { ...row, id: asId<WorkspaceId>(row.id) };
+}
+
+/** Set the workspace time zone (an IANA name, checked by the caller). */
+export async function setWorkspaceTimeZone(
+  db: Database,
+  ctx: TenantContext,
+  timeZone: string,
+): Promise<void> {
+  await withTenant(db, ctx, (tx) =>
+    tx.update(workspace).set({ timeZone }).where(eq(workspace.id, ctx.workspaceId)),
+  );
 }

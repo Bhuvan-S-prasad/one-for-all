@@ -34,7 +34,7 @@ import {
 } from "./context";
 import { modelCallEvents, runEvent } from "./events";
 import { MiddlewareChain, type HarnessMiddleware, type RunHookContext } from "./middleware";
-import { AGENT_MESSAGE, HANDOFF_BRIEF } from "./prompts";
+import { AGENT_MESSAGE, HANDOFF_BRIEF, ROUTINE_RUN, SCHEDULED_TASK } from "./prompts";
 import { redactJson, type RedactText } from "./redaction";
 
 // The agent loop (ARCHITECTURE.md §6.2). Every side effect happens inside a
@@ -92,10 +92,11 @@ export interface HarnessDeps {
 export interface RunInput {
   readonly ctx: RunContext;
   readonly threadId: ThreadId | null;
-  readonly trigger: "message" | "routine" | "delegation" | "event" | "manual";
+  readonly trigger: "message" | "routine" | "delegation" | "event" | "manual" | "schedule";
   /**
    * The message that started the run. For a run woken by another agent's
-   * message (`event`, M5.03), that message is its request.
+   * message (`event`, M5.03), that message is its request; so is a
+   * routine's or a scheduled task's request note (M5.06–07).
    */
   readonly requestId?: string;
 }
@@ -125,6 +126,9 @@ const EMPTY_USAGE: RunUsageTotals = {
 };
 
 const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
+
+/** Runs on the clock, whose request is a note in the thread (M5.06–07). */
+const SCHEDULED = new Set<RunInput["trigger"]>(["routine", "manual", "schedule"]);
 
 /** Handing work to another agent (M5.01); the harness runs the handoff itself. */
 const DELEGATE_TASK = "delegate_task";
@@ -279,6 +283,10 @@ export async function runAgent(
         startedAt: new Date(),
         onlyIfActive: true,
       });
+      // Another run may have taken this one's message as steering (M5.05)
+      // between the read above and the update: then it is already answered.
+      const now = await deps.runs.get(ctx, ctx.runId);
+      if (now && TERMINAL.has(now.status)) return { skip: true as const };
       await log([
         runEvent("start", "run.started", { trigger: input.trigger, tier: agent.modelTier }),
       ]);
@@ -339,6 +347,18 @@ export async function runAgent(
             handoff: true,
           };
         }
+        // A routine's or a scheduled task's note is the request of its run
+        // (M5.06–07); other notes are for people only.
+        if (m.author === "system" && m.id === input.requestId && SCHEDULED.has(input.trigger)) {
+          return {
+            author: "user",
+            agentId: null,
+            content: (input.trigger === "schedule" ? SCHEDULED_TASK : ROUTINE_RUN).render({
+              request: m.content,
+            }),
+            scheduled: input.trigger === "schedule" ? "task" : "routine",
+          };
+        }
         // So is the message from another agent that woke this run (M5.03).
         if (fromOther && input.trigger === "event" && m.id === input.requestId) {
           return {
@@ -368,7 +388,13 @@ export async function runAgent(
           : [];
       const tools: ToolDescriptor[] = await deps.tools.listTools(ctx);
       const model = await deps.llm.modelFor(agent.modelTier, ctx);
-      return { history, memories, tools, window: model.contextWindow };
+      return {
+        history,
+        memories,
+        tools,
+        window: model.contextWindow,
+        messageIds: messages.map((m) => m.id as string),
+      };
     });
     const budget = contextBudget(context.window, options.maxContextTokens ?? 32_000);
 
@@ -381,7 +407,7 @@ export async function runAgent(
       // A brief or message was written by another model. If that run had read
       // outside content (so this one starts tainted), addresses in it were
       // not given by a person and must not open freely here (ADR-0027).
-      if ((message.handoff || message.agentMessage) && start.tainted) continue;
+      if ((message.handoff || message.agentMessage || message.scheduled) && start.tainted) continue;
       learnUrls(message.content);
     }
 
@@ -399,6 +425,29 @@ export async function runAgent(
     const loadedToolkits = new Set<string>();
 
     for (let i = 0; i < agent.budgets.steps; i += 1) {
+      // Steering (§6.3, M5.05): what the person wrote here while the run
+      // worked joins it at this step boundary, instead of waiting its turn.
+      if (input.threadId && deps.runs.claimFollowUps) {
+        const followUps = await steps.run(`steer-${i}`, async () => {
+          const claimed = await deps.runs.claimFollowUps!(ctx, input.threadId as ThreadId);
+          if (claimed.length === 0) return [];
+          await log([
+            runEvent(`steer-${i}`, "run.steered", {
+              messageIds: claimed.map((m) => m.id),
+              preview: preview(claimed.map((m) => m.content).join(" · "), 280),
+            }),
+          ]);
+          // Ones already in the history (written before it was read) are answered there.
+          return claimed
+            .filter((m) => !context.messageIds.includes(m.id))
+            .map((m) => ({ id: m.id as string, content: m.content }));
+        });
+        for (const message of followUps) {
+          turns.push({ kind: "user", text: message.content });
+          learnUrls(message.content);
+        }
+      }
+
       let assembled = assembleContext(
         {
           today: start.today,
@@ -1036,11 +1085,11 @@ ${result.content}`,
       messageId: result.messageId,
       reply: result.reply,
       tainted: result.tainted,
-      // Not from a handoff or another agent's message: its request was written
-      // by another model, not the person.
+      // Only a person's own request is learned from: a handoff or another
+      // agent's message was written by another model, and a routine or a
+      // scheduled task has nobody talking in it (M5.06–07).
       learn:
-        input.trigger !== "delegation" &&
-        input.trigger !== "event" &&
+        input.trigger === "message" &&
         result.status === "succeeded" &&
         result.stopReason === "final_answer" &&
         result.messageId !== null &&

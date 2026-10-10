@@ -15,7 +15,7 @@ import {
   type ToolCallStore,
 } from "@ofa/core";
 import type { BusPayload } from "@ofa/events";
-import { and, asc, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, notInArray, sql } from "drizzle-orm";
 import type { Database } from "./client";
 import { agent, agentGrant, message, run, runEvent, toolCall } from "./schema/index";
 import { withTenant } from "./tenant";
@@ -46,7 +46,7 @@ function announcer(options: RuntimeStoreOptions) {
 
 export function createRunStore(db: Database, options: RuntimeStoreOptions = {}): RunStore {
   const announce = announcer(options);
-  return {
+  const store: RunStore = {
     async get(ctx, runId) {
       const [row] = await withTenant(db, ctx, (tx) =>
         tx.select().from(run).where(eq(run.id, runId)).limit(1),
@@ -144,6 +144,65 @@ export function createRunStore(db: Database, options: RuntimeStoreOptions = {}):
       );
     },
 
+    async claimFollowUps(ctx, threadId) {
+      const steered = await withTenant(db, ctx, async (tx) => {
+        const [self] = await tx
+          .select({ createdAt: run.createdAt })
+          .from(run)
+          .where(eq(run.id, ctx.runId))
+          .limit(1);
+        if (!self) return [];
+        // The person's later messages here whose runs, for this agent, haven't
+        // started. Locked, so a run that is starting can't take one as well.
+        const rows = await tx
+          .select({ runId: run.id, messageId: message.id, content: message.content })
+          .from(run)
+          .innerJoin(message, and(eq(message.runId, run.id), eq(message.authorType, "user")))
+          .where(
+            and(
+              eq(run.threadId, threadId),
+              eq(run.agentId, ctx.agentId),
+              eq(run.trigger, "message"),
+              eq(run.status, "queued"),
+              gt(run.createdAt, self.createdAt),
+            ),
+          )
+          .orderBy(asc(message.createdAt), asc(message.id))
+          .limit(20)
+          .for("update", { of: run, skipLocked: true });
+        if (rows.length === 0) return [];
+        await tx
+          .update(run)
+          .set({
+            status: "cancelled",
+            endedAt: new Date(),
+            error: { code: "steered", message: `Answered by run ${ctx.runId}` },
+          })
+          .where(
+            inArray(
+              run.id,
+              rows.map((r) => r.runId),
+            ),
+          );
+        return rows;
+      });
+      for (const row of steered) {
+        await store.append(ctx, asId<RunId>(row.runId), [
+          {
+            key: "end-steered",
+            type: "run.ended",
+            payload: {
+              status: "cancelled",
+              stopReason: "steered",
+              usage: { inputTokens: 0, outputTokens: 0, costUsd: 0, modelCalls: 0, toolCalls: 0 },
+            },
+          },
+        ]);
+        await announce(ctx.workspaceId, [{ kind: "run.updated", runId: row.runId }]);
+      }
+      return steered.map((row) => ({ id: asId<MessageId>(row.messageId), content: row.content }));
+    },
+
     async activeChildren(ctx, runId) {
       const rows = await withTenant(db, ctx, (tx) =>
         tx
@@ -154,6 +213,7 @@ export function createRunStore(db: Database, options: RuntimeStoreOptions = {}):
       return rows.map((row) => asId<RunId>(row.id));
     },
   };
+  return store;
 }
 
 function toProfile(

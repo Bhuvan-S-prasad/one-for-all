@@ -6,10 +6,11 @@ import {
   type TenantContext,
   type ThreadId,
   type TokenRefresher,
+  type RoutineRunner,
 } from "@ofa/core";
 import { NonRetriableError, RetryAfterError } from "inngest";
 import { describe, expect, it } from "vitest";
-import { inngestSteps, refreshDue, TOKEN_REFRESH_AHEAD_MS } from "./functions";
+import { fireDueRoutines, inngestSteps, refreshDue, TOKEN_REFRESH_AHEAD_MS } from "./functions";
 
 // A stand-in for Inngest's `step.run`: runs the function, passes errors through.
 const step = { run: (_id: string, fn: () => Promise<unknown>) => fn() };
@@ -157,6 +158,55 @@ describe("token refresh (M4.06)", () => {
       "refresh-server-2-user-2",
       "refresh-server-3-user-3",
       "refresh-server-4-user-4",
+    ]);
+  });
+});
+
+describe("routine tick (M5.06)", () => {
+  it("fires each due routine in its own step and collects the runs to start", async () => {
+    const due = (n: number) => ({
+      workspaceId: `ws-${n}`,
+      userId: `user-${n}`,
+      routineId: `routine-${n}`,
+      dueAt: "2026-10-12T07:00:00.000Z",
+    });
+    const fired: string[] = [];
+    const routines: RoutineRunner = {
+      listDue: async () => [due(1), due(2), due(3)],
+      fire: async (ctx, routineId, dueAt) => {
+        fired.push(`${ctx.userId}:${routineId}:${dueAt.toISOString()}`);
+        if (routineId === "routine-2") return { outcome: "busy", run: null };
+        if (routineId === "routine-3") throw new Error("database blip");
+        return {
+          outcome: "started",
+          run: {
+            workspaceId: ctx.workspaceId,
+            userId: ctx.userId,
+            agentId: "agent-1",
+            threadId: "thread-1",
+            messageId: "msg-1",
+            runId: "run-1",
+            trigger: "routine",
+          },
+        };
+      },
+    };
+    const ids: string[] = [];
+    const steps = inngestSteps({ run: (id, fn) => (ids.push(id), fn()) });
+    const result = await fireDueRoutines(routines, steps);
+    expect(result.counts).toEqual({ started: 1, busy: 1, failed: 1 });
+    expect(result.started.map((r) => r.runId)).toEqual(["run-1"]);
+    expect(fired).toEqual([
+      "user-1:routine-1:2026-10-12T07:00:00.000Z",
+      "user-2:routine-2:2026-10-12T07:00:00.000Z",
+      "user-3:routine-3:2026-10-12T07:00:00.000Z",
+    ]);
+    // One step per due time: a retried tick finds each one memoized.
+    expect(ids).toEqual([
+      "list-due",
+      "fire-routine-1-2026-10-12T07:00:00.000Z",
+      "fire-routine-2-2026-10-12T07:00:00.000Z",
+      "fire-routine-3-2026-10-12T07:00:00.000Z",
     ]);
   });
 });

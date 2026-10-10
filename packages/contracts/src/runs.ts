@@ -7,7 +7,18 @@ import { idSchema, timestampSchema } from "./common";
 // happened (ADR-0014). The Activity view, traces, evals and audit all read
 // these events, so their shapes are fixed here.
 
-export const RUN_TRIGGERS = ["message", "routine", "delegation", "event", "manual"] as const;
+/**
+ * `routine`: on a routine's schedule; `manual`: a routine's test run (M5.06);
+ * `schedule`: a task an agent set for later (M5.07).
+ */
+export const RUN_TRIGGERS = [
+  "message",
+  "routine",
+  "delegation",
+  "event",
+  "manual",
+  "schedule",
+] as const;
 export const runTriggerSchema = z.enum(RUN_TRIGGERS);
 
 export const RUN_STATUSES = [
@@ -31,6 +42,10 @@ export const RUN_STOP_REASONS = [
   "loop_detected",
   "user_stopped",
   "error",
+  /** A person's follow-up was answered by the run already working in that chat (M5.05). */
+  "steered",
+  /** Background work set aside because a person wrote to the agent (M5.05). */
+  "preempted",
 ] as const;
 export const runStopReasonSchema = z.enum(RUN_STOP_REASONS);
 export type RunStopReason = z.infer<typeof runStopReasonSchema>;
@@ -115,6 +130,8 @@ const RUN_EVENT_PAYLOADS = {
   /** First untrusted read; the run stays tainted until it ends. */
   "run.tainted": z.object({ source: z.string().max(200) }),
   "run.compacted": z.object({ tokensBefore: count, tokensAfter: count }),
+  /** The person wrote again while the run worked; it read their messages at a step boundary (M5.05). */
+  "run.steered": z.object({ messageIds: z.array(idSchema).min(1).max(20), preview }),
   "run.ended": z.object({
     status: z.enum(["succeeded", "failed", "cancelled"]),
     stopReason: runStopReasonSchema,
@@ -218,6 +235,7 @@ export const runEventInputSchema = z.discriminatedUnion("type", [
   body("run.resumed"),
   body("run.tainted"),
   body("run.compacted"),
+  body("run.steered"),
   body("run.ended"),
   body("model.called"),
   body("model.failed"),

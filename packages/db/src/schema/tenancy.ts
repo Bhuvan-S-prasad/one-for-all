@@ -7,6 +7,8 @@ import { devicePlatform, membershipRole } from "./enums";
 export const workspace = pgTable("workspace", {
   id: id(),
   name: text("name").notNull(),
+  /** Where routines and reminders read clock times by default (M5.06). */
+  timeZone: text("time_zone").notNull().default("UTC"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });

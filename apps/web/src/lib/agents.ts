@@ -153,4 +153,16 @@ export const BUILTIN_TOOLS = [
     hint: "Pass a request to another agent in the chat. Its reply appears in the chat later. Lets a group's coordinator route messages.",
     starter: false,
   },
+  {
+    name: "schedule_task",
+    label: "Do tasks later",
+    hint: "Set itself a task for a later time, then wake up in the same chat to do it.",
+    starter: false,
+  },
+  {
+    name: "remind_me",
+    label: "Set reminders",
+    hint: "Post a reminder in the chat at the time you ask for.",
+    starter: true,
+  },
 ] as const;

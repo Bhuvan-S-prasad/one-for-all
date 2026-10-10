@@ -134,6 +134,48 @@ export const AGENT_MESSAGE: PromptTemplate<{ readonly from: string; readonly mes
     ].join("\n"),
 };
 
+/**
+ * A routine's request, as its run reads it (M5.06). Nobody is waiting in the
+ * chat; the reply is what the person finds there later.
+ */
+export const ROUTINE_RUN: PromptTemplate<{ readonly request: string }> = {
+  id: "harness.routine",
+  version: 1,
+  render: ({ request }) =>
+    [
+      "It is time for one of your routines, which the person set up to run on a schedule. Nobody is waiting in this chat: do the work with your own tools now, then reply with the result, written so the person can read it later on its own.",
+      "",
+      request,
+    ].join("\n"),
+};
+
+/**
+ * A task the agent set for itself earlier (M5.07), as the run that does it
+ * reads it.
+ */
+export const SCHEDULED_TASK: PromptTemplate<{ readonly request: string }> = {
+  id: "harness.scheduled_task",
+  version: 1,
+  render: ({ request }) =>
+    [
+      "Earlier in this conversation you scheduled this task for now. Do it with your own tools, then reply with the result for the person.",
+      "",
+      request,
+    ].join("\n"),
+};
+
+/** What the person wrote while the run worked, joined at a step boundary (M5.05). */
+export const STEERING: PromptTemplate<{ readonly text: string }> = {
+  id: "harness.steering",
+  version: 1,
+  render: ({ text }) =>
+    [
+      "While you were working, the person added this. Take it into account from here on; your reply should answer it too.",
+      "",
+      text,
+    ].join("\n"),
+};
+
 /** Turns older steps of a long run into a compact summary (M2.12). */
 export const COMPACTION: PromptTemplate<{
   readonly previous: string;

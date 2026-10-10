@@ -22,6 +22,7 @@ export const runTrigger = pgEnum("run_trigger", [
   "delegation",
   "event",
   "manual",
+  "schedule",
 ]);
 
 export const runStatus = pgEnum("run_status", [
@@ -44,3 +45,11 @@ export const toolCallStatus = pgEnum("tool_call_status", ["in_flight", "done", "
 export const memoryScope = pgEnum("memory_scope", MEMORY_SCOPES);
 
 export const memoryKind = pgEnum("memory_kind", MEMORY_KINDS);
+
+/** A routine runs on its schedule, or waits (M5.06). */
+export const routineStatus = pgEnum("routine_status", ["active", "paused"]);
+
+/** What an agent set for later (M5.07). */
+export const scheduleKind = pgEnum("schedule_kind", ["task", "reminder"]);
+
+export const scheduleStatus = pgEnum("schedule_status", ["pending", "done", "cancelled", "failed"]);

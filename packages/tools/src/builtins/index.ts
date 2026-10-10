@@ -1,8 +1,9 @@
-import type { MemoryStore, SandboxProvider, TeamDirectory } from "@ofa/core";
+import type { MemoryStore, SandboxProvider, Scheduler, TeamDirectory } from "@ofa/core";
 import type { ToolDefinition } from "../define";
 import { artifactsReadTool } from "./artifacts";
 import { browserTools, fileTools, shellTool, useSavedLoginTool } from "./computer";
 import { recallTool, rememberTool, todoTool } from "./memory";
+import { remindMeTool, scheduleTaskTool } from "./schedule";
 import { loadToolkitTool } from "./toolkits";
 import { delegateTaskTool, messageAgentTool } from "./team";
 import { readUrlTool, webSearchTool, type Fetcher, type WebSearchProvider } from "./web";
@@ -18,11 +19,13 @@ export interface BuiltinToolDeps {
    * without it, `delegate_task` and `message_agent` are never listed.
    */
   readonly team?: TeamDirectory | null;
+  /** Tasks and reminders for later (M5.07); without it, those tools are never listed. */
+  readonly scheduler?: Scheduler | null;
 }
 
 /**
  * The built-in tools (ARCHITECTURE.md §9.3): web and memory (M2), the
- * computer (M3), handing work to another agent (M5).
+ * computer (M3), working with other agents and on the clock (M5).
  */
 export function builtinTools(deps: BuiltinToolDeps): ToolDefinition<never>[] {
   return [
@@ -39,5 +42,7 @@ export function builtinTools(deps: BuiltinToolDeps): ToolDefinition<never>[] {
     loadToolkitTool(),
     delegateTaskTool(deps.team ?? null),
     messageAgentTool(deps.team ?? null),
+    scheduleTaskTool(deps.scheduler ?? null),
+    remindMeTool(deps.scheduler ?? null),
   ] as unknown as ToolDefinition<never>[];
 }

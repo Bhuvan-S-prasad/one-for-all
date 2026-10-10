@@ -117,7 +117,11 @@ function Chat({ agent }: { agent: Agent }) {
   // The run shown in the thread is this chat's latest; the agent may be busy
   // in another chat, which the header and a notice say.
   const latest = runs?.[0];
-  const threadRun = thread ? runs?.find((r) => r.threadId === thread.id) : undefined;
+  // A follow-up that the working run read (steering, M5.05) ends without a
+  // run of its own; the run that read it is the one to show.
+  const threadRun = thread
+    ? runs?.find((r) => r.threadId === thread.id && r.error?.code !== "steered")
+    : undefined;
   const { run: liveRun, events } = useRun(threadRun?.id);
   const run: Run | undefined = liveRun.data ?? threadRun;
   const active = !!run && ACTIVE.has(run.status);
@@ -860,7 +864,7 @@ function Composer(props: {
           disabled={props.disabled}
           placeholder={
             props.active
-              ? `Add to the conversation. ${props.agent.name} reads it when this run ends`
+              ? `Add to the conversation. ${props.agent.name} reads it at its next step`
               : `Message ${props.agent.name}`
           }
           className="max-h-[220px] min-h-10 flex-1 resize-none bg-transparent py-2 text-[15.5px] leading-relaxed outline-none placeholder:text-muted-foreground disabled:opacity-60"

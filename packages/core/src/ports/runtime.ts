@@ -130,6 +130,15 @@ export interface RunStore {
   append(ctx: TenantContext, runId: RunId, events: readonly RunEventWrite[]): Promise<void>;
   /** Runs this run handed work to that haven't ended, so Stop stops them too (M5.01). */
   activeChildren?(ctx: TenantContext, runId: RunId): Promise<RunId[]>;
+  /**
+   * Steering (M5.05): what the person wrote in this run's thread since it
+   * started, still waiting for this agent. Their queued runs end as
+   * `steered`, so the messages are answered once, by this run. Oldest first.
+   */
+  claimFollowUps?(
+    ctx: RunContext,
+    threadId: ThreadId,
+  ): Promise<{ readonly id: MessageId; readonly content: string }[]>;
 }
 
 // ── Agents and threads ───────────────────────────────────────────────────────

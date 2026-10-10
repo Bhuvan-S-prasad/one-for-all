@@ -1,7 +1,7 @@
 import { type TenantContext } from "@ofa/core";
 import { and, asc, desc, eq, inArray, isNull, lt, or, sql, type SQL } from "drizzle-orm";
 import type { Database } from "../client";
-import { message, run, thread, threadMember } from "../schema/index";
+import { message, routine, run, thread, threadMember } from "../schema/index";
 import { withTenant, type Tx } from "../tenant";
 import { likePattern } from "./runs";
 
@@ -48,11 +48,18 @@ export async function getThread(
   });
 }
 
-/** Direct threads between this person and one agent, not archived. */
-function directWith(ctx: TenantContext, agentId: string): SQL {
+/**
+ * Direct threads between this person and one agent, not archived. A
+ * routine's own chat (M5.06) is listed with them, but never becomes the
+ * person's current chat or a reused empty one (`chatsOnly`).
+ */
+function directWith(ctx: TenantContext, agentId: string, chatsOnly = false): SQL {
   return and(
     eq(thread.kind, "direct"),
     isNull(thread.archivedAt),
+    chatsOnly
+      ? sql`not exists (select 1 from ${routine} r where r.thread_id = ${thread}.id)`
+      : undefined,
     sql`exists (select 1 from ${threadMember} m where m.thread_id = ${thread}.id and m.agent_id = ${agentId})`,
     sql`exists (select 1 from ${threadMember} m where m.thread_id = ${thread}.id and m.user_id = ${ctx.userId})`,
   )!;
@@ -98,7 +105,7 @@ export async function directThread(
     const [existing] = await tx
       .select({ id: thread.id })
       .from(thread)
-      .where(directWith(ctx, agentId))
+      .where(directWith(ctx, agentId, true))
       .orderBy(desc(thread.updatedAt), desc(thread.createdAt))
       .limit(1);
     return withMembers(tx, existing?.id ?? (await insertDirectThread(tx, ctx, agentId)));
@@ -121,7 +128,7 @@ export async function newDirectThread(
       .from(thread)
       .where(
         and(
-          directWith(ctx, agentId),
+          directWith(ctx, agentId, true),
           sql`not exists (select 1 from ${message} m where m.thread_id = ${thread}.id)`,
         ),
       )
@@ -446,6 +453,31 @@ export async function startTurn(
     if (!messageRow) throw new Error("message insert returned no row");
     await tx.update(thread).set({ updatedAt: new Date() }).where(eq(thread.id, input.threadId));
     return { message: messageRow, run: runRow };
+  });
+}
+
+/**
+ * A person's message that starts no run: "stop" while agents work (M5.05).
+ */
+export async function postUserMessage(
+  db: Database,
+  ctx: TenantContext,
+  input: { threadId: string; content: string },
+): Promise<MessageRow> {
+  return withTenant(db, ctx, async (tx) => {
+    const [row] = await tx
+      .insert(message)
+      .values({
+        workspaceId: ctx.workspaceId,
+        threadId: input.threadId,
+        authorType: "user",
+        authorUserId: ctx.userId,
+        content: input.content,
+      })
+      .returning();
+    if (!row) throw new Error("message insert returned no row");
+    await tx.update(thread).set({ updatedAt: new Date() }).where(eq(thread.id, input.threadId));
+    return row;
   });
 }
 

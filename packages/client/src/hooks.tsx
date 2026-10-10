@@ -3,6 +3,7 @@ import type {
   Agent,
   CreateAgentInput,
   CreatePolicyRuleInput,
+  CreateRoutineRequest,
   CreateThreadRequest,
   FirstRunSetupRequest,
   LoginRequest,
@@ -13,6 +14,7 @@ import type {
   SendMessageResponse,
   Thread,
   UpdateAgentRequest,
+  UpdateRoutineRequest,
   UpdateThreadRequest,
 } from "@ofa/contracts";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -365,6 +367,107 @@ export function useForgetMemory() {
 }
 
 // ── Settings ─────────────────────────────────────────────────────────────────
+
+// ── Routines (M5.06) and things set for later (M5.07) ────────────────────────
+
+export function useRoutines(agentId?: string) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: queryKeys.routines(agentId),
+    queryFn: async () => (await api.listRoutines({ agentId })).items,
+  });
+}
+
+export function useCreateRoutine() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateRoutineRequest) => api.createRoutine(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.routineLists });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.threadLists });
+    },
+  });
+}
+
+/** Rename, reschedule, pause or resume. */
+export function useUpdateRoutine() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: UpdateRoutineRequest }) =>
+      api.updateRoutine(id, patch),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.routineLists }),
+  });
+}
+
+export function useDeleteRoutine() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.deleteRoutine(id),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.routineLists }),
+  });
+}
+
+/** A test run now; it shows in the routine's history and its chat. */
+export function useRunRoutine() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.runRoutine(id),
+    onSuccess: (run, id) => {
+      queryClient.setQueryData(queryKeys.run(run.id), run);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.routineRuns(id) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runLists });
+    },
+  });
+}
+
+/** A routine's latest runs, newest first. */
+export function useRoutineRuns(id: string | undefined) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: queryKeys.routineRuns(id ?? ""),
+    queryFn: async () => (await api.routineRuns(id!)).items,
+    enabled: !!id,
+  });
+}
+
+/** What agents set for later and is still waiting, soonest first. */
+export function useSchedules(agentId?: string) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: queryKeys.schedules(agentId),
+    queryFn: async () => (await api.listSchedules({ agentId, status: "pending" })).items,
+  });
+}
+
+export function useCancelSchedule() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.cancelSchedule(id),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.scheduleLists }),
+  });
+}
+
+export function useWorkspaceSettings() {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: queryKeys.workspaceSettings,
+    queryFn: () => api.workspaceSettings(),
+  });
+}
+
+export function useSetTimeZone() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (timeZone: string) => api.setTimeZone(timeZone),
+    onSuccess: (settings) => queryClient.setQueryData(queryKeys.workspaceSettings, settings),
+  });
+}
 
 // ── Approvals ────────────────────────────────────────────────────────────────
 

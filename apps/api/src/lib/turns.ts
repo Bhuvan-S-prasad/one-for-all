@@ -1,12 +1,26 @@
 import type { SendMessageResponse } from "@ofa/contracts";
 import { AppError, asId, NotFoundError, type RunId, type TenantContext } from "@ofa/core";
 import { workspaceEvent } from "@ofa/events";
-import { getAgent, listAgents, startTurn, type ThreadWithMembers } from "@ofa/db";
+import {
+  getAgent,
+  listActiveRuns,
+  listAgents,
+  postUserMessage,
+  startTurn,
+  type ThreadWithMembers,
+} from "@ofa/db";
 import type { Container } from "../container";
 import { toMessage, toRun } from "./mappers";
 import { pickResponder } from "./routing";
 
 export type TurnDeps = Pick<Container, "db" | "bus" | "dispatcher" | "runs" | "logger">;
+
+/** "stop", "stop now", "cancel" and the like, alone in a message (M5.05). */
+const STOP_COMMAND = /^\s*\/?(stop|stop now|stop it|stop that|cancel|halt|abort)[\s.!]*$/i;
+
+export function isStopCommand(content: string): boolean {
+  return STOP_COMMAND.test(content);
+}
 
 /**
  * The agent that answers a person's message: a direct thread's agent, or in
@@ -47,6 +61,26 @@ export async function startAgentTurn(
   thread: ThreadWithMembers,
   content: string,
 ): Promise<SendMessageResponse> {
+  // "Stop now" halts the work in this chat at once (§6.3, M5.05): every run
+  // here stops at its next step boundary, and no new one starts. Finished
+  // actions stay done. With nothing running, it is an ordinary message.
+  if (thread.kind !== "handoff" && isStopCommand(content)) {
+    const working = await listActiveRuns(deps.db, tenant, { threadId: thread.id });
+    if (working.length > 0) {
+      const message = await postUserMessage(deps.db, tenant, { threadId: thread.id, content });
+      await announce(deps, tenant, thread.id, message.id);
+      for (const run of working) {
+        await deps.dispatcher.cancelRun({
+          workspaceId: tenant.workspaceId,
+          userId: tenant.userId,
+          runId: run.id,
+          reason: "stopped",
+        });
+      }
+      return { message: toMessage(message), run: null };
+    }
+  }
+
   const agent = await responderFor(deps, tenant, thread, content);
   if (agent.status !== "active") {
     throw new AppError("conflict", `${agent.name} is ${agent.status}. Resume it to chat.`);
@@ -57,15 +91,7 @@ export async function startAgentTurn(
     agentId: agent.id,
     content,
   });
-  await deps.bus
-    .publish(
-      workspaceEvent(tenant.workspaceId, {
-        kind: "message.created",
-        threadId: thread.id,
-        messageId: turn.message.id,
-      }),
-    )
-    .catch(() => {});
+  await announce(deps, tenant, thread.id, turn.message.id);
 
   try {
     await deps.dispatcher.messageReceived({
@@ -94,5 +120,36 @@ export async function startAgentTurn(
     );
   }
 
+  // A person's message outranks background work (§6.3, M5.05): the agent's
+  // routine runs in other chats are set aside. In this chat, a run already
+  // going reads the message at its next step boundary instead (steering).
+  const background = await listActiveRuns(deps.db, tenant, {
+    agentId: agent.id,
+    triggers: ["routine"],
+  });
+  for (const run of background.filter((r) => r.threadId !== thread.id)) {
+    await deps.dispatcher
+      .cancelRun({
+        workspaceId: tenant.workspaceId,
+        userId: tenant.userId,
+        runId: run.id,
+        reason: "preempted",
+      })
+      .catch((error: unknown) =>
+        deps.logger.warn("could not set background work aside", { error, runId: run.id }),
+      );
+  }
+
   return { message: toMessage(turn.message), run: toRun(turn.run) };
+}
+
+async function announce(
+  deps: TurnDeps,
+  tenant: TenantContext,
+  threadId: string,
+  messageId: string,
+) {
+  await deps.bus
+    .publish(workspaceEvent(tenant.workspaceId, { kind: "message.created", threadId, messageId }))
+    .catch(() => {});
 }

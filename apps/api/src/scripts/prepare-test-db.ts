@@ -11,6 +11,7 @@ for (const name of [
   "oneforall_test_api_redaction",
   "oneforall_test_api_mcp",
   "oneforall_test_api_team",
+  "oneforall_test_api_clock",
 ]) {
   await prepareTestDatabase({
     name,

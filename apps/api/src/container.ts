@@ -15,6 +15,8 @@ import type {
   MemoryStore,
   RunStore,
   SandboxProvider,
+  ScheduleRunner,
+  Scheduler,
   TenantContext,
   ThreadStore,
   TokenRefresher,
@@ -30,7 +32,9 @@ import {
   createThreadStore,
   createToolCallStore,
   listConnectionsDueForRefresh,
+  listDueRoutines,
   type Database,
+  type DatabaseHandle,
 } from "@ofa/db";
 import { createPgEventBus, workspaceEvent } from "@ofa/events";
 import { createTelemetryMiddleware, type HarnessDeps } from "@ofa/harness";
@@ -79,6 +83,8 @@ import {
 import type { Inngest } from "inngest";
 import { createAuth, type Auth } from "./auth/auth";
 import { createLogger, type Logger } from "./lib/logger";
+import { createRoutineService, type RoutineService } from "./services/routines";
+import { createScheduler } from "./services/schedules";
 import { createSessionService, type SessionService } from "./services/sessions";
 import { createSetupService, type SetupService } from "./services/setup";
 import { createTeamDirectory } from "./services/team";
@@ -135,6 +141,10 @@ export interface Container {
   /** Connected apps as toolkits for agents (M4.05); null without the MCP client. */
   readonly toolkits: McpToolkits | null;
   readonly dispatcher: RunDispatcher;
+  /** Routines on the clock and their test runs (M5.06). */
+  readonly routines: RoutineService;
+  /** Tasks and reminders agents set for later (M5.07). */
+  readonly scheduler: Scheduler & ScheduleRunner;
   readonly inngest: Inngest;
   readonly functions: ReturnType<typeof createFunctions>;
   /** What the orchestrator runs agents with. */
@@ -254,6 +264,32 @@ function createTokenRefresher(config: Config, mcp: McpConnections, logger: Logge
   };
 }
 
+/**
+ * The owner connection for background work that spans workspaces (finding
+ * due routines), opened on first use and kept. Without a separate owner URL
+ * there is none, and that work waits.
+ */
+function createOwnerAccess(config: Config, logger: Logger) {
+  let handle: DatabaseHandle | null = null;
+  const warned = new Set<string>();
+  return {
+    async use<T>(what: string, fn: (ownerDb: Database) => Promise<T>, fallback: T): Promise<T> {
+      if (config.database.migrationUrl === config.database.url) {
+        if (!warned.has(what)) {
+          logger.warn(`${what} needs DATABASE_MIGRATION_URL (the owner connection)`);
+          warned.add(what);
+        }
+        return fallback;
+      }
+      handle ??= createDatabase(config.database.migrationUrl, { max: 1 });
+      return fn(handle.db);
+    },
+    async close() {
+      await handle?.close();
+    },
+  };
+}
+
 export function createContainer(config: Config, overrides: ContainerOverrides = {}): Container {
   // Every secret this process holds, so logs and traces never carry one
   // (hard rule 4): the server's own from config, and what the vault decrypts.
@@ -318,12 +354,23 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
   const sandbox = config.sandbox ? createDockerSandbox(config.sandbox) : null;
   const artifacts = createArtifactStore(db);
   const approvals = createApprovalStore(db);
+  const announceMessage = (workspaceId: string, threadId: string, messageId: string) =>
+    publish(workspaceId, { kind: "message.created", threadId, messageId });
   // The other agents a run can hand work to (M5.01) or message (M5.03). A
   // message wakes its agent through the dispatcher, made with Inngest below.
   const team = createTeamDirectory(db, {
     wake: (event) => dispatcher.messageReceived(event),
-    announce: (workspaceId, threadId, messageId) =>
-      publish(workspaceId, { kind: "message.created", threadId, messageId }),
+    announce: announceMessage,
+  });
+  // Work on the clock (M5.06–07): routines, and what agents set for later.
+  const scheduler = createScheduler(db, {
+    wake: (event) => dispatcher.scheduleCreated(event),
+    announce: announceMessage,
+  });
+  const owner = createOwnerAccess(config, logger);
+  const routines = createRoutineService(db, {
+    listDue: (now) => owner.use("routines", (ownerDb) => listDueRoutines(ownerDb, now), []),
+    announce: announceMessage,
   });
   const connections = createConnectionStore(db);
   // Apps through MCP (ADR-0011): sign-ins are sealed by the vault, so no vault, no connections.
@@ -356,6 +403,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
           : null,
         sandbox,
         team,
+        scheduler,
       }).concat(overrides.extraTools ?? []),
     ),
     policy: createPolicyEngine({ agents, rules: createPolicyRuleStore(db) }),
@@ -403,6 +451,8 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     runs,
     approvals,
     ...(tokenRefresh ? { tokenRefresh } : {}),
+    routines,
+    schedules: scheduler,
   });
 
   return {
@@ -427,6 +477,8 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     mcp,
     toolkits,
     dispatcher,
+    routines,
+    scheduler,
     inngest,
     functions,
     harness,
@@ -435,6 +487,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     async close() {
       await (bus as { close?(): Promise<void> }).close?.();
       await telemetry.shutdown().catch(() => {});
+      await owner.close();
       await database.close();
     },
   };

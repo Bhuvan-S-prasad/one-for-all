@@ -4,14 +4,18 @@ import {
   messageReceivedEventSchema,
   runCancelledEventSchema,
   runSucceededEventSchema,
+  scheduleCreatedEventSchema,
 } from "@ofa/contracts";
 import {
   asId,
   type ApprovalStore,
   type ChildRunRequest,
   type ChildRunResult,
+  type RoutineRunner,
   type RunContext,
+  type RunStart,
   type RunStore,
+  type ScheduleRunner,
   type StepRunner,
   type TenantContext,
   type ThreadId,
@@ -31,6 +35,22 @@ export interface OrchestratorDeps {
   readonly approvals?: ApprovalStore;
   /** Keeps idle app sign-ins working (M4.06); absent without the MCP client. */
   readonly tokenRefresh?: TokenRefresher;
+  /** Starts routines when they are due (M5.06). */
+  readonly routines?: RoutineRunner;
+  /** Fires tasks and reminders agents set for later (M5.07). */
+  readonly schedules?: ScheduleRunner;
+}
+
+/** How often due routines are looked for: every minute. */
+export const ROUTINE_TICK_CRON = "* * * * *";
+
+/** A run started on the clock, as the event that starts it. */
+function startEvent(run: RunStart) {
+  return {
+    name: INNGEST_EVENTS.messageReceived,
+    id: `message-received-${run.runId}`,
+    data: messageReceivedEventSchema.parse(run),
+  };
 }
 
 /** How often sign-ins are checked, and how far ahead of expiry they are refreshed. */
@@ -154,6 +174,9 @@ export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
       triggers: [{ event: INNGEST_EVENTS.messageReceived }],
       // One run at a time per agent; more messages wait their turn.
       concurrency: [{ key: "event.data.agentId", limit: 1 }],
+      // A person's message outranks queued background work (§6.3, M5.05):
+      // it starts up to ten minutes ahead of routines and scheduled tasks.
+      priority: { run: "event.data.trigger == 'message' ? 600 : 0" },
       // Stop pressed: cancel at the next step boundary. Finished steps stay done.
       cancelOn: [
         { event: INNGEST_EVENTS.runCancelled, if: "async.data.runId == event.data.runId" },
@@ -302,6 +325,7 @@ export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
           })),
         );
       }
+      const preempted = data.reason === "preempted";
       await step.run("mark-cancelled", async () => {
         const run = await deps.runs.get(ctx, asId(data.runId));
         if (!run || ["succeeded", "failed", "cancelled"].includes(run.status)) return false;
@@ -314,10 +338,18 @@ export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
         await deps.runs.append(ctx, run.id, [
           runEvent("end-cancelled", "run.ended", {
             status: "cancelled",
-            stopReason: "user_stopped",
+            stopReason: preempted ? "preempted" : "user_stopped",
             usage: run.usage,
           }),
         ]);
+        // Set aside for a person (M5.05): its chat says so, rather than the
+        // run ending without a word.
+        if (preempted && run.threadId) {
+          await deps.harness.threads.addAgentMessage(
+            { ...ctx, agentId: run.agentId, runId: run.id },
+            { threadId: run.threadId, content: PREEMPTED_NOTE },
+          );
+        }
         return true;
       });
     },
@@ -325,7 +357,95 @@ export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
 
   const functions: InngestFunction.Any[] = [agentRun, agentRunCancelled, agentLearn];
   if (deps.tokenRefresh) functions.push(tokenRefreshFunction(inngest, deps.tokenRefresh));
+  if (deps.routines) functions.push(routineTickFunction(inngest, deps.routines));
+  if (deps.schedules) functions.push(scheduleFireFunction(inngest, deps.schedules));
   return functions;
+}
+
+const PREEMPTED_NOTE =
+  "I set this aside to answer your message. Anything I had already done stays done; it runs again at its next time.";
+
+/**
+ * Routines on their schedules (M5.06). Every minute: find due routines and
+ * fire each in its own step, as its owner. A routine moves on to its next
+ * time as it fires, so a tick that runs twice starts nothing twice.
+ */
+function routineTickFunction(inngest: Inngest.Any, routines: RoutineRunner) {
+  return inngest.createFunction(
+    {
+      id: "routine-tick",
+      name: "Start due routines",
+      triggers: [{ cron: ROUTINE_TICK_CRON }],
+      concurrency: [{ limit: 1 }],
+      retries: 1,
+    },
+    async ({ step }) => {
+      const result = await fireDueRoutines(routines, inngestSteps(step));
+      if (result.started.length > 0) {
+        await step.sendEvent("start-runs", result.started.map(startEvent));
+      }
+      return result.counts;
+    },
+  );
+}
+
+/** One routine tick: what each due routine came to, and the runs to start. */
+export async function fireDueRoutines(
+  routines: RoutineRunner,
+  steps: StepRunner,
+): Promise<{ started: RunStart[]; counts: Record<string, number> }> {
+  const due = await steps.run("list-due", async () => routines.listDue(new Date()));
+  const started: RunStart[] = [];
+  const counts: Record<string, number> = {};
+  for (const r of due) {
+    const fired = await steps.run(`fire-${r.routineId}-${r.dueAt}`, async () => {
+      const ctx: TenantContext = { workspaceId: asId(r.workspaceId), userId: asId(r.userId) };
+      try {
+        return await routines.fire(ctx, r.routineId, new Date(r.dueAt), new Date());
+      } catch {
+        // Tried again at the next tick: the routine is still due.
+        return { outcome: "failed" as const, run: null };
+      }
+    });
+    counts[fired.outcome] = (counts[fired.outcome] ?? 0) + 1;
+    if (fired.run) started.push(fired.run);
+  }
+  return { started, counts };
+}
+
+/**
+ * A task or reminder an agent set for later (M5.07): sleep until it is due,
+ * holding no process, then fire it. Cancelling it ends the sleep; the row is
+ * checked when it fires too, so a cancel that raced the wake-up still holds.
+ */
+function scheduleFireFunction(inngest: Inngest.Any, schedules: ScheduleRunner) {
+  return inngest.createFunction(
+    {
+      id: "schedule-fire",
+      name: "Fire a scheduled task or reminder",
+      triggers: [{ event: INNGEST_EVENTS.scheduleCreated }],
+      cancelOn: [
+        {
+          event: INNGEST_EVENTS.scheduleCancelled,
+          if: "async.data.scheduleId == event.data.scheduleId",
+        },
+      ],
+      retries: 3,
+    },
+    async ({ event, step }) => {
+      const data = scheduleCreatedEventSchema.parse(event.data);
+      await step.sleepUntil("wait", new Date(data.dueAt));
+      const fired = await step.run("fire", async () => {
+        const ctx: TenantContext = {
+          workspaceId: asId(data.workspaceId),
+          userId: asId(data.userId),
+        };
+        return schedules.fire(ctx, data.scheduleId, new Date());
+      });
+      if (fired.run) await step.sendEvent("start-run", startEvent(fired.run));
+      return fired.outcome;
+    },
+  );
 }
 
 /**

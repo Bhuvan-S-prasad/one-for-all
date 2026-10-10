@@ -119,6 +119,8 @@ describe.skipIf(!hasDb)("secret redaction (integration)", async () => {
     messageReceived: async (event) => void started.push(event),
     cancelRun: async () => {},
     approvalDecided: async () => {},
+    scheduleCreated: async () => {},
+    scheduleCancelled: async () => {},
   };
   const container = createContainer(config, {
     logWrite: (line) => void lines.push(line),

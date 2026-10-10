@@ -5,8 +5,10 @@ import {
   type AgentSpec,
   type MemoryItem,
   type Message,
+  type Routine,
   type Run,
   type RunEvent,
+  type Schedule,
   type Thread,
   type ThreadSummary,
 } from "@ofa/contracts";
@@ -14,8 +16,10 @@ import type {
   AgentWithGrants,
   MemoryReviewRow,
   MessageRow,
+  RoutineRow,
   RunEventRow,
   RunRow,
+  ScheduleRow,
   ThreadSummaryRow,
   ThreadWithMembers,
 } from "@ofa/db";
@@ -128,6 +132,41 @@ export function toMemoryItem(row: MemoryReviewRow): MemoryItem {
     content: row.content,
     verified: row.verified,
     sourceRunId: row.sourceRunId,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+export function toRoutine(row: RoutineRow): Routine {
+  return {
+    id: row.id,
+    agentId: row.agentId,
+    threadId: row.threadId,
+    name: row.name,
+    instructions: row.instructions,
+    cron: row.cron,
+    timeZone: row.timeZone,
+    status: row.status,
+    pausedReason:
+      row.pausedReason === "person" || row.pausedReason === "inactive" ? row.pausedReason : null,
+    nextRunAt: row.nextRunAt?.toISOString() ?? null,
+    lastRunAt: row.lastRunAt?.toISOString() ?? null,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+export function toSchedule(row: ScheduleRow): Schedule {
+  return {
+    id: row.id,
+    agentId: row.agentId,
+    threadId: row.threadId,
+    kind: row.kind,
+    content: row.content,
+    dueAt: row.dueAt.toISOString(),
+    status: row.status,
+    runId: row.runId,
+    firedRunId: row.firedRunId,
+    firedAt: row.firedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
   };
 }

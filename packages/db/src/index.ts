@@ -32,6 +32,7 @@ export {
   createGroupThread,
   listGroupThreads,
   postAgentMessage,
+  postUserMessage,
   startHandoff,
   startTurn,
   updateThread,
@@ -46,6 +47,7 @@ export {
   agentRunStats,
   getRun,
   getRunEvent,
+  listActiveRuns,
   listRunEvents,
   listRuns,
   modelCallsSince,
@@ -99,10 +101,35 @@ export {
 export {
   getWorkspace,
   listMembershipsForUser,
+  setWorkspaceTimeZone,
   type MembershipRole,
   type WorkspaceMembership,
   type WorkspaceRecord,
 } from "./repos/workspaces";
+export {
+  createRoutine,
+  deleteRoutine,
+  fireDueRoutine,
+  getRoutine,
+  listDueRoutines,
+  listRoutineRuns,
+  listRoutines,
+  nextRoutineTime,
+  startRoutineTestRun,
+  updateRoutine,
+  type DueRoutineRow,
+  type FireRoutineResult,
+  type RoutineRow,
+} from "./repos/routines";
+export {
+  cancelSchedule,
+  createSchedule,
+  fireSchedule,
+  getSchedule,
+  listSchedules,
+  type FireScheduleResult,
+  type ScheduleRow,
+} from "./repos/schedules";
 export {
   createAgentDirectory,
   createRunStore,

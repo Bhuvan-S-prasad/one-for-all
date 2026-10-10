@@ -1,4 +1,18 @@
 import {
+  routineListSchema,
+  routineRunsSchema,
+  routineSchema,
+  scheduleListSchema,
+  scheduleSchema,
+  workspaceSettingsSchema,
+  type CreateRoutineRequest,
+  type Routine,
+  type RoutineList,
+  type RoutineRuns,
+  type Schedule,
+  type ScheduleList,
+  type UpdateRoutineRequest,
+  type WorkspaceSettings,
   agentListResponseSchema,
   agentSchema,
   agentStatsListSchema,
@@ -308,6 +322,31 @@ export function createApiClient(options: ApiClientOptions = {}) {
     /** Ask again: the run's message, in the same chat, as a new run (UX.12). */
     retryRun: (id: string): Promise<SendMessageResponse> =>
       request("POST", `/api/runs/${encodeURIComponent(id)}/retry`, sendMessageResponseSchema),
+
+    // ── Routines (M5.06) and things set for later (M5.07) ─────────────────
+    listRoutines: (filter: { agentId?: string } = {}): Promise<RoutineList> =>
+      request("GET", `/api/routines${query({ ...filter })}`, routineListSchema),
+    createRoutine: (input: CreateRoutineRequest): Promise<Routine> =>
+      request("POST", "/api/routines", routineSchema, input),
+    updateRoutine: (id: string, patch: UpdateRoutineRequest): Promise<Routine> =>
+      request("PATCH", `/api/routines/${encodeURIComponent(id)}`, routineSchema, patch),
+    deleteRoutine: (id: string): Promise<void> =>
+      request("DELETE", `/api/routines/${encodeURIComponent(id)}`, null),
+    /** A test run now, outside the schedule. */
+    runRoutine: (id: string): Promise<Run> =>
+      request("POST", `/api/routines/${encodeURIComponent(id)}/run`, runSchema),
+    routineRuns: (id: string): Promise<RoutineRuns> =>
+      request("GET", `/api/routines/${encodeURIComponent(id)}/runs`, routineRunsSchema),
+    listSchedules: (
+      filter: { agentId?: string; status?: Schedule["status"] } = {},
+    ): Promise<ScheduleList> =>
+      request("GET", `/api/schedules${query({ ...filter })}`, scheduleListSchema),
+    cancelSchedule: (id: string): Promise<Schedule> =>
+      request("DELETE", `/api/schedules/${encodeURIComponent(id)}`, scheduleSchema),
+    workspaceSettings: (): Promise<WorkspaceSettings> =>
+      request("GET", "/api/settings/workspace", workspaceSettingsSchema),
+    setTimeZone: (timeZone: string): Promise<WorkspaceSettings> =>
+      request("PUT", "/api/settings/workspace", workspaceSettingsSchema, { timeZone }),
 
     // ── Approvals ──────────────────────────────────────────────────────────
     /** Waiting for an answer, newest first. */

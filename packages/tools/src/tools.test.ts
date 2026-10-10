@@ -6,6 +6,7 @@ import {
   type MemoryStore,
   type PolicyEngine,
   type RunContext,
+  type Scheduler,
   type TeamDirectory,
   type ToolCallRecord,
   type ToolCallStore,
@@ -23,6 +24,8 @@ import {
   delegateTaskTool,
   editableTextFields,
   messageAgentTool,
+  remindMeTool,
+  scheduleTaskTool,
   htmlToText,
   isPrivateAddress,
   LOAD_ALL_LIMIT,
@@ -390,6 +393,108 @@ describe("message_agent (M5.03)", () => {
         content: "Please check the pgvector release notes.",
       },
     ]);
+  });
+});
+
+describe("schedule_task and remind_me (M5.07)", () => {
+  function setup() {
+    const set: unknown[] = [];
+    const scheduler: Scheduler = {
+      timeZone: async () => "Europe/Paris",
+      schedule: async (_ctx, input) => {
+        set.push(input);
+        return { id: "s1", kind: input.kind, content: input.content, dueAt: input.dueAt };
+      },
+    };
+    const agent = agentWith([
+      { tool: "schedule_task", mode: "auto" },
+      { tool: "remind_me", mode: "auto" },
+    ]);
+    const agents = { get: async () => agent };
+    const run = createToolExecutor({
+      registry: createToolRegistry([
+        scheduleTaskTool(scheduler),
+        remindMeTool(scheduler),
+      ] as unknown as ToolDefinition<never>[]),
+      policy: createPolicyEngine({ agents }),
+      calls: memoryCalls(),
+      agents,
+    });
+    return { run, set };
+  }
+
+  it("tells the model the time now, in the person's zone", async () => {
+    const { run } = setup();
+    const tools = await run.listTools(ctx);
+    expect(tools.map((t) => t.name).sort()).toEqual(["remind_me", "schedule_task"]);
+    expect(tools[0]?.description).toMatch(
+      /It is now \d{4}-\d{2}-\d{2} \d{2}:\d{2} in the person's time zone \(Europe\/Paris\)/,
+    );
+  });
+
+  it("sets a reminder at a clock time read in the workspace zone, with the call's key", async () => {
+    const { run, set } = setup();
+    const year = new Date().getUTCFullYear() + 1;
+    const outcome = await run.execute(
+      request("remind_me", { at: `${year}-01-15 09:30`, message: "Call the dentist" }),
+      ctx,
+    );
+    expect(outcome).toMatchObject({
+      status: "ok",
+      content: `Reminder set for ${year}-01-15 09:30 (Europe/Paris). It will be posted in this conversation then.`,
+    });
+    expect(set).toEqual([
+      {
+        key: "r:tool-0-0",
+        kind: "reminder",
+        content: "Call the dentist",
+        dueAt: new Date(`${year}-01-15T08:30:00Z`),
+      },
+    ]);
+  });
+
+  it("schedules a task some minutes from now", async () => {
+    const { run, set } = setup();
+    const before = Date.now();
+    const outcome = await run.execute(
+      request("schedule_task", { in_minutes: 90, task: "Check whether the pricing page changed." }),
+      ctx,
+    );
+    expect(outcome).toMatchObject({ status: "ok", content: expect.stringContaining("woken") });
+    const due = (set[0] as { dueAt: Date }).dueAt.getTime();
+    expect(due - before).toBeGreaterThanOrEqual(90 * 60_000);
+    expect(due - before).toBeLessThan(91 * 60_000);
+  });
+
+  it("refuses a time that has passed, can't be read, or is given twice", async () => {
+    const { run, set } = setup();
+    const call = (args: unknown) => run.execute(request("remind_me", args), ctx);
+    expect(await call({ at: "2020-01-01 09:00", message: "Too late" })).toMatchObject({
+      status: "error",
+      code: "bad_time",
+      message: expect.stringContaining("That time has passed"),
+    });
+    expect(await call({ at: "next friday", message: "Unclear" })).toMatchObject({
+      status: "error",
+      code: "bad_time",
+    });
+    expect(await call({ at: "2099-01-01 09:00", in_minutes: 5, message: "Both" })).toMatchObject({
+      status: "error",
+      code: "bad_time",
+    });
+    expect(set).toEqual([]);
+  });
+
+  it("isn't listed without a scheduler", async () => {
+    const agent = agentWith([{ tool: "remind_me", mode: "auto" }]);
+    const agents = { get: async () => agent };
+    const run = createToolExecutor({
+      registry: createToolRegistry([remindMeTool(null)] as unknown as ToolDefinition<never>[]),
+      policy: createPolicyEngine({ agents }),
+      calls: memoryCalls(),
+      agents,
+    });
+    expect(await run.listTools(ctx)).toEqual([]);
   });
 });
 

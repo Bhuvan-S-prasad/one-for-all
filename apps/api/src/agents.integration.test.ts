@@ -76,6 +76,8 @@ describe.skipIf(!hasDb)("M2 API (integration)", async () => {
     messageReceived: async (event) => void started.push(event),
     cancelRun: async (event) => void cancelled.push(event),
     approvalDecided: async (event) => void decided.push(event),
+    scheduleCreated: async () => {},
+    scheduleCancelled: async () => {},
   };
   const bus = createMemoryEventBus();
   const container = createContainer(config, {

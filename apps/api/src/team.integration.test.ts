@@ -103,6 +103,8 @@ describe.skipIf(!hasDb)("handing work to other agents (integration)", async () =
     messageReceived: async (event) => void started.push(event),
     cancelRun: async () => {},
     approvalDecided: async () => {},
+    scheduleCreated: async () => {},
+    scheduleCancelled: async () => {},
   };
   const container = createContainer(config, {
     logger: createLogger({ level: "fatal", format: "json", write: () => {} }),

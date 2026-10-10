@@ -42,6 +42,18 @@ const TOOL_DONE: Record<string, string> = {
   "todo.write": "Made a plan",
   delegate_task: "Handed work to another agent",
   message_agent: "Messaged another agent",
+  schedule_task: "Scheduled a task for later",
+  remind_me: "Set a reminder",
+};
+
+/** How a run was started, as Activity says it. */
+const TRIGGERS: Record<string, string> = {
+  message: "from chat",
+  routine: "on a routine's schedule",
+  manual: "a routine's test run",
+  schedule: "a task it set for now",
+  delegation: "handed over by another agent",
+  event: "woken by another agent",
 };
 
 export function timeline(events: readonly RunEvent[]): Timeline {
@@ -90,7 +102,7 @@ export function timeline(events: readonly RunEvent[]): Timeline {
         items.push({
           id: e.id,
           title: "Started",
-          detail: `${e.payload.trigger === "message" ? "from chat" : e.payload.trigger} · ${e.payload.tier} tier`,
+          detail: `${TRIGGERS[e.payload.trigger] ?? e.payload.trigger} · ${e.payload.tier} tier`,
           state: "info",
           at: e.createdAt,
         });
@@ -223,6 +235,16 @@ export function timeline(events: readonly RunEvent[]): Timeline {
           title: "A model didn't answer",
           detail: `${e.payload.model}: ${e.payload.message}`,
           state: "warn",
+          at: e.createdAt,
+        });
+        break;
+      case "run.steered":
+        closeReads();
+        items.push({
+          id: e.id,
+          title: "Read what you added",
+          detail: e.payload.preview,
+          state: "info",
           at: e.createdAt,
         });
         break;
