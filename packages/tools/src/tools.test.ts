@@ -279,7 +279,10 @@ describe("tool executor", () => {
 });
 
 describe("delegate_task (M5.01)", () => {
-  function withTeam(members: Awaited<ReturnType<TeamDirectory["members"]>>, mode: "auto" | "approve") {
+  function withTeam(
+    members: Awaited<ReturnType<TeamDirectory["members"]>>,
+    mode: "auto" | "approve",
+  ) {
     const team: TeamDirectory = {
       members: async () => members,
       handoff: async () => {
@@ -295,13 +298,20 @@ describe("delegate_task (M5.01)", () => {
       agents,
     });
   }
-  const researcher = { id: asId<AgentId>("res"), slug: "researcher", name: "Researcher", job: "Research" };
+  const researcher = {
+    id: asId<AgentId>("res"),
+    slug: "researcher",
+    name: "Researcher",
+    job: "Research",
+  };
   const brief = { agent: "Researcher", brief: "Find the release date of pgvector 0.9." };
 
   it("names the agents a run can hand work to, and is left out when there are none", async () => {
     const [tool] = await withTeam([researcher], "auto").listTools(ctx);
     expect(tool?.name).toBe("delegate_task");
-    expect(tool?.description).toContain("Agents you can hand work to:\n- researcher: Researcher, Research");
+    expect(tool?.description).toContain(
+      "Agents you can hand work to:\n- researcher: Researcher, Research",
+    );
     // A run that was itself handed work gets no members: one level deep.
     expect(await withTeam([], "auto").listTools(ctx)).toEqual([]);
   });
