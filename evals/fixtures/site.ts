@@ -193,6 +193,7 @@ export function fixtureComputer(browser: AgentBrowser): SandboxProvider {
     browser: async () => browser,
     shareLogin: none,
     screen: none,
+    desktop: none,
     takeover: none,
     restart: none,
     health: async () => ({ ok: true }),

@@ -109,6 +109,20 @@ export interface ScreenSession {
   close(): void;
 }
 
+/**
+ * A person's live view of an agent's whole desktop (ADR-0040): the VNC (RFB)
+ * byte stream, both ways, for a VNC client to draw. A watcher's input is
+ * ignored by the computer itself; only a viewer with control can act.
+ * Nothing is recorded.
+ */
+export interface DesktopStream {
+  onData(listener: (chunk: Uint8Array<ArrayBuffer>) => void): void;
+  /** Called once when the view closes, from either side. */
+  onEnd(listener: (reason: string) => void): void;
+  send(chunk: Uint8Array): void;
+  close(): void;
+}
+
 export interface SandboxHandle {
   readonly id: string;
   exec(
@@ -129,8 +143,14 @@ export interface SandboxHandle {
   /** Watch an agent's browser, starting it if needed (a person's view, M3.07). */
   screen(agentId: AgentId): Promise<ScreenSession>;
   /**
-   * Hand the agent's browser to a person, or back (M3.07). While a person has
-   * it, the agent's browser tools are refused and say why.
+   * Watch an agent's desktop, starting it if needed (ADR-0040). `control`
+   * sends the viewer's mouse and keyboard too, and needs a takeover first.
+   */
+  desktop(agentId: AgentId, options: { control: boolean }): Promise<DesktopStream>;
+  /**
+   * Hand the agent's computer to a person, or back (M3.07, ADR-0040). While a
+   * person has it, the agent's browser, commands and file writes are refused
+   * and say why.
    */
   takeover(agentId: AgentId, on: boolean): Promise<void>;
   /** Stop what an agent is running (its browser and commands), or everyone's. */

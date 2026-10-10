@@ -18,9 +18,12 @@
 //   POST /files/list  {agent, path}
 //   POST /browser {agent}              start the agent's desktop and browser; {path} of its CDP endpoint
 //   POST /restart {agent?}             stop an agent's processes (or every agent's)
-//   POST /takeover {agent, on}         a person has the agent's browser (M3.07): the
-//                                      agent's own requests for it are refused meanwhile
+//   POST /takeover {agent, on}         a person has the agent's computer (M3.07, ADR-0040):
+//                                      the agent's browser, commands and file writes are
+//                                      refused meanwhile
 //   GET  /cdp/<agent>/devtools/...     WebSocket proxy to that agent's browser
+//   GET  /desktop/<agent>[?control=1]  upgrade to the raw VNC stream of the agent's
+//                                      desktop (ADR-0040); control needs a takeover
 //
 // No dependencies: Node built-ins only. The token never reaches agent
 // processes; their environment is built from scratch.
@@ -309,7 +312,15 @@ async function startDesktop(user) {
     ["Xvfb", user.display, "-screen", "0", SCREEN, "-nolisten", "tcp", "-auth", auth],
     { stdio: "ignore" },
   );
-  const entry = { user, xvfb, session: [], chrome: null, wsPath: null, timer: undefined };
+  const entry = {
+    user,
+    xvfb,
+    session: [],
+    viewers: new Set(),
+    chrome: null,
+    wsPath: null,
+    timer: undefined,
+  };
   xvfb.on("exit", () => {
     if (desktops.get(user.agentId) === entry) stopDesktop(user.agentId, "display closed");
   });
@@ -476,9 +487,145 @@ function stopDesktop(agentId, reason) {
   desktops.delete(agentId);
   clearTimeout(entry.timer);
   if (entry.chrome) killGroup(entry.chrome.pid);
-  for (const child of entry.session) killGroup(child.pid);
+  for (const child of [...entry.viewers, ...entry.session]) killGroup(child.pid);
   killGroup(entry.xvfb.pid);
   log("desktop stopped", { agent: agentId, reason });
+}
+
+// ── Watching the desktop ────────────────────────────────────────────────────
+//
+// A person's view of an agent's desktop (ADR-0040): one x11vnc per viewer,
+// run as the agent, listening on a socket in /run/ofa-vnc/<uid>, which only
+// that agent and this service can enter. Never a TCP port: agents share the
+// network, so any of them could reach it. View-only unless the viewer has
+// control, which needs the computer taken over.
+
+const VNC_DIR = "/run/ofa-vnc";
+
+async function vncDir(user) {
+  const dir = `${VNC_DIR}/${user.uid}`;
+  await mkdir(VNC_DIR, { recursive: true, mode: 0o755 });
+  await mkdir(dir, { recursive: true });
+  if ((await stat(dir)).uid !== user.uid) {
+    // Group root and setgid: the sockets the agent makes here stay reachable
+    // by this service, and no other agent can enter.
+    await chmod(dir, 0o2770);
+    await chown(dir, user.uid, 0);
+  }
+  return dir;
+}
+
+/** Start a viewer's x11vnc on the agent's desktop and connect to it. */
+async function openViewer(agentId, control) {
+  const entry = await desktopFor(agentId);
+  const { user } = entry;
+  const sock = `${await vncDir(user)}/${randomUUID()}.sock`;
+  const args = [
+    "-display",
+    user.display,
+    "-unixsock",
+    sock,
+    // No TCP at all: both settings are needed, or it listens on [::]:5900.
+    "-rfbport",
+    "0",
+    "-rfbportv6",
+    "-1",
+    "-noipv6",
+    // One viewer, then exit; give up if nobody connects.
+    "-once",
+    "-timeout",
+    "20",
+    "-nopw",
+    "-quiet",
+    "-nossl",
+    "-nolookup",
+    "-norc",
+    "-nocmds",
+    "-nobell",
+    // A watcher sends no input and gets no clipboard.
+    ...(control ? [] : ["-viewonly", "-nosel"]),
+  ];
+  const vnc = spawnAs(user, ["bash", "-c", 'umask 007 && exec x11vnc "$@"', "x11vnc", ...args], {
+    stdio: "ignore",
+  });
+  entry.viewers.add(vnc);
+  vnc.on("exit", () => {
+    entry.viewers.delete(vnc);
+    void rm(sock, { force: true }).catch(() => {});
+  });
+
+  for (let i = 0; i < 40 && vnc.exitCode === null; i += 1) {
+    if (
+      await stat(sock).then(
+        () => true,
+        () => false,
+      )
+    )
+      break;
+    await new Promise((r) => setTimeout(r, 125));
+  }
+  const upstream = await new Promise((resolve, reject) => {
+    const connection = net.connect(sock);
+    connection.once("connect", () => resolve(connection));
+    connection.once("error", reject);
+  }).catch(() => {
+    killGroup(vnc.pid);
+    throw httpError(503, "The desktop view did not start");
+  });
+  return { entry, vnc, upstream };
+}
+
+/** `/desktop/<agent>[?control=1]`: the viewer's raw VNC stream, after a 101. */
+async function upgradeDesktop(req, socket, head, url) {
+  const refuse = (status, message) => {
+    const body = JSON.stringify({ error: message });
+    socket.end(
+      `HTTP/1.1 ${status} ${http.STATUS_CODES[status]}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\nconnection: close\r\n\r\n${body}`,
+    );
+  };
+  if (!authorized(req, url)) return refuse(401, "Unauthorized");
+  const match = /^\/desktop\/([A-Za-z0-9-]{1,64})$/.exec(url.pathname);
+  if (!match) return refuse(404, "Not found");
+  const agentId = match[1];
+  const control = url.searchParams.get("control") === "1";
+  // Input only while the computer is taken over: then the agent's own tools wait.
+  if (control && !takenOver.has(agentId)) return refuse(423, "Take over the computer first");
+
+  let viewer;
+  try {
+    viewer = await openViewer(agentId, control);
+  } catch (error) {
+    return refuse(
+      error.status ?? 503,
+      error.status ? error.message : "The desktop view did not start",
+    );
+  }
+  const { entry, vnc, upstream } = viewer;
+  if (socket.destroyed) {
+    upstream.destroy();
+    return killGroup(vnc.pid);
+  }
+  socket.write("HTTP/1.1 101 Switching Protocols\r\nconnection: Upgrade\r\nupgrade: rfb\r\n\r\n");
+  if (head.length) upstream.write(head);
+  upstream.pipe(socket);
+  socket.pipe(upstream);
+  log("desktop view opened", { agent: agentId, control });
+  // Someone watching keeps the desktop in use.
+  const keepAlive = setInterval(() => touch(entry), 60_000);
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    clearInterval(keepAlive);
+    upstream.destroy();
+    socket.destroy();
+    killGroup(vnc.pid);
+    log("desktop view closed", { agent: agentId, control });
+  };
+  upstream.on("error", close);
+  upstream.on("close", close);
+  socket.on("error", close);
+  socket.on("close", close);
 }
 
 /** Stop everything an agent's user is running. */
@@ -537,8 +684,16 @@ function textArg(value, name, max = 100_000) {
   return value;
 }
 
+/** While a person has the computer (ADR-0040), the agent's own requests wait. */
+function refuseIfTakenOver(body) {
+  if (takenOver.has(body.agent) && body.person !== true) {
+    throw httpError(423, "A person is using this computer right now");
+  }
+}
+
 const routes = {
   async "POST /exec"(body) {
+    refuseIfTakenOver(body);
     const user = await agentUser(body.agent);
     const command = textArg(body.command, "command");
     const cwd = body.cwd === undefined ? WORKSPACE : textArg(body.cwd, "cwd", 4096);
@@ -567,6 +722,7 @@ const routes = {
   },
 
   async "POST /files/write"(body) {
+    refuseIfTakenOver(body);
     const user = await agentUser(body.agent);
     const path = textArg(body.path, "path", 4096);
     if (typeof body.content !== "string") throw httpError(400, "content must be base64");
@@ -608,9 +764,7 @@ const routes = {
 
   async "POST /browser"(body) {
     // While a person has taken over, only the person's own connection gets in.
-    if (takenOver.has(body.agent) && body.person !== true) {
-      throw httpError(423, "A person is using this browser right now");
-    }
+    refuseIfTakenOver(body);
     const entry = await browserFor(body.agent);
     return { path: `/cdp/${entry.user.agentId}${entry.wsPath}` };
   },
@@ -658,6 +812,7 @@ const server = http.createServer(async (req, res) => {
 // since Chromium accepts DevTools connections only from local pages.
 server.on("upgrade", (req, socket, head) => {
   const url = new URL(req.url ?? "/", "http://sandbox");
+  if (url.pathname.startsWith("/desktop/")) return void upgradeDesktop(req, socket, head, url);
   const match = /^\/cdp\/([A-Za-z0-9-]{1,64})(\/devtools\/.+)$/.exec(url.pathname);
   const entry = match ? desktops.get(match[1]) : undefined;
   if (!authorized(req, url) || !entry?.chrome || entry.chrome.exitCode !== null) {

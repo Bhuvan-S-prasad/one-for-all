@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { asId, SandboxError, type AgentId, type TenantContext } from "@ofa/core";
+import {
+  asId,
+  SandboxError,
+  type AgentId,
+  type DesktopStream,
+  type TenantContext,
+} from "@ofa/core";
 import { beforeAll, describe, expect, it } from "vitest";
 import { connectCdp } from "./cdp";
 import { createDockerSandbox } from "./docker";
@@ -24,6 +30,34 @@ const FORM = `<!doctype html><title>Sign up</title>
   <label><input type="checkbox" name="news"> Monthly news</label>
   <button>Join</button>
 </form>`;
+
+/** The start of a VNC session (RFB 3.8, no password): the server's version and screen size. */
+async function vncHandshake(stream: DesktopStream) {
+  let buffer = new Uint8Array(0);
+  let wake: (() => void) | undefined;
+  stream.onData((chunk) => {
+    const next = new Uint8Array(buffer.length + chunk.length);
+    next.set(buffer);
+    next.set(chunk, buffer.length);
+    buffer = next;
+    wake?.();
+  });
+  const read = async (n: number) => {
+    while (buffer.length < n) await new Promise<void>((resolve) => (wake = resolve));
+    const out = buffer.slice(0, n);
+    buffer = buffer.slice(n);
+    return out;
+  };
+  const version = new TextDecoder().decode(await read(12));
+  stream.send(new TextEncoder().encode("RFB 003.008\n"));
+  const [count = 0] = await read(1);
+  expect([...(await read(count))]).toContain(1); // Security type "None".
+  stream.send(Uint8Array.of(1));
+  expect([...(await read(4))]).toEqual([0, 0, 0, 0]); // Security result: OK.
+  stream.send(Uint8Array.of(1)); // ClientInit: shared.
+  const init = await read(4);
+  return { version, width: (init[0]! << 8) | init[1]!, height: (init[2]! << 8) | init[3]! };
+}
 
 describe.skipIf(!up)("Docker sandbox (integration)", { timeout: 60_000 }, () => {
   const sandbox = createDockerSandbox({ url, token });
@@ -172,6 +206,43 @@ describe.skipIf(!up)("Docker sandbox (integration)", { timeout: 60_000 }, () => 
     const display = (await handle.exec(alice, "echo $DISPLAY")).stdout.trim();
     const peek = await handle.exec(bob, `DISPLAY=${display} xdotool getdisplaygeometry`);
     expect(peek.exitCode).not.toBe(0);
+  });
+
+  it("streams the agent's desktop to a watcher over VNC, on no TCP port", async () => {
+    const stream = await handle.desktop(alice, { control: false });
+    try {
+      const { version, width, height } = await vncHandshake(stream);
+      expect(version).toBe("RFB 003.008\n");
+      expect([width, height]).toEqual([1280, 800]);
+      // The viewer's server listens only on a socket that agent and the
+      // service can reach: no port another agent could connect to.
+      const tcp = await handle.exec(bob, "cat /proc/net/tcp /proc/net/tcp6");
+      expect(tcp.stdout).not.toMatch(/:170C 0+:0000 0A/); // 5900, listening
+      const uid = (await handle.exec(alice, "id -u")).stdout.trim();
+      const peek = await handle.exec(bob, `ls /run/ofa-vnc/${uid}`);
+      expect(peek.stderr).toContain("Permission denied");
+    } finally {
+      stream.close();
+    }
+  });
+
+  it("gives control of the desktop only during a takeover, and holds the agent meanwhile", async () => {
+    await expect(handle.desktop(alice, { control: true })).rejects.toMatchObject({
+      code: "taken_over",
+    });
+    await handle.takeover(alice, true);
+    try {
+      const stream = await handle.desktop(alice, { control: true });
+      expect((await vncHandshake(stream)).width).toBe(1280);
+      stream.close();
+      await expect(handle.exec(alice, "echo hi")).rejects.toMatchObject({ code: "taken_over" });
+      await expect(handle.writeFile(alice, "held.txt", "x")).rejects.toMatchObject({
+        code: "taken_over",
+      });
+    } finally {
+      await handle.takeover(alice, false);
+    }
+    expect((await handle.exec(alice, "echo back")).stdout).toBe("back\n");
   });
 
   it("can't open private addresses in the browser either", async () => {

@@ -28,6 +28,8 @@ import { setupRoutes } from "./routes/setup";
 import { threadRoutes } from "./routes/threads";
 import type { AppEnv } from "./types";
 import { mountWebApp } from "./web";
+import { computerControl } from "./ws/control";
+import { desktopHandler } from "./ws/desktop";
 import { realtimeHandler } from "./ws/gateway";
 import { screenHandler } from "./ws/screen";
 
@@ -113,12 +115,20 @@ export function createApp(container: Container): App {
     requireTenant(),
     realtimeHandler(container, upgradeWebSocket),
   );
-  // Watching and taking over an agent's browser (M3.07).
+  // Watching and taking over an agent's computer: its browser page (M3.07)
+  // or its whole desktop (ADR-0040). One person has control at a time.
+  const controllers = computerControl();
   app.get(
     "/api/agents/:id/screen",
     requireSession(container.sessions),
     requireTenant(),
-    screenHandler(container, upgradeWebSocket),
+    screenHandler(container, upgradeWebSocket, controllers),
+  );
+  app.get(
+    "/api/agents/:id/desktop",
+    requireSession(container.sessions),
+    requireTenant(),
+    desktopHandler(container, upgradeWebSocket, controllers),
   );
 
   // Inngest calls in here to run agent steps. Requests are signed in

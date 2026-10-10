@@ -67,6 +67,9 @@ function fakeSandbox(overrides: Partial<SandboxHandle> = {}) {
     screen: async () => {
       throw new Error("no screen in tests");
     },
+    desktop: async () => {
+      throw new Error("no desktop in tests");
+    },
     takeover: async () => {},
     restart: async () => {},
     health: async () => ({ ok: true }),

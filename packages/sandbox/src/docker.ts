@@ -7,6 +7,7 @@ import {
   type SandboxProvider,
 } from "@ofa/core";
 import { copyCookies, createCdpBrowser } from "./browser";
+import { openDesktopStream } from "./desktop";
 import { createScreenSession } from "./screen";
 
 // The Docker sandbox (M3.03, ADR-0025): the agents' computer is a long-lived
@@ -68,7 +69,7 @@ export function createDockerSandbox(options: DockerSandboxOptions): SandboxProvi
       if (response.status === 423) {
         throw new SandboxError(
           "taken_over",
-          "A person has taken over your browser right now. Stop and tell them what you need, or try again after they hand it back.",
+          "A person has taken over your computer right now. Stop and tell them what you need, or try again after they hand it back.",
         );
       }
       throw new SandboxError(
@@ -134,6 +135,10 @@ export function createDockerSandbox(options: DockerSandboxOptions): SandboxProvi
 
     async screen(agentId) {
       return createScreenSession(await cdpUrl(agentId, true));
+    },
+
+    async desktop(agentId, { control }) {
+      return openDesktopStream({ url: base, token: options.token, agentId, control });
     },
 
     async takeover(agentId, on) {
