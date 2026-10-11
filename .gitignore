@@ -55,6 +55,8 @@ playwright/.cache/
 evals/**/results/
 evals/**/reports/
 evals/**/.runs/
+# Throwaway check scripts beside the code (e.g. src/screen-check.tmp.ts)
+*.tmp.ts
 
 # ── Expo / React Native (apps/mobile) ───────────────────────
 .expo/
@@ -97,7 +99,6 @@ npm-debug.log*
 pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-docs/
 
 # ── Tool caches ─────────────────────────────────────────────
 # graft code-index cache (local only)

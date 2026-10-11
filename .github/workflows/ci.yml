@@ -116,7 +116,8 @@ jobs:
           for i in $(seq 30); do curl -fs http://127.0.0.1:7070/health && break; sleep 1; done
           post() { curl -fs -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:7070/$1" -d "$2"; }
           post exec "{\"agent\":\"$AGENT\",\"command\":\"id -u\"}" | grep -q '"stdout":"10001'
-          post browser "{\"agent\":\"$AGENT\"}" | grep -q '/devtools/browser/'
+          # The browser is driven over a pipe (DT.14): the service hands out its own relay path.
+          post browser "{\"agent\":\"$AGENT\"}" | grep -q "\"path\":\"/cdp/$AGENT\""
       - name: Sandbox logs
         if: failure()
         run: docker logs sandbox
