@@ -279,9 +279,18 @@ export function usedAnyTool(name: string, tools: readonly string[]): Check {
   };
 }
 
+/** What the run left, with the start of each file's text: enough to see why a check failed. */
 const listed = (files: readonly SavedFile[]) =>
   files.length
-    ? files.map((f) => `${f.path}${f.error ? ` (${f.error})` : ""}`).join(", ")
+    ? files
+        .map((f) => {
+          if (f.error) return `${f.path} (${f.error})`;
+          const text = (f.text ?? "").replace(/\s+/g, " ").trim();
+          return text
+            ? `${f.path}: "${text.length > 300 ? `${text.slice(0, 299)}…` : text}"`
+            : f.path;
+        })
+        .join(", ")
     : "nothing made or changed";
 
 /** The run left a file on its computer that passes `test`. */
