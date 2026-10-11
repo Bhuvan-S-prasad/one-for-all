@@ -67,6 +67,9 @@ function fakeSandbox(overrides: Partial<SandboxHandle> = {}) {
       calls.push(["openFile", agentId, path]),
       { app: "abiword" }
     ),
+    desktopApps: async () => {
+      throw new Error("no desktop apps in tests");
+    },
     shareLogin: async () => ({ cookies: 0 }),
     screen: async () => {
       throw new Error("no screen in tests");

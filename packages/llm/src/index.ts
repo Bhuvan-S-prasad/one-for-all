@@ -31,5 +31,6 @@ export {
   createOpenRouterProvider,
   isFreeOpenRouterModel,
   OPENROUTER_DEFAULT_TIERS,
+  OPENROUTER_DEFAULT_VISION,
   type OpenRouterOptions,
 } from "./providers/openrouter";

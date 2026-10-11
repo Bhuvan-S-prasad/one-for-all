@@ -1,0 +1,418 @@
+#!/usr/bin/env python3
+"""The agent's desktop apps through their accessibility tree (ADR-0041, DT.09).
+
+Run as the agent, on its own display and session bus. Reads one JSON request
+on stdin and prints one JSON reply:
+
+  {"action": "snapshot"}
+  {"action": "click", "ref": 12}
+  {"action": "type", "ref": 12, "text": "...", "clear": false, "submit": false}
+  {"action": "press", "keys": "ctrl+s"}
+  {"action": "describe", "ref": 12}          (for approval cards: no change)
+
+The screenshot fallback (DT.11), for apps the tree can't read:
+
+  {"action": "screenshot"}                   {data (base64 JPEG), mediaType, width, height, title}
+  {"action": "click_at", "x": 0.5, "y": 0.3} fractions of the screen (pixels if above 1);
+                                             replies with a screenshot afterwards
+  {"action": "type_text", "text": "...", "submit": false}   into what has focus; screenshot after
+
+Snapshots list the window in front in full, as an outline with numbered
+controls, `[12] push button "Save"`, and the other windows one line each.
+Numbers are kept in $XDG_RUNTIME_DIR/a11y-refs.json until the next snapshot;
+each is checked against the control's role and name before use, so a number
+from an old snapshot fails rather than acting on something else.
+
+Exit 0 with {"title", "outline"} (or {"window", "element"} for describe);
+exit 3 with {"error"} for a stale or unknown number; exit 2 for anything else.
+"""
+
+import base64
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+import pyatspi
+
+RUN = os.environ.get("XDG_RUNTIME_DIR") or os.path.expanduser("~/.run")
+REFS = os.path.join(RUN, "a11y-refs.json")
+# Bounds, so a huge app can't swamp the model or the clock.
+MAX_NODES = 3000
+MAX_LINES = 350
+MAX_TABLE_CELLS = 60
+TEXT_PREVIEW = 300
+SECONDS = 8.0
+# The browser has its own tools; the dock and the desktop icons are scenery.
+SKIP_APPS = {"chromium", "chrome", "tint2"}
+
+ACTIONABLE = {
+    "push button", "toggle button", "check box", "radio button", "menu item",
+    "check menu item", "radio menu item", "menu", "combo box", "text", "entry",
+    "password text", "spin button", "slider", "page tab", "link", "list item",
+    "table cell", "tree item", "icon", "toggle", "split button", "button",
+}
+TEXTUAL = {"label", "heading", "status bar", "caption", "alert", "notification", "paragraph"}
+# Controls whose value matters even without a label.
+FIELDS = {"text", "entry", "password text", "spin button", "table cell", "combo box"}
+CONTAINERS_WITH_TEXT = {"document frame", "document text", "document web", "text"}
+
+
+class Stale(Exception):
+    pass
+
+
+def reply(payload, code=0):
+    sys.stdout.write(json.dumps(payload))
+    sys.stdout.flush()
+    sys.exit(code)
+
+
+def safe(fn, default=None):
+    try:
+        return fn()
+    except Exception:
+        return default
+
+
+def role_of(node):
+    return safe(node.getRoleName, "") or ""
+
+
+def name_of(node):
+    name = (safe(lambda: node.name, "") or "").strip()
+    if not name:
+        name = (safe(lambda: node.description, "") or "").strip()
+    return re.sub(r"\s+", " ", name)[:120]
+
+
+def text_of(node, limit):
+    def read():
+        text = node.queryText()
+        return text.getText(0, min(text.characterCount, limit))
+
+    return re.sub(r"\s+", " ", safe(read, "") or "").strip()
+
+
+def flags(node):
+    state = safe(node.getState)
+    if state is None:
+        return []
+    out = []
+    if state.contains(pyatspi.STATE_FOCUSED):
+        out.append("focused")
+    if state.contains(pyatspi.STATE_CHECKED):
+        out.append("checked")
+    if state.contains(pyatspi.STATE_SELECTED):
+        out.append("selected")
+    if state.contains(pyatspi.STATE_EXPANDED):
+        out.append("expanded")
+    if not state.contains(pyatspi.STATE_SENSITIVE):
+        out.append("disabled")
+    return out
+
+
+def showing(node):
+    state = safe(node.getState)
+    return state is not None and state.contains(pyatspi.STATE_SHOWING)
+
+
+def apps():
+    desktop = pyatspi.Registry.getDesktop(0)
+    for i in range(desktop.childCount):
+        app = safe(lambda: desktop.getChildAtIndex(i))
+        if app is None:
+            continue
+        if (safe(lambda: app.name, "") or "").lower() in SKIP_APPS:
+            continue
+        yield app
+
+
+def windows():
+    """Showing top-level windows: (app, index, frame); the active one first."""
+    found = []
+    for app in apps():
+        for i in range(safe(lambda: app.childCount, 0)):
+            frame = safe(lambda: app.getChildAtIndex(i))
+            if frame is None or not showing(frame):
+                continue
+            # PCManFM draws the desktop background itself, as a window named
+            # "Desktop": scenery, not an app the agent works in.
+            if (safe(lambda: app.name, "") or "").lower() == "pcmanfm" and name_of(frame) == "Desktop":
+                continue
+            state = safe(frame.getState)
+            active = state is not None and state.contains(pyatspi.STATE_ACTIVE)
+            found.append((not active, app, i, frame))
+    found.sort(key=lambda w: w[0])
+    return [(app, i, frame) for _, app, i, frame in found]
+
+
+class Outline:
+    def __init__(self):
+        self.lines = []
+        self.refs = {}
+        self.visited = 0
+        self.started = time.monotonic()
+        self.cut = False
+
+    def full(self):
+        return (
+            len(self.lines) >= MAX_LINES
+            or self.visited >= MAX_NODES
+            or time.monotonic() - self.started > SECONDS
+        )
+
+    def add(self, depth, node, pid, path, ref=True, extra=""):
+        role, name = role_of(node), name_of(node)
+        label = f'{role} "{name}"' if name else role
+        state = flags(node)
+        tail = f" ({', '.join(state)})" if state else ""
+        if ref:
+            number = len(self.refs) + 1
+            self.refs[str(number)] = {"pid": pid, "path": path, "role": role, "name": name}
+            self.lines.append(f"{'  ' * depth}[{number}] {label}{tail}{extra}")
+        else:
+            self.lines.append(f"{'  ' * depth}{label}{tail}{extra}")
+
+    def walk(self, node, pid, path, depth):
+        cells = 0
+        for i in range(safe(lambda: node.childCount, 0)):
+            if self.full():
+                self.cut = True
+                return
+            child = safe(lambda: node.getChildAtIndex(i))
+            if child is None or not showing(child):
+                continue
+            self.visited += 1
+            role = role_of(child)
+            here = path + [i]
+            if role == "table cell":
+                cells += 1
+                if cells > MAX_TABLE_CELLS:
+                    if cells == MAX_TABLE_CELLS + 1:
+                        self.lines.append(f"{'  ' * depth}… more cells")
+                    continue
+            if role in CONTAINERS_WITH_TEXT:
+                value = text_of(child, TEXT_PREVIEW)
+                extra = f' value="{value}"' if value else ""
+                self.add(depth, child, pid, here, extra=extra)
+                self.walk(child, pid, here, depth + 1)
+            elif role in ACTIONABLE and not name_of(child) and role not in FIELDS:
+                # No label and no value tells the model nothing; what's inside
+                # it (a tab's text view) may.
+                self.walk(child, pid, here, depth)
+            elif role in ACTIONABLE:
+                value = text_of(child, 80) if role in FIELDS else ""
+                extra = f' value="{value}"' if value and value != name_of(child) else ""
+                self.add(depth, child, pid, here, extra=extra)
+                if role in ("menu", "combo box", "list item", "tree item", "page tab"):
+                    self.walk(child, pid, here, depth + 1)
+            elif role in TEXTUAL and name_of(child):
+                self.add(depth, child, pid, here, ref=False)
+            else:
+                # Panels, fillers, scroll panes: keep going without a line.
+                self.walk(child, pid, here, depth)
+
+
+def snapshot():
+    outline = Outline()
+    shown = windows()
+    title = ""
+    for n, (app, index, frame) in enumerate(shown):
+        pid = safe(app.get_process_id, 0)
+        if n == 0:
+            title = name_of(frame)
+            outline.add(0, frame, pid, [index], extra="  ← in front")
+            outline.walk(frame, pid, [index], 1)
+        else:
+            outline.add(0, frame, pid, [index], extra="  (behind; click it to bring it forward)")
+    if outline.cut:
+        outline.lines.append("… (more not shown: close windows or dialogs you don't need)")
+    with open(REFS, "w", encoding="utf-8") as f:
+        json.dump(outline.refs, f)
+    text = "\n".join(outline.lines) if outline.lines else "(No app windows are open. Open one with desktop.open.)"
+    return {"title": title, "outline": text}
+
+
+def resolve(ref):
+    try:
+        with open(REFS, encoding="utf-8") as f:
+            entry = json.load(f)[str(int(ref))]
+    except (OSError, ValueError, KeyError):
+        raise Stale(f"There is no [{ref}] in the last desktop snapshot. Take a new snapshot.")
+    for app in apps():
+        if safe(app.get_process_id, -1) != entry["pid"]:
+            continue
+        node = app
+        for i in entry["path"]:
+            node = safe(lambda: node.getChildAtIndex(i))
+            if node is None:
+                break
+        if node is not None and role_of(node) == entry["role"] and name_of(node) == entry["name"]:
+            return app, node, entry
+    raise Stale(f"[{ref}] isn't on the desktop any more. Take a new snapshot and use a number from it.")
+
+
+def frame_of(app, entry):
+    return safe(lambda: app.getChildAtIndex(entry["path"][0]))
+
+
+def xdotool(*args):
+    subprocess.run(["xdotool", *args], check=False, capture_output=True, timeout=10)
+
+
+def bring_forward(app, entry):
+    """Raise the window holding this control (matched by its process and title)."""
+    frame = frame_of(app, entry)
+    title = name_of(frame) if frame is not None else ""
+    found = subprocess.run(
+        ["xdotool", "search", "--onlyvisible", "--pid", str(entry["pid"])],
+        capture_output=True, text=True, timeout=10,
+    ).stdout.split()
+    for window in reversed(found):
+        name = subprocess.run(
+            ["xdotool", "getwindowname", window], capture_output=True, text=True, timeout=10
+        ).stdout.strip()
+        if not title or name == title:
+            xdotool("windowactivate", "--sync", window)
+            return
+    if found:
+        xdotool("windowactivate", "--sync", found[-1])
+
+
+def press_node(node):
+    action = safe(node.queryAction)
+    if action is not None:
+        names = [safe(lambda i=i: action.getName(i), "") for i in range(action.nActions)]
+        for want in ("click", "press", "activate", "toggle", "jump", "open"):
+            if want in names:
+                action.doAction(names.index(want))
+                return
+    component = safe(node.queryComponent)
+    extents = safe(lambda: component.getExtents(pyatspi.DESKTOP_COORDS)) if component else None
+    if extents is None or extents.width <= 0:
+        raise Stale("That control can't be clicked. Take a new snapshot.")
+    xdotool(
+        "mousemove", str(extents.x + extents.width // 2), str(extents.y + extents.height // 2),
+        "click", "1",
+    )
+
+
+def focused(node):
+    state = safe(node.getState)
+    return state is not None and state.contains(pyatspi.STATE_FOCUSED)
+
+
+def focus(node, entry):
+    """Put the keyboard on this control: ask for focus, else click into it."""
+    if entry["role"] == "table cell":
+        press_node(node)
+        return
+    component = safe(node.queryComponent)
+    if component is not None:
+        safe(component.grabFocus)
+        time.sleep(0.1)
+    if not focused(node) and component is not None:
+        extents = safe(lambda: component.getExtents(pyatspi.DESKTOP_COORDS))
+        if extents is not None and extents.width > 0:
+            xdotool(
+                "mousemove", str(extents.x + extents.width // 2),
+                str(extents.y + extents.height // 2), "click", "1",
+            )
+            time.sleep(0.1)
+
+
+def screen_size():
+    out = subprocess.run(
+        ["xdotool", "getdisplaygeometry"], capture_output=True, text=True, timeout=10
+    ).stdout.split()
+    return (int(out[0]), int(out[1])) if len(out) == 2 else (1280, 800)
+
+
+def screenshot():
+    """The whole screen as a JPEG (the fallback for apps the tree can't read, DT.11)."""
+    path = os.path.join(RUN, "screenshot.jpg")
+    subprocess.run(["scrot", "-o", "-q", "60", path], check=True, capture_output=True, timeout=20)
+    with open(path, "rb") as f:
+        data = base64.b64encode(f.read()).decode("ascii")
+    os.remove(path)
+    width, height = screen_size()
+    title = subprocess.run(
+        ["xdotool", "getactivewindow", "getwindowname"], capture_output=True, text=True, timeout=10
+    ).stdout.strip()
+    return {"data": data, "mediaType": "image/jpeg", "width": width, "height": height, "title": title}
+
+
+def point(x, y):
+    """A point from fractions of the screen (0 to 1), or pixels when either is above 1."""
+    width, height = screen_size()
+    x, y = float(x), float(y)
+    if x <= 1 and y <= 1:
+        x, y = x * width, y * height
+    return min(max(int(round(x)), 0), width - 1), min(max(int(round(y)), 0), height - 1)
+
+
+def main():
+    request = json.loads(sys.stdin.read() or "{}")
+    action = request.get("action")
+    try:
+        if action == "snapshot":
+            reply(snapshot())
+        if action == "screenshot":
+            reply(screenshot())
+        if action == "click_at":
+            x, y = point(request.get("x", 0), request.get("y", 0))
+            clicks = "2" if request.get("double") else "1"
+            xdotool("mousemove", str(x), str(y), "click", "--repeat", clicks, "1")
+            time.sleep(0.8)
+            reply({**screenshot(), "clicked": [x, y]})
+        if action == "type_text":
+            text = str(request.get("text", ""))[:10_000]
+            if text:
+                xdotool("type", "--delay", "2", "--", text)
+            if request.get("submit"):
+                xdotool("key", "--clearmodifiers", "Return")
+            time.sleep(0.6)
+            reply(screenshot())
+        if action == "describe":
+            app, node, entry = resolve(request["ref"])
+            frame = frame_of(app, entry)
+            reply({
+                "window": name_of(frame) if frame is not None else "",
+                "element": {"role": entry["role"], "name": entry["name"]},
+            })
+        if action == "click":
+            app, node, entry = resolve(request["ref"])
+            bring_forward(app, entry)
+            if len(entry["path"]) > 1:
+                press_node(node)
+        elif action == "type":
+            text = str(request.get("text", ""))[:10_000]
+            app, node, entry = resolve(request["ref"])
+            bring_forward(app, entry)
+            focus(node, entry)
+            if request.get("clear"):
+                # As a person would: some fields refill themselves on focus,
+                # so clearing through the tree first doesn't stick.
+                xdotool("key", "--clearmodifiers", "ctrl+a", "BackSpace")
+            if text:
+                xdotool("type", "--delay", "2", "--", text)
+            if request.get("submit"):
+                xdotool("key", "--clearmodifiers", "Return")
+        elif action == "press":
+            keys = str(request.get("keys", ""))
+            if not re.fullmatch(r"[A-Za-z0-9_+ \-]{1,100}", keys):
+                reply({"error": f"Keys look like ctrl+s, Return or alt+F4, not {keys!r}."}, 2)
+            xdotool("key", "--clearmodifiers", *keys.split())
+        else:
+            reply({"error": f"Unknown action {action!r}."}, 2)
+        time.sleep(0.6)
+        reply(snapshot())
+    except Stale as error:
+        reply({"error": str(error)}, 3)
+
+
+if __name__ == "__main__":
+    main()

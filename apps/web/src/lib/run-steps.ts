@@ -23,6 +23,10 @@ const TOOL_LABELS: Record<string, [doing: string, done: string]> = {
   "files.list": ["Looking in a folder", "Looked in a folder"],
   "files.send": ["Sending you a file", "Sent you a file"],
   "desktop.open": ["Opening it on the desktop", "Opened it on the desktop"],
+  "desktop.snapshot": ["Looking at the desktop", "Looked at the desktop"],
+  "desktop.click": ["Clicking on the desktop", "Clicked on the desktop"],
+  "desktop.type": ["Typing on the desktop", "Typed on the desktop"],
+  "desktop.press": ["Pressing keys", "Pressed keys"],
   delegate_task: ["Handing work to another agent", "Handed work to another agent"],
   message_agent: ["Messaging another agent", "Messaged another agent"],
   schedule_task: ["Scheduling a task for later", "Scheduled a task for later"],
@@ -59,6 +63,8 @@ function detailFor(tool: string, args: unknown): string | null {
   }
   if (tool === "browser.type" && typeof a.text === "string") return `“${a.text.slice(0, 40)}”`;
   if (tool === "browser.press" && typeof a.key === "string") return a.key;
+  if (tool === "desktop.type" && typeof a.text === "string") return `“${a.text.slice(0, 40)}”`;
+  if (tool === "desktop.press" && typeof a.keys === "string") return a.keys;
   if (tool === "shell.run" && typeof a.command === "string") return a.command.slice(0, 80);
   if ((tool.startsWith("files.") || tool === "desktop.open") && typeof a.path === "string") {
     return a.path;
@@ -300,6 +306,10 @@ const DOING: Record<string, string> = {
   "files.list": "Looking in",
   "files.send": "Sending",
   "desktop.open": "Opening",
+  "desktop.snapshot": "Looking at the desktop",
+  "desktop.click": "Clicking on the desktop",
+  "desktop.type": "Typing on the desktop",
+  "desktop.press": "Pressing keys",
 };
 
 /** The live phase of an active run, from its latest events. */

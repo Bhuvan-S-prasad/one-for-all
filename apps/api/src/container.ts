@@ -192,6 +192,7 @@ function createLlm(
   const llm = createModelGateway({
     providers: [provider],
     tiers,
+    vision: parseModelList(config.llm.models.vision, ids, provider.id),
     // The workspace's own key from Settings wins; the environment key is a
     // fallback for development and single-user installs.
     async apiKey(ctx: TenantContext, p: ModelProvider) {
@@ -412,6 +413,11 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
         team,
         scheduler,
         skills,
+        // The screenshot fallback (DT.11) is offered when the run's tier can see images.
+        async vision(ctx) {
+          const agent = await agents.get(ctx, ctx.agentId);
+          return agent ? (await llm.modelFor(agent.modelTier, ctx)).vision : false;
+        },
       }).concat(overrides.extraTools ?? []),
     ),
     policy: createPolicyEngine({ agents, rules: createPolicyRuleStore(db) }),

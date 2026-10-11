@@ -18,6 +18,7 @@
 //   POST /files/list  {agent, path}
 //   POST /browser {agent}              start the agent's desktop and browser; {path} of its CDP endpoint
 //   POST /open {agent, path}           open a file or folder in its app on the desktop
+//   POST /apps {agent, request}        its desktop apps through their accessibility tree
 //   POST /restart {agent?}             stop an agent's processes (or every agent's)
 //   POST /takeover {agent, on}         a person has the agent's computer (M3.07, ADR-0040):
 //                                      the agent's browser, commands and file writes are
@@ -156,6 +157,8 @@ function agentEnv(user, extra = {}) {
     DBUS_SESSION_BUS_ADDRESS: `unix:path=${run}/bus`,
     GTK_THEME: "Adwaita:dark",
     GTK2_RC_FILES: "/etc/gtk-2.0/one-for-all.gtkrc",
+    // GTK2 apps (PCManFM) publish their accessibility tree only when asked (DT.09).
+    GTK_MODULES: "gail:atk-bridge",
     ...extra,
   };
   if (PROXY) {
@@ -343,7 +346,7 @@ async function startDesktop(user) {
     ]);
     const bus = await runAs(
       user,
-      'for i in $(seq 40); do [ -S "$1/bus" ] && exit 0; sleep 0.1; done; exit 1',
+      '[ -p "$1/pause" ] || mkfifo -- "$1/pause"; for i in $(seq 40); do [ -S "$1/bus" ] && exit 0; read -rt 0.1 _ <>"$1/pause"; done; exit 1',
       [run],
     );
     if (bus.exitCode !== 0) throw httpError(503, "The computer's desktop did not start");
@@ -370,7 +373,7 @@ async function startDesktop(user) {
     // start from a black screen.
     await runAs(
       user,
-      "for i in $(seq 30); do xdotool search --onlyvisible --class pcmanfm >/dev/null 2>&1 && break; sleep 0.1; done",
+      'p="$HOME/.run/pause"; [ -p "$p" ] || mkfifo -- "$p"; for i in $(seq 30); do xdotool search --onlyvisible --class pcmanfm >/dev/null 2>&1 && break; read -rt 0.1 _ <>"$p"; done',
       [],
     );
   } catch (error) {
@@ -914,7 +917,8 @@ async function execShown(user, command, cwd, timeoutMs, generation) {
       // Oldest first by window id (tab numbers get reused), never the newest.
       `tmux list-windows -t work -F '#{window_id}' | tr -d @ | sort -n | head -n -${WORK_TABS} | sed 's/^/@/' | xargs -r -n 1 tmux kill-window -t`,
       '[ -n "$(tmux list-clients -t work)" ] || (setsid one-for-all-terminal --agent >/dev/null 2>&1 &)',
-      "sleep 0.3",
+      // A pause with bash's own read, so no sleep shows among its processes.
+      'mkfifo -- "$1/pause" && read -rt 0.3 _ <>"$1/pause"',
       bringToFront("AgentTerminal"),
     ].join("; "),
     [dir, name],
@@ -956,7 +960,7 @@ async function execShown(user, command, cwd, timeoutMs, generation) {
   if (waited.timedOut || waited.exitCode === 2) {
     await runAs(
       user,
-      'kill -KILL -- "-$(cat -- "$1/pid")" 2>/dev/null; for i in $(seq 30); do [ -e "$1/exit" ] && break; sleep 0.1; done',
+      'kill -KILL -- "-$(cat -- "$1/pid")" 2>/dev/null; [ -p "$1/pause" ] || mkfifo -- "$1/pause"; for i in $(seq 30); do [ -e "$1/exit" ] && break; read -rt 0.1 _ <>"$1/pause"; done',
       [dir],
     );
   }
@@ -1048,6 +1052,15 @@ else
   esac
 fi
 (setsid "$app" "$@" >/dev/null 2>&1 &)
+# Bring its window to the front once it shows (up to 3 s): the person
+# watching sees it, and so does the agent's next snapshot.
+pattern=$(printf %s "$name" | sed 's/[][\\.*^$+?(){}|/]/\\\\&/g')
+pause="$HOME/.run/pause"; [ -p "$pause" ] || mkfifo -- "$pause"
+for i in $(seq 30); do
+  w=$(xdotool search --onlyvisible --name "$pattern" 2>/dev/null | tail -n 1)
+  if [ -n "$w" ]; then xdotool windowactivate "$w" 2>/dev/null; break; fi
+  read -rt 0.1 _ <>"$pause"
+done
 echo "$app"
 `;
 
@@ -1168,6 +1181,35 @@ const routes = {
       );
     }
     return { app: result.stdout.trim() };
+  },
+
+  async "POST /apps"(body) {
+    // The agent's desktop apps through their accessibility tree (DT.09).
+    refuseIfTakenOver(body);
+    const user = await agentUser(body.agent);
+    if (typeof body.request !== "object" || body.request === null) {
+      throw httpError(400, "request must be an object");
+    }
+    await desktopFor(user.agentId);
+    // Binary, for the 10 MB cap: a screenshot's reply is larger than a command's.
+    const result = await runAs(user, "exec one-for-all-a11y", [], {
+      input: JSON.stringify(body.request),
+      timeoutMs: 60_000,
+      binary: true,
+    });
+    let reply;
+    try {
+      reply = JSON.parse(result.stdout.toString("utf8"));
+    } catch {
+      throw httpError(
+        503,
+        result.timedOut ? "The desktop took too long to answer" : "The desktop didn't answer",
+      );
+    }
+    if (result.exitCode === 3) throw httpError(410, reply.error);
+    if (result.exitCode !== 0)
+      throw httpError(400, reply.error ?? "That didn't work on the desktop");
+    return reply;
   },
 
   async "POST /takeover"(body) {

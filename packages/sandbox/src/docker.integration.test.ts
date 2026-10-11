@@ -281,9 +281,43 @@ describe.skipIf(!up)("Docker sandbox (integration)", { timeout: 60_000 }, () => 
     });
     const running = await handle.exec(
       alice,
-      'sleep 1; for p in abiword gnumeric mousepad feh; do pgrep -u "$(id -u)" -x "$p" >/dev/null && echo "$p"; done; pkill -u "$(id -u)" -x abiword; pkill -u "$(id -u)" -x gnumeric; pkill -u "$(id -u)" -x mousepad; pkill -u "$(id -u)" -x feh; rm -rf /workspace/open-check',
+      `sleep 1; for p in abiword gnumeric mousepad feh; do pgrep -u "$(id -u)" -x "$p" >/dev/null && echo "$p"; done; pkill -u "$(id -u)" -x abiword; pkill -u "$(id -u)" -x gnumeric; pkill -u "$(id -u)" -x mousepad; pkill -u "$(id -u)" -x feh; xdotool search --onlyvisible --name '^open-check$' | while read w; do xdotool windowactivate --sync "$w" key ctrl+w; done; rm -rf /workspace/open-check`,
     );
     expect(running.stdout.trim().split("\n")).toEqual(["abiword", "gnumeric", "mousepad", "feh"]);
+  });
+
+  it("reads and drives desktop apps through their accessibility tree", async () => {
+    const name = `a11y-${randomUUID().slice(0, 8)}.txt`;
+    await handle.writeFile(alice, name, "first draft");
+    expect((await handle.openFile(alice, name)).app).toBe("mousepad");
+    const apps = await handle.desktopApps(alice);
+    let snapshot = await apps.snapshot();
+    for (let i = 0; i < 20 && !snapshot.title.includes(name); i += 1) {
+      await new Promise((r) => setTimeout(r, 250));
+      snapshot = await apps.snapshot();
+    }
+    expect(snapshot.title).toContain(name);
+    expect(snapshot.outline).toContain('menu "File"');
+    const field = /\[(\d+)\] text \(focused\) value="first draft"/.exec(snapshot.outline);
+    if (!field) throw new Error(`no text field in\n${snapshot.outline}`);
+    // Replace the text and save with the keyboard, as a person would.
+    const typed = await apps.type(Number(field[1]), "edited through the tree", { clear: true });
+    expect(typed.outline).toContain('value="edited through the tree"');
+    await apps.press("ctrl+s");
+    await new Promise((r) => setTimeout(r, 500));
+    expect(new TextDecoder().decode(await handle.readFile(alice, name))).toBe(
+      "edited through the tree",
+    );
+    // A number from an old snapshot fails clearly.
+    await expect(apps.click(99_999)).rejects.toMatchObject({ code: "no_element" });
+    // GTK2 apps (the file manager) are in the tree too.
+    await handle.openFile(alice, ".");
+    await new Promise((r) => setTimeout(r, 1_500));
+    expect((await apps.snapshot()).outline).toMatch(/frame "workspace"/);
+    await handle.exec(
+      alice,
+      `pkill -u "$(id -u)" -x mousepad; xdotool search --onlyvisible --name '^workspace$' | while read w; do xdotool windowactivate --sync "$w" key ctrl+w; done; rm -f ${name}`,
+    );
   });
 
   it("streams the agent's desktop to a watcher over VNC, on no TCP port", async () => {

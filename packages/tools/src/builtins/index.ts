@@ -1,5 +1,6 @@
 import type {
   MemoryStore,
+  RunContext,
   SandboxProvider,
   Scheduler,
   SkillLibrary,
@@ -31,6 +32,11 @@ export interface BuiltinToolDeps {
   readonly scheduler?: Scheduler | null;
   /** Saved procedures (M5.08); without it, the skill tools are never listed. */
   readonly skills?: SkillLibrary | null;
+  /**
+   * Whether this run's model can see images (DT.11); without it, the
+   * screenshot fallback's tools are never listed.
+   */
+  readonly vision?: (ctx: RunContext) => Promise<boolean>;
 }
 
 /**
@@ -48,7 +54,7 @@ export function builtinTools(deps: BuiltinToolDeps): ToolDefinition<never>[] {
     useSavedLoginTool(deps.sandbox ?? null),
     shellTool(deps.sandbox ?? null),
     ...fileTools(deps.sandbox ?? null),
-    ...desktopTools(deps.sandbox ?? null),
+    ...desktopTools(deps.sandbox ?? null, deps.vision),
     artifactsReadTool(),
     loadToolkitTool(),
     delegateTaskTool(deps.team ?? null),

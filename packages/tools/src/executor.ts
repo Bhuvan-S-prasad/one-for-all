@@ -384,6 +384,18 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
           const head = Math.max(0, maxChars - 300);
           content = `${full.slice(0, head)}\n…[the full output, ${full.length.toLocaleString("en")} characters, is saved as ${artifactUri(saved.id)}; read on with artifacts.read and from: ${head}]`;
         }
+        if (result.image && store) {
+          // A screenshot the model sees once is kept for people with the run (DT.11).
+          const shot = await store.put(ctx, {
+            key: `${request.idempotencyKey}:image`,
+            kind: "output",
+            name: "Screenshot",
+            mimeType: result.image.mediaType,
+            content: Buffer.from(result.image.data, "base64"),
+            untrusted: result.untrusted,
+          });
+          artifactId ??= shot.id;
+        }
         await calls.complete(ctx, request.idempotencyKey, {
           result: content,
           untrusted: result.untrusted,
@@ -393,6 +405,7 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
           content,
           untrusted: result.untrusted,
           ...(artifactId ? { artifactId } : {}),
+          ...(result.image ? { image: result.image } : {}),
           verdict: decision.verdict,
           reasons: decision.reasons,
           durationMs: now() - started,

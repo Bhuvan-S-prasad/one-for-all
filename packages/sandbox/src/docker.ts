@@ -1,6 +1,8 @@
 import {
   SandboxError,
   type AgentId,
+  type DesktopScreenshot,
+  type DesktopSnapshot,
   type ExecResult,
   type FileEntry,
   type SandboxHandle,
@@ -30,6 +32,8 @@ export interface DockerSandboxOptions {
 const ERROR_CODES: Record<number, SandboxError["code"]> = {
   400: "bad_request",
   404: "not_found",
+  // A desktop control from an old snapshot (DT.09).
+  410: "no_element",
   413: "too_large",
   503: "unavailable",
   507: "unavailable",
@@ -130,6 +134,34 @@ export function createDockerSandbox(options: DockerSandboxOptions): SandboxProvi
 
     async openFile(agentId, path) {
       return call<{ app: string }>("/open", { agent: agentId, path });
+    },
+
+    async desktopApps(agentId) {
+      const act = <T = DesktopSnapshot>(request: Record<string, unknown>) =>
+        call<T>("/apps", { agent: agentId, request }, 75_000);
+      return {
+        snapshot: () => act({ action: "snapshot" }),
+        click: (ref) => act({ action: "click", ref }),
+        type: (ref, text, options = {}) =>
+          act({
+            action: "type",
+            ref,
+            text,
+            clear: options.clear ?? false,
+            submit: options.submit ?? false,
+          }),
+        press: (keys) => act({ action: "press", keys }),
+        describe: (ref) =>
+          act<{ window: string; element: { role: string; name: string } }>({
+            action: "describe",
+            ref,
+          }),
+        screenshot: () => act<DesktopScreenshot>({ action: "screenshot" }),
+        clickAt: (x, y, options = {}) =>
+          act<DesktopScreenshot>({ action: "click_at", x, y, double: options.double ?? false }),
+        typeText: (text, options = {}) =>
+          act<DesktopScreenshot>({ action: "type_text", text, submit: options.submit ?? false }),
+      };
     },
 
     async shareLogin(from, to, domain) {

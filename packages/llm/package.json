@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run --passWithNoTests",
-    "spike": "tsx src/scripts/tier-spike.ts"
+    "spike": "tsx src/scripts/tier-spike.ts",
+    "spike:vision": "tsx src/scripts/vision-spike.ts"
   },
   "dependencies": {
     "@ofa/core": "workspace:*",

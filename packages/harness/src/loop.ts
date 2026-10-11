@@ -204,6 +204,8 @@ interface ToolStepResult {
   readonly untrusted: boolean;
   readonly ok: boolean;
   readonly taintedNow: boolean;
+  /** A screenshot to show the model with the result (DT.11). */
+  readonly image?: LLMImage;
   /** Policy wants a person to agree first; nothing ran yet. */
   readonly approval?: {
     readonly verdict: Verdict;
@@ -724,12 +726,23 @@ ${result.content}`,
         if (result.ok && call.name === DELEGATE_TASK) {
           handoffs.push({ toolCallId, turn: turns.length, args: ran.args });
         }
+        if (result.image) {
+          // Only the latest screenshot stays (DT.11): older ones leave the
+          // prompt and the run's state.
+          for (const [n, turn] of turns.entries()) {
+            if (turn.kind === "tool" && turn.image) {
+              const { image: _dropped, ...rest } = turn;
+              turns[n] = rest;
+            }
+          }
+        }
         turns.push({
           kind: "tool",
           toolCallId: call.id,
           toolName: call.name,
           content: result.content,
           untrusted: result.untrusted,
+          ...(result.image ? { image: result.image } : {}),
         });
         learnUrls(result.content);
       }
@@ -1033,6 +1046,7 @@ ${result.content}`,
       untrusted: outcome.status === "ok" && outcome.untrusted,
       ok: outcome.status === "ok",
       taintedNow,
+      ...(outcome.status === "ok" && outcome.image ? { image: outcome.image } : {}),
     };
   }
 

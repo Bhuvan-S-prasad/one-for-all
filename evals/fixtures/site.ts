@@ -192,6 +192,7 @@ export function fixtureComputer(browser: AgentBrowser): SandboxProvider {
     listFiles: none,
     browser: async () => browser,
     openFile: none,
+    desktopApps: none,
     shareLogin: none,
     screen: none,
     desktop: none,

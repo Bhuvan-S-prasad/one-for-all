@@ -1,4 +1,4 @@
-import type { LLMMessage, ToolDescriptor } from "@ofa/core";
+import type { LLMImage, LLMMessage, ToolDescriptor } from "@ofa/core";
 import {
   AGENT_IDENTITY,
   AGENT_MESSAGE,
@@ -8,6 +8,7 @@ import {
   PROACTIVE_CHECK,
   ROUTINE_RUN,
   SCHEDULED_TASK,
+  SCREENSHOT,
   SKILL_IN_USE,
   STEERING,
   TASK_STATE,
@@ -66,6 +67,11 @@ export type Turn =
       readonly toolName: string;
       readonly content: string;
       readonly untrusted: boolean;
+      /**
+       * A screenshot shown with the result (DT.11). Only the latest one is
+       * kept: the loop drops older images, so the prompt and run state stay small.
+       */
+      readonly image?: LLMImage;
     }
   | {
       readonly kind: "user";
@@ -160,19 +166,37 @@ function historyMessage(message: HistoryMessage, selfId: string): LLMMessage | n
 }
 
 export function turnMessages(turns: readonly Turn[]): LLMMessage[] {
-  return turns.map((turn): LLMMessage => {
+  const messages: LLMMessage[] = [];
+  // A screenshot from a tool result is shown in a user message after that
+  // step's results: tool results must follow their call directly.
+  let pending: { readonly toolName: string; readonly image: LLMImage } | null = null;
+  const flush = () => {
+    if (!pending) return;
+    messages.push({
+      role: "user",
+      content: SCREENSHOT.render({ tool: pending.toolName }),
+      images: [pending.image],
+    });
+    pending = null;
+  };
+  for (const turn of turns) {
+    if (turn.kind !== "tool") flush();
     if (turn.kind === "assistant") {
-      return { role: "assistant", content: turn.text, toolCalls: turn.toolCalls };
+      messages.push({ role: "assistant", content: turn.text, toolCalls: turn.toolCalls });
+    } else if (turn.kind === "user") {
+      messages.push({ role: "user", content: STEERING.render({ text: turn.text }) });
+    } else {
+      messages.push({
+        role: "tool",
+        toolCallId: turn.toolCallId,
+        toolName: turn.toolName,
+        content: turn.untrusted ? wrapUntrusted(turn.toolName, turn.content) : turn.content,
+      });
+      if (turn.image) pending = { toolName: turn.toolName, image: turn.image };
     }
-    if (turn.kind === "user")
-      return { role: "user", content: STEERING.render({ text: turn.text }) };
-    return {
-      role: "tool",
-      toolCallId: turn.toolCallId,
-      toolName: turn.toolName,
-      content: turn.untrusted ? wrapUntrusted(turn.toolName, turn.content) : turn.content,
-    };
-  });
+  }
+  flush();
+  return messages;
 }
 
 export function assembleContext(input: ContextInput, budget: ContextBudget): AssembledContext {
@@ -308,6 +332,7 @@ export function assembleContext(input: ContextInput, budget: ContextBudget): Ass
       ...(input.history.some((m) => m.scheduled === "task") ? [SCHEDULED_TASK] : []),
       ...(input.history.some((m) => m.scheduled === "check") ? [PROACTIVE_CHECK] : []),
       ...(input.turns.some((t) => t.kind === "user") ? [STEERING] : []),
+      ...(input.turns.some((t) => t.kind === "tool" && t.image) ? [SCREENSHOT] : []),
       ...(input.skill ? [SKILL_IN_USE] : []),
     ]
       .map(promptRef)

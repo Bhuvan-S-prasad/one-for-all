@@ -374,7 +374,80 @@ describe("model gateway", () => {
       id: "big",
       contextWindow: 32_768,
       maxOutputTokens: 1_000,
+      vision: false,
     });
+  });
+
+  // Images (DT.10): only models that read them get a request with them.
+  const looks = (id: string, supportsImages: boolean): ModelDetails => ({
+    id,
+    contextWindow: 32_000,
+    maxOutputTokens: 1_000,
+    supportsTools: true,
+    supportsImages,
+    pricing: { inputPerMTok: 0, outputPerMTok: 0 },
+  });
+  const screenshot = [
+    {
+      role: "user" as const,
+      content: "What is on the screen?",
+      images: [{ data: "iVBORw0KGgo=", mediaType: "image/png" as const }],
+    },
+  ];
+
+  it("sends a request with images only to models that read them", async () => {
+    const provider = fakeProvider(
+      "fake",
+      { text: say("blind"), sees: say("a window") },
+      { details: [looks("text", false), looks("sees", true)] },
+    );
+    const g = gateway([provider]);
+    const answer = await g.generate({ tier: "fast", messages: screenshot }, ctx);
+    expect(answer.model).toBe("sees");
+    expect(provider.calls.map((c) => c.model)).toEqual(["sees"]);
+    // The image travels as an image part after the text.
+    const sent = provider.calls[0]?.options.prompt.at(-1);
+    expect(sent).toMatchObject({
+      role: "user",
+      content: [
+        { type: "text", text: "What is on the screen?" },
+        { type: "file", mediaType: "image/png" },
+      ],
+    });
+    // Text-only requests still go down the tier as before.
+    expect((await g.generate({ tier: "fast", messages: user("hi") }, ctx)).model).toBe("text");
+    expect((await g.modelFor("fast", ctx)).vision).toBe(true);
+  });
+
+  it("falls back to the vision chain when the tier's models can't read images", async () => {
+    const provider = fakeProvider(
+      "fake",
+      { text: say("blind"), eyes: say("I see a dock") },
+      {
+        tiers: { fast: ["text"], standard: ["text"], strong: ["text"] },
+        details: [looks("text", false), looks("eyes", true)],
+      },
+    );
+    const withVision = gateway([provider], { vision: [{ provider: "fake", model: "eyes" }] });
+    expect((await withVision.generate({ tier: "fast", messages: screenshot }, ctx)).model).toBe(
+      "eyes",
+    );
+    expect((await withVision.modelFor("fast", ctx)).vision).toBe(true);
+
+    // The vision chain is ranked for pointing at a screen: it goes first.
+    const both = fakeProvider(
+      "fake",
+      { sees: say("tier"), eyes: say("vision") },
+      { details: [looks("sees", true), looks("eyes", true)] },
+    );
+    const ranked = gateway([both], { vision: [{ provider: "fake", model: "eyes" }] });
+    expect((await ranked.generate({ tier: "fast", messages: screenshot }, ctx)).model).toBe("eyes");
+
+    const without = gateway([provider]);
+    expect((await without.modelFor("fast", ctx)).vision).toBe(false);
+    await expect(
+      without.generate({ tier: "fast", messages: screenshot }, ctx),
+    ).rejects.toMatchObject({ code: "bad_request" });
   });
 });
 
@@ -387,6 +460,7 @@ describe("OpenRouter adapter", () => {
         pricing: { prompt: "0", completion: "0" },
         top_provider: { max_completion_tokens: 8_192 },
         supported_parameters: ["tools", "temperature"],
+        architecture: { input_modalities: ["text", "image"] },
       },
       {
         id: "vendor/paid",
@@ -435,7 +509,7 @@ describe("OpenRouter adapter", () => {
     return { requests, fetchImpl };
   }
 
-  it("reads the catalog: windows, prices, tool support", async () => {
+  it("reads the catalog: windows, prices, tool and image support", async () => {
     const { fetchImpl } = fakeOpenRouter();
     const models = await createOpenRouterProvider({ fetch: fetchImpl }).listModels();
     expect(models).toEqual([
@@ -444,6 +518,7 @@ describe("OpenRouter adapter", () => {
         contextWindow: 131_072,
         maxOutputTokens: 8_192,
         supportsTools: true,
+        supportsImages: true,
         pricing: { inputPerMTok: 0, outputPerMTok: 0 },
       },
       {
@@ -451,6 +526,7 @@ describe("OpenRouter adapter", () => {
         contextWindow: 200_000,
         maxOutputTokens: undefined,
         supportsTools: false,
+        supportsImages: false,
         pricing: { inputPerMTok: 3, outputPerMTok: 15 },
       },
     ]);

@@ -40,6 +40,12 @@ export interface ModelGatewayOptions {
   apiKey(ctx: TenantContext, provider: ModelProvider): Promise<string | undefined>;
   /** Tier overrides from the environment. */
   readonly tiers?: TierOverrides;
+  /**
+   * Models that read images, best first (`LLM_MODELS_VISION`); without it the
+   * primary provider's defaults (DT.10). A request with images goes to these
+   * first, then to the tier's own models that read them.
+   */
+  readonly vision?: readonly ModelRef[];
   /** Per-workspace tier overrides (Settings, later), laid over `tiers`. */
   workspaceTiers?(ctx: TenantContext): Promise<TierOverrides>;
   /** How long a call may wait in the quota queue before giving up. Default 20 s. */
@@ -111,19 +117,40 @@ export function createModelGateway(options: ModelGatewayOptions): LLMGateway {
     return resolveTiers(primary, options.tiers ?? {}, workspace);
   }
 
-  async function chainFor(tier: ModelTier, ctx: TenantContext): Promise<Candidate[]> {
-    const chain = (await tiersFor(ctx))[tier];
-    const candidates = chain.flatMap((ref): Candidate[] => {
+  function candidatesOf(chain: readonly ModelRef[]): Candidate[] {
+    return chain.flatMap((ref): Candidate[] => {
       const provider = providers.get(ref.provider);
       if (!provider) return [];
       const key = formatModelRef(ref);
       // A per-model bucket with no limits, so a 429 can pause just this model.
       return [{ ref, key, provider, limits: [...provider.rateLimits(ref.model), { bucket: key }] }];
     });
+  }
+
+  async function chainFor(tier: ModelTier, ctx: TenantContext): Promise<Candidate[]> {
+    const candidates = candidatesOf((await tiersFor(ctx))[tier]);
     if (candidates.length === 0) {
       throw new ModelError("bad_request", `No models are configured for the ${tier} tier`);
     }
     return candidates;
+  }
+
+  /**
+   * For a request with images: the vision chain first (ranked by the vision
+   * spike for pointing at things on a screen), then the tier's own models that
+   * read images.
+   */
+  async function imageChain(tierChain: readonly Candidate[]): Promise<Candidate[]> {
+    const vision = candidatesOf(
+      options.vision?.length
+        ? options.vision
+        : (primary.defaultVision ?? []).map((model) => ({ provider: primary.id, model })),
+    );
+    const all = [...vision, ...tierChain.filter((t) => !vision.some((v) => v.key === t.key))];
+    const sees = await Promise.all(
+      all.map(async (c) => (await catalog.get(c.provider, c.ref.model))?.supportsImages === true),
+    );
+    return all.filter((_, i) => sees[i]);
   }
 
   async function call(
@@ -191,7 +218,16 @@ export function createModelGateway(options: ModelGatewayOptions): LLMGateway {
 
   return {
     async generate(request, ctx) {
-      const candidates = await chainFor(request.tier, ctx);
+      let candidates = await chainFor(request.tier, ctx);
+      if (request.messages.some((m) => m.role === "user" && m.images?.length)) {
+        candidates = await imageChain(candidates);
+        if (candidates.length === 0) {
+          throw new ModelError(
+            "bad_request",
+            `No model for the ${request.tier} tier reads images; set LLM_MODELS_VISION`,
+          );
+        }
+      }
       const attempts: LLMAttempt[] = [];
       const retryAfter: number[] = [];
       const keys = new Map<string, string | undefined>();
@@ -279,6 +315,7 @@ export function createModelGateway(options: ModelGatewayOptions): LLMGateway {
         id: first.ref.model,
         contextWindow: windows.length > 0 ? Math.min(...windows) : FALLBACK_CONTEXT_WINDOW,
         maxOutputTokens: details[0]?.maxOutputTokens,
+        vision: (await imageChain(all)).length > 0,
       };
     },
   };

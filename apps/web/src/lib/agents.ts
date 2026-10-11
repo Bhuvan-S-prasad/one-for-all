@@ -144,7 +144,7 @@ export const BUILTIN_TOOLS = [
   {
     name: "desktop.*",
     label: "Use desktop apps",
-    hint: "Open files on its desktop so you can watch: reports in a word processor, sheets in a spreadsheet, folders in Files.",
+    hint: "Open files on its desktop so you can watch (reports, spreadsheets, folders), and click and type in those apps.",
     starter: false,
   },
   {
