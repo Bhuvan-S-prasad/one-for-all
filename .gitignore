@@ -55,6 +55,8 @@ playwright/.cache/
 evals/**/results/
 evals/**/reports/
 evals/**/.runs/
+# Throwaway check scripts beside the code (e.g. src/screen-check.tmp.ts)
+*.tmp.ts
 
 # ── Expo / React Native (apps/mobile) ───────────────────────
 .expo/
