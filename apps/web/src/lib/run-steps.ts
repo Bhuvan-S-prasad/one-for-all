@@ -27,6 +27,9 @@ const TOOL_LABELS: Record<string, [doing: string, done: string]> = {
   "desktop.click": ["Clicking on the desktop", "Clicked on the desktop"],
   "desktop.type": ["Typing on the desktop", "Typed on the desktop"],
   "desktop.press": ["Pressing keys", "Pressed keys"],
+  "desktop.screenshot": ["Looking at the screen", "Looked at the screen"],
+  "desktop.click_at": ["Clicking on the screen", "Clicked on the screen"],
+  "desktop.type_text": ["Typing on the screen", "Typed on the screen"],
   delegate_task: ["Handing work to another agent", "Handed work to another agent"],
   message_agent: ["Messaging another agent", "Messaged another agent"],
   schedule_task: ["Scheduling a task for later", "Scheduled a task for later"],
@@ -310,6 +313,9 @@ const DOING: Record<string, string> = {
   "desktop.click": "Clicking on the desktop",
   "desktop.type": "Typing on the desktop",
   "desktop.press": "Pressing keys",
+  "desktop.screenshot": "Looking at the screen",
+  "desktop.click_at": "Clicking on the screen",
+  "desktop.type_text": "Typing on the screen",
 };
 
 /** The live phase of an active run, from its latest events. */

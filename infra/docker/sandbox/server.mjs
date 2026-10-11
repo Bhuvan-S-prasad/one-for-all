@@ -867,11 +867,17 @@ async function stopAgent(agentId) {
   await loadState();
   const slot = slots.get(agentId);
   if (slot === undefined) return;
-  await new Promise((resolve) => {
-    const kill = spawn("pkill", ["-KILL", "-u", String(UID_BASE + slot)], { stdio: "ignore" });
-    kill.on("close", resolve);
-    kill.on("error", resolve);
-  });
+  const killAll = () =>
+    new Promise((resolve) => {
+      const kill = spawn("pkill", ["-KILL", "-u", String(UID_BASE + slot)], { stdio: "ignore" });
+      kill.on("close", resolve);
+      kill.on("error", resolve);
+    });
+  await killAll();
+  // Again shortly after: a process caught starting (still root, before it
+  // takes the agent's uid) escapes a kill by uid the first time.
+  await new Promise((r) => setTimeout(r, 300));
+  await killAll();
 }
 
 // ── Showing the agent's work ────────────────────────────────────────────────
@@ -1043,8 +1049,10 @@ else
     *.docx|*.doc|*.odt|*.rtf|*.abw) app=abiword; set -- "$full" ;;
     *.xlsx|*.xls|*.ods|*.csv|*.tsv|*.gnumeric) app=gnumeric; set -- "$full" ;;
     *.png|*.jpg|*.jpeg|*.gif|*.webp|*.bmp) app=feh; set -- --scale-down --auto-zoom --title "$name" "$full" ;;
+    *.txt|*.md|*.markdown|*.log|*.json|*.html|*.htm|*.xml|*.yaml|*.yml|*.py|*.js|*.ts|*.sh|*.ini|*.toml) app=mousepad; set -- "$full" ;;
     *)
-      if [ "$(file -b --mime-encoding -- "$full")" = binary ]; then
+      # Empty files read as "binary" to file(1): they are new text files.
+      if [ -s "$full" ] && [ "$(file -b --mime-encoding -- "$full")" = binary ]; then
         echo "No app on this computer opens $name. Send it to the person with files.send instead." >&2
         exit 5
       fi

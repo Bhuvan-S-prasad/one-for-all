@@ -36,8 +36,13 @@ import sys
 import time
 
 import pyatspi
+from gi.repository import Atspi
 
-RUN = os.environ.get("XDG_RUNTIME_DIR") or os.path.expanduser("~/.run")
+# A closed app can linger in the registry for a while; each call to it would
+# wait for D-Bus's default timeout (about 25 s). Fail fast instead.
+Atspi.set_timeout(1500, 4000)
+
+RUN =os.environ.get("XDG_RUNTIME_DIR") or os.path.expanduser("~/.run")
 REFS = os.path.join(RUN, "a11y-refs.json")
 # Bounds, so a huge app can't swamp the model or the clock.
 MAX_NODES = 3000
@@ -130,6 +135,13 @@ def apps():
         yield app
 
 
+def active_window_name():
+    """The title of the window that really has the keyboard, as X sees it."""
+    return subprocess.run(
+        ["xdotool", "getactivewindow", "getwindowname"], capture_output=True, text=True, timeout=10
+    ).stdout.strip()
+
+
 def windows():
     """Showing top-level windows: (app, index, frame); the active one first."""
     found = []
@@ -219,11 +231,20 @@ class Outline:
 def snapshot():
     outline = Outline()
     shown = windows()
-    title = ""
+    # Trust X for what is in front: the terminal and the browser publish no
+    # tree, so the tree alone would name some other window.
+    title = active_window_name()
+    in_front = next((w for w in shown if name_of(w[2]) == title), None)
+    if title and in_front is None:
+        outline.lines.append(
+            f'(In front: "{title}", which this outline can\'t read: use the shell or browser tools, '
+            "or desktop.screenshot. Click a window below to bring it forward.)"
+        )
+    if in_front is not None:
+        shown = [in_front] + [w for w in shown if w is not in_front]
     for n, (app, index, frame) in enumerate(shown):
         pid = safe(app.get_process_id, 0)
-        if n == 0:
-            title = name_of(frame)
+        if n == 0 and in_front is not None:
             outline.add(0, frame, pid, [index], extra="  ← in front")
             outline.walk(frame, pid, [index], 1)
         else:

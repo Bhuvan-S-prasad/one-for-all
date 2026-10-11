@@ -320,6 +320,48 @@ describe.skipIf(!up)("Docker sandbox (integration)", { timeout: 60_000 }, () => 
     );
   });
 
+  it("takes screenshots, clicks at fractions of the screen and types (the fallback)", async () => {
+    const name = `shot-${randomUUID().slice(0, 8)}.txt`;
+    await handle.writeFile(alice, name, "");
+    await handle.openFile(alice, name);
+    const apps = await handle.desktopApps(alice);
+    let shot = await apps.screenshot();
+    for (let i = 0; i < 20 && !shot.title.includes(name); i += 1) {
+      await new Promise((r) => setTimeout(r, 250));
+      shot = await apps.screenshot();
+    }
+    expect(shot.title).toContain(name);
+    expect([shot.width, shot.height, shot.mediaType]).toEqual([1280, 800, "image/jpeg"]);
+    const jpeg = Buffer.from(shot.data, "base64");
+    expect([jpeg[0], jpeg[1]]).toEqual([0xff, 0xd8]); // A JPEG.
+    expect(jpeg.length).toBeGreaterThan(5_000);
+    // Fractions of the screen; pixels when above 1.
+    expect((await apps.clickAt(0.5, 0.25)).clicked).toEqual([640, 200]);
+    expect((await apps.clickAt(100, 50)).clicked).toEqual([100, 50]);
+    // A click may have brought another window forward (it did: the Agent
+    // terminal, which the tree can't read, and the snapshot says so).
+    let desk = await apps.snapshot();
+    const frame = desk.outline
+      .split("\n")
+      .find((l) => /^\[\d+\] frame/.test(l) && l.includes(name));
+    if (!frame) throw new Error(`no editor window in\n${desk.outline}`);
+    if (!frame.includes("in front")) desk = await apps.click(Number(/\[(\d+)\]/.exec(frame)![1]));
+    // Type into the editor (focused through the tree) and save.
+    const lines = desk.outline.split("\n");
+    const end = lines.findIndex((l, i) => i > 0 && /^\[\d+\]/.test(l));
+    const field = /\[(\d+)\] text/.exec(lines.slice(0, end === -1 ? undefined : end).join("\n"));
+    if (!field) throw new Error(`no text field in\n${desk.outline}`);
+    await apps.click(Number(field[1]));
+    const after = await apps.typeText("typed from a screenshot");
+    expect(after.data.length).toBeGreaterThan(1_000);
+    await apps.press("ctrl+s");
+    await new Promise((r) => setTimeout(r, 500));
+    expect(new TextDecoder().decode(await handle.readFile(alice, name))).toContain(
+      "typed from a screenshot",
+    );
+    await handle.exec(alice, `pkill -u "$(id -u)" -x mousepad; rm -f ${name}`);
+  });
+
   it("streams the agent's desktop to a watcher over VNC, on no TCP port", async () => {
     const stream = await handle.desktop(alice, { control: false });
     try {

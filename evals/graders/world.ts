@@ -2,6 +2,9 @@ import {
   asId,
   findMember,
   type AgentId,
+  type ArtifactId,
+  type ArtifactRecord,
+  type ArtifactStore,
   type ChildRunResult,
   type LLMGateway,
   type RunContext,
@@ -22,7 +25,8 @@ import { builtinTools, createToolExecutor, createToolRegistry } from "@ofa/tools
 import { fixtureMailbox } from "../fixtures/mailbox";
 import { fixtureBrowser, fixtureComputer } from "../fixtures/site";
 import { fixtureFetcher, fixtureSearch } from "../fixtures/web";
-import type { ChildTranscript, EvalCase, Transcript } from "./types";
+import { EVAL_COMPUTER_AGENT, type EvalComputer, type SavedFile } from "./computer";
+import type { ChildTranscript, EvalCase, SentFile, Transcript } from "./types";
 
 // One attempt at a case: a fresh, in-memory world around the real harness,
 // tool executor and policy engine. Only the model is live; the web comes from
@@ -43,6 +47,38 @@ function memoryToolCalls(): ToolCallStore {
     async fail(_ctx, key) {
       rows.set(key, { status: "failed", result: null, untrusted: false });
     },
+  };
+}
+
+/** Artifacts in memory: what the agent sent under its reply. */
+function memoryArtifacts(sent: SentFile[]): ArtifactStore {
+  const rows = new Map<string, ArtifactRecord>();
+  return {
+    async put(c, input) {
+      const existing = rows.get(input.key);
+      if (existing) return existing;
+      const size =
+        typeof input.content === "string"
+          ? new TextEncoder().encode(input.content).length
+          : input.content.length;
+      const row: ArtifactRecord = {
+        id: asId<ArtifactId>(`00000000-0000-4000-8000-${String(rows.size + 1).padStart(12, "0")}`),
+        runId: c.runId,
+        agentId: c.agentId,
+        kind: input.kind,
+        name: input.name,
+        mimeType: input.mimeType,
+        size,
+        untrusted: input.untrusted,
+        createdAt: new Date(),
+      };
+      rows.set(input.key, row);
+      if (input.kind === "file") sent.push({ name: row.name, mimeType: row.mimeType, size });
+      return row;
+    },
+    get: async (_c, id) => [...rows.values()].find((r) => r.id === id) ?? null,
+    read: async () => null,
+    listForRun: async (_c, runId) => [...rows.values()].filter((r) => r.runId === runId),
   };
 }
 
@@ -73,13 +109,16 @@ function patientSteps(inner: StepRunner, wait: (ms: number) => Promise<void>): S
 export interface AttemptOptions {
   readonly llm: LLMGateway;
   readonly wait?: (ms: number) => Promise<void>;
+  /** The computer for cases that need one (DT.12). */
+  readonly computer?: EvalComputer | null;
 }
 
 export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): Promise<Transcript> {
   const ctx: RunContext = {
     workspaceId: asId("ws_eval"),
     userId: asId("usr_eval"),
-    agentId: asId("agent_eval"),
+    // On a real computer, the eval agent's own user there.
+    agentId: asId(evalCase.computer ? EVAL_COMPUTER_AGENT : "agent_eval"),
     runId: asId("run_eval"),
   };
   const threadId = asId<ThreadId>("thread_eval");
@@ -170,22 +209,36 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
       }
     : undefined;
 
+  const computer = evalCase.computer ? (options.computer ?? null) : null;
+  if (evalCase.computer && !computer) {
+    throw new Error(`${evalCase.id} needs the sandbox from pnpm infra:up.`);
+  }
+  let unprepared: string | null = null;
+  try {
+    await computer?.prepare(ctx, evalCase.computer?.files ?? {});
+  } catch (thrown) {
+    unprepared = `Couldn't set up the computer: ${thrown instanceof Error ? thrown.message : String(thrown)}`;
+  }
+
   const browser = evalCase.site ? fixtureBrowser(evalCase.site) : null;
   const mailbox = evalCase.mailbox ? fixtureMailbox(evalCase.mailbox) : null;
+  const sent: SentFile[] = [];
   const tools = createToolExecutor({
     registry: createToolRegistry([
       ...builtinTools({
         memory: runtime.memory,
         search: fixtureSearch(evalCase.web),
         fetcher: fixtureFetcher(evalCase.web),
-        sandbox: browser ? fixtureComputer(browser) : null,
+        sandbox: computer ? computer.sandbox : browser ? fixtureComputer(browser) : null,
         team: team ?? null,
+        vision: async (c) => (await options.llm.modelFor(evalCase.agent.modelTier, c)).vision,
       }),
       ...((mailbox?.tools ?? []) as unknown as ReturnType<typeof builtinTools>),
     ]),
     policy: createPolicyEngine({ agents: runtime.agents }),
     calls: memoryToolCalls(),
     agents: runtime.agents,
+    artifacts: memoryArtifacts(sent),
   });
 
   // The person: answers each request as soon as it is made, like someone
@@ -236,6 +289,7 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
   let result: Transcript["result"] = null;
   let error: string | null = null;
   try {
+    if (unprepared) throw new Error(unprepared);
     result = await runAgent(
       { ctx, threadId, trigger: "message" },
       deps,
@@ -243,6 +297,16 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
     );
   } catch (thrown) {
     error = thrown instanceof Error ? thrown.message : String(thrown);
+  }
+
+  let files: SavedFile[] | null = null;
+  if (computer && !unprepared) {
+    try {
+      files = await computer.collect(ctx);
+    } catch (thrown) {
+      files = [];
+      error ??= thrown instanceof Error ? thrown.message : String(thrown);
+    }
   }
 
   // The run under test's own log; each teammate's is in `children`.
@@ -277,6 +341,8 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
     memories: [...runtime.memory.records],
     site: browser ? browser.record : null,
     mail: mailbox ? mailbox.record : null,
+    files,
+    sent,
     approvals: [...approvals.records],
     children,
     durationMs: Date.now() - started,

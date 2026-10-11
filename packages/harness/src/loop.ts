@@ -11,6 +11,7 @@ import {
   type LLMGateway,
   type LLMRequest,
   type MemoryStore,
+  type LLMImage,
   type RunContext,
   type RunEventWrite,
   type RunStore,
