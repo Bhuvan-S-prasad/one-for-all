@@ -53,7 +53,32 @@ const MIME: Record<string, string> = {
   js: "text/javascript",
   sh: "text/x-shellscript",
   svg: "image/svg+xml",
+  // Files programs make (ADR-0042), sent with files.send.
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  odt: "application/vnd.oasis.opendocument.text",
+  ods: "application/vnd.oasis.opendocument.spreadsheet",
+  pdf: "application/pdf",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  zip: "application/zip",
 };
+
+/** A shared file's type: from its name, else text if it reads as text. */
+function sharedType(name: string, bytes: Uint8Array): string {
+  const ext = name.toLowerCase().split(".").pop() ?? "";
+  if (MIME[ext]) return MIME[ext];
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, 65_536));
+    return bytes.subarray(0, 65_536).includes(0) ? "application/octet-stream" : "text/plain";
+  } catch {
+    return "application/octet-stream";
+  }
+}
 
 /** A file's type from its name; plain text when unknown (everything written here is text). */
 export function mimeFor(path: string): string {
@@ -346,7 +371,7 @@ export function fileTools(sandbox: SandboxProvider | null) {
   return [
     defineTool({
       name: "files.read",
-      description: `Read a text file on your computer, ${READ_CHUNK_CHARS.toLocaleString("en")} characters at a time. Paths are relative to /workspace unless they start with / (your own folder is ~ in shell.run).`,
+      description: `Read a text file on your computer, ${READ_CHUNK_CHARS.toLocaleString("en")} characters at a time. Paths are relative to /workspace unless they start with / or ~ (your own folder).`,
       input: z.object({
         path: z.string().min(1).max(4_096),
         from: z.number().int().min(0).default(0),
@@ -373,7 +398,7 @@ export function fileTools(sandbox: SandboxProvider | null) {
     defineTool({
       name: "files.write",
       description:
-        "Write a text file on your computer, replacing it if it exists; folders are created as needed. Paths are relative to /workspace, which your other agents can read too.",
+        "Write a text file on your computer, replacing it if it exists; folders are created as needed. Paths are relative to /workspace, which your other agents can read too; ~ is your own folder.",
       input: z.object({
         path: z.string().min(1).max(4_096),
         content: z.string().max(500_000),
@@ -392,6 +417,33 @@ export function fileTools(sandbox: SandboxProvider | null) {
         });
         return {
           content: `Wrote ${path} (${new TextEncoder().encode(content).length.toLocaleString("en")} bytes).`,
+          untrusted: false,
+          ...(kept ? { artifactId: kept.id } : {}),
+        };
+      },
+    }),
+    defineTool({
+      name: "files.send",
+      description:
+        "Send a file from your computer to the person: it appears under your reply with a download button. Any type up to 10 MB (a Word or Excel file you made, an image, a PDF, a zip). Use it for files they asked for. Paths are relative to /workspace unless they start with / or ~ (your own folder).",
+      input: z.object({ path: z.string().min(1).max(4_096) }),
+      // The file goes to the person who asked, inside the app: not outbound.
+      annotations: { idempotent: true },
+      async run({ path }, ctx) {
+        const bytes = await (await computer(sandbox, ctx)).readFile(ctx.agentId, path);
+        const name = path.split("/").pop() || path;
+        const kept = await ctx.artifacts?.put({
+          key: `${ctx.idempotencyKey}:send`,
+          kind: "file",
+          name,
+          mimeType: sharedType(name, bytes),
+          content: bytes,
+          untrusted: ctx.tainted,
+        });
+        return {
+          content: kept
+            ? `Shared ${name} (${bytes.length.toLocaleString("en")} bytes); it shows under your reply.`
+            : `Couldn't share ${name} from here.`,
           untrusted: false,
           ...(kept ? { artifactId: kept.id } : {}),
         };

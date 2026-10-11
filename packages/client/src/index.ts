@@ -81,6 +81,7 @@ export {
   useCreateSkill,
   useDeleteSkill,
   useEpisodes,
+  useAgentFiles,
   useConsolidateMemory,
   useSkills,
   useUpdateSkill,

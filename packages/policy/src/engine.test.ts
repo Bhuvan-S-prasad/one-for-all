@@ -105,6 +105,11 @@ describe("the always-human list", () => {
     expect(humanOnlyKind(tool("gmail.remove_label"))).toBeNull();
     expect(humanOnlyKind(tool("github.list_roles", { readOnly: true }))).toBeNull();
     expect(humanOnlyKind(tool("browser.click", { outbound: true }))).toBeNull();
+    // Sending the person a file in the app (DT.07) isn't sharing with others;
+    // that's why it is files.send and not files.share.
+    expect(humanOnlyKind(tool("files.send", { idempotent: true }))).toBeNull();
+    expect(humanOnlyKind(tool("files.share"))).toBe("sharing");
+    expect(humanOnlyKind(tool("desktop.open", { idempotent: true }))).toBeNull();
   });
 
   it("needs a person whatever the grant and rules say", async () => {

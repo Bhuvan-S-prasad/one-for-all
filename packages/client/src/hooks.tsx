@@ -1,6 +1,7 @@
 import type {
   AddMcpServerInput,
   AgentFileInput,
+  AgentFileRoot,
   Agent,
   CreateAgentInput,
   CreatePolicyRuleInput,
@@ -580,6 +581,19 @@ export function useEpisodes(agentId?: string) {
   return useQuery({
     queryKey: queryKeys.episodes(agentId),
     queryFn: async () => (await api.listEpisodes({ agentId })).items,
+  });
+}
+
+// ── Files ───────────────────────────────────────────────────────────────────
+
+/** A folder of an agent's files, for the Files tab (DT.08). Refreshed while open. */
+export function useAgentFiles(agentId: string, root: AgentFileRoot, path: string) {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: queryKeys.agentFiles(agentId, root, path),
+    queryFn: () => api.agentFiles(agentId, root, path),
+    refetchInterval: 5_000,
+    retry: false,
   });
 }
 

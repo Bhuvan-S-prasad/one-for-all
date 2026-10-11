@@ -128,6 +128,10 @@ export function createDockerSandbox(options: DockerSandboxOptions): SandboxProvi
       return createCdpBrowser(() => cdpUrl(agentId));
     },
 
+    async openFile(agentId, path) {
+      return call<{ app: string }>("/open", { agent: agentId, path });
+    },
+
     async shareLogin(from, to, domain) {
       const cookies = await copyCookies(await cdpUrl(from, true), await cdpUrl(to, true), domain);
       return { cookies };

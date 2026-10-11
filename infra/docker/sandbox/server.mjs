@@ -17,11 +17,13 @@
 //   POST /files/write {agent, path, content: base64}
 //   POST /files/list  {agent, path}
 //   POST /browser {agent}              start the agent's desktop and browser; {path} of its CDP endpoint
+//   POST /open {agent, path}           open a file or folder in its app on the desktop
 //   POST /restart {agent?}             stop an agent's processes (or every agent's)
 //   POST /takeover {agent, on}         a person has the agent's computer (M3.07, ADR-0040):
 //                                      the agent's browser, commands and file writes are
 //                                      refused meanwhile
-//   GET  /cdp/<agent>/devtools/...     WebSocket proxy to that agent's browser
+//   GET  /cdp/<agent>                  WebSocket to that agent's browser (DevTools,
+//                                      relayed over the browser's pipe: no port)
 //   GET  /desktop/<agent>[?control=1]  upgrade to the raw VNC stream of the agent's
 //                                      desktop (ADR-0040); control needs a takeover
 //
@@ -29,7 +31,7 @@
 // processes; their environment is built from scratch.
 
 import { spawn } from "node:child_process";
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { chmod, chown, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
@@ -126,7 +128,7 @@ async function agentUser(agentId) {
     await chmod(home, 0o700);
     await chown(home, uid, uid);
   }
-  return { agentId, slot, uid, home, display: `:${100 + slot}`, cdpPort: 9300 + slot };
+  return { agentId, slot, uid, home, display: `:${100 + slot}` };
 }
 
 /** A clean environment for agent processes: never the service's own (it holds the token). */
@@ -272,7 +274,7 @@ function ensureVenv(user) {
 /** Agents whose computer a person has taken over (M3.07). In memory: a restart hands it back. */
 const takenOver = new Set();
 
-/** agentId → { user, xvfb, session, chrome, wsPath, timer, usedAt } */
+/** agentId → { user, xvfb, session, viewers, chrome, relay, timer, usedAt } */
 const desktops = new Map();
 const starting = new Map();
 const browserStarting = new Map();
@@ -282,14 +284,6 @@ function touch(entry) {
   clearTimeout(entry.timer);
   entry.timer = setTimeout(() => stopDesktop(entry.user.agentId, "idle"), IDLE_MS);
   entry.timer.unref();
-}
-
-async function cdpVersion(port) {
-  const response = await fetch(`http://127.0.0.1:${port}/json/version`, {
-    signal: AbortSignal.timeout(1_000),
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.json();
 }
 
 async function startDesktop(user) {
@@ -318,7 +312,7 @@ async function startDesktop(user) {
     session: [],
     viewers: new Set(),
     chrome: null,
-    wsPath: null,
+    relay: null,
     timer: undefined,
   };
   xvfb.on("exit", () => {
@@ -372,6 +366,13 @@ async function startDesktop(user) {
     start(["openbox", "--sm-disable"]);
     start(["pcmanfm", "--desktop", "--profile", "one-for-all"]);
     start(["tint2", "-c", "/etc/xdg/tint2/one-for-all.tint2rc"]);
+    // Ready once the desktop is drawn (up to 3 s), so a first viewer doesn't
+    // start from a black screen.
+    await runAs(
+      user,
+      "for i in $(seq 30); do xdotool search --onlyvisible --class pcmanfm >/dev/null 2>&1 && break; sleep 0.1; done",
+      [],
+    );
   } catch (error) {
     for (const child of entry.session) killGroup(child.pid);
     killGroup(xvfb.pid);
@@ -382,6 +383,215 @@ async function startDesktop(user) {
   touch(entry);
   log("desktop started", { agent: user.agentId, slot: user.slot });
   return entry;
+}
+
+// ── DevTools over a pipe ────────────────────────────────────────────────────
+//
+// Chromium speaks DevTools on its fds 3 (in) and 4 (out) with
+// --remote-debugging-pipe, so it opens no port: agents share the network,
+// and a port on 127.0.0.1 let any agent drive another's browser and read its
+// cookies (DT.14). This service is the browser's only client. It accepts the
+// app's WebSocket connections itself and relays their commands, giving each
+// command a number of its own and routing replies and page events back to the
+// connection that asked; a connection's page sessions are detached when it
+// closes.
+
+const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+/** Largest message a client may send (commands are small; this is generous). */
+const MAX_WS_MESSAGE = 16 * 1024 * 1024;
+
+/** A minimal WebSocket server end over an upgraded socket: text messages, ping, close. */
+function acceptWebSocket(req, socket, head) {
+  const key = req.headers["sec-websocket-key"];
+  if (typeof key !== "string") {
+    socket.end("HTTP/1.1 400 Bad Request\r\nconnection: close\r\n\r\n");
+    return null;
+  }
+  const accept = createHash("sha1")
+    .update(key + WS_GUID)
+    .digest("base64");
+  socket.write(
+    `HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: Upgrade\r\nsec-websocket-accept: ${accept}\r\n\r\n`,
+  );
+  socket.setNoDelay(true);
+  let buffer = head?.length ? Buffer.from(head) : Buffer.alloc(0);
+  let fragments = [];
+  let onMessage = () => {};
+  let onClose = () => {};
+  let closed = false;
+
+  const frame = (opcode, payload) => {
+    const length = payload.length;
+    const header =
+      length < 126
+        ? Buffer.from([0x80 | opcode, length])
+        : length < 65536
+          ? Buffer.from([0x80 | opcode, 126, length >> 8, length & 0xff])
+          : Buffer.concat([Buffer.from([0x80 | opcode, 127]), bigLength(length)]);
+    if (!closed && !socket.destroyed) socket.write(Buffer.concat([header, payload]));
+  };
+  const end = () => {
+    if (closed) return;
+    closed = true;
+    socket.destroy();
+    onClose();
+  };
+  const parse = () => {
+    while (buffer.length >= 2) {
+      const fin = (buffer[0] & 0x80) !== 0;
+      const opcode = buffer[0] & 0x0f;
+      const masked = (buffer[1] & 0x80) !== 0;
+      let length = buffer[1] & 0x7f;
+      let offset = 2;
+      if (length === 126) {
+        if (buffer.length < 4) return;
+        length = buffer.readUInt16BE(2);
+        offset = 4;
+      } else if (length === 127) {
+        if (buffer.length < 10) return;
+        length = Number(buffer.readBigUInt64BE(2));
+        offset = 10;
+      }
+      if (length > MAX_WS_MESSAGE) return end();
+      const maskAt = offset;
+      if (masked) offset += 4;
+      if (buffer.length < offset + length) return;
+      let payload = buffer.subarray(offset, offset + length);
+      if (masked) {
+        payload = Buffer.from(payload);
+        for (let i = 0; i < payload.length; i += 1) payload[i] ^= buffer[maskAt + (i & 3)];
+      }
+      buffer = buffer.subarray(offset + length);
+      if (opcode === 0x8) {
+        frame(0x8, Buffer.alloc(0));
+        return end();
+      }
+      if (opcode === 0x9) frame(0xa, payload);
+      else if (opcode === 0x0 || opcode === 0x1 || opcode === 0x2) {
+        fragments.push(payload);
+        if (fin) {
+          const message = Buffer.concat(fragments).toString("utf8");
+          fragments = [];
+          onMessage(message);
+        }
+      }
+    }
+  };
+  socket.on("data", (chunk) => {
+    buffer = buffer.length ? Buffer.concat([buffer, chunk]) : chunk;
+    parse();
+  });
+  socket.on("close", end);
+  socket.on("error", end);
+  if (buffer.length) queueMicrotask(parse);
+  return {
+    onMessage: (handler) => void (onMessage = handler),
+    onClose: (handler) => void (onClose = handler),
+    send: (text) => frame(0x1, Buffer.from(text, "utf8")),
+    close: end,
+  };
+}
+
+function bigLength(length) {
+  const bytes = Buffer.alloc(8);
+  bytes.writeBigUInt64BE(BigInt(length));
+  return bytes;
+}
+
+/** The relay between one Chromium's pipe and the app's DevTools connections. */
+function cdpRelay(chrome) {
+  const toChrome = chrome.stdio[3];
+  const fromChrome = chrome.stdio[4];
+  let nextId = 1;
+  /** relay id → { client, id, method } or { resolve } for the relay's own calls. */
+  const pending = new Map();
+  /** page session → the connection that attached it. */
+  const owners = new Map();
+  const clients = new Set();
+  let partial = [];
+
+  const write = (message) => toChrome.write(`${JSON.stringify(message)}\0`);
+  const deliver = (message) => {
+    if (message.id !== undefined) {
+      const waiting = pending.get(message.id);
+      if (!waiting) return;
+      pending.delete(message.id);
+      if (waiting.resolve) return waiting.resolve(message);
+      if (!clients.has(waiting.client)) return;
+      if (waiting.method === "Target.attachToTarget" && message.result?.sessionId) {
+        owners.set(message.result.sessionId, waiting.client);
+      }
+      return waiting.client.send(JSON.stringify({ ...message, id: waiting.id }));
+    }
+    // A page's own events go to the connection that attached to the page.
+    if (message.sessionId) return owners.get(message.sessionId)?.send(JSON.stringify(message));
+    if (message.method === "Target.detachedFromTarget") {
+      const owner = owners.get(message.params?.sessionId);
+      owners.delete(message.params?.sessionId);
+      return owner?.send(JSON.stringify(message));
+    }
+    // Browser-wide events (targets coming and going) go to everyone.
+    const text = JSON.stringify(message);
+    for (const client of clients) client.send(text);
+  };
+  fromChrome.on("data", (chunk) => {
+    let start = 0;
+    for (let at = chunk.indexOf(0); at !== -1; at = chunk.indexOf(0, start)) {
+      partial.push(chunk.subarray(start, at));
+      const text = Buffer.concat(partial).toString("utf8");
+      partial = [];
+      start = at + 1;
+      try {
+        deliver(JSON.parse(text));
+      } catch {
+        // Not JSON: nothing to route.
+      }
+    }
+    if (start < chunk.length) partial.push(chunk.subarray(start));
+  });
+  toChrome.on("error", () => {});
+  fromChrome.on("error", () => {});
+
+  return {
+    /** A command of the relay's own, e.g. to see that the browser answers. */
+    call(method, params = {}) {
+      return new Promise((resolve) => {
+        const id = nextId++;
+        pending.set(id, { resolve });
+        write({ id, method, params });
+      });
+    },
+    attach(client) {
+      clients.add(client);
+      client.onMessage((text) => {
+        let message;
+        try {
+          message = JSON.parse(text);
+        } catch {
+          return;
+        }
+        if (typeof message?.id !== "number" || typeof message.method !== "string") return;
+        const id = nextId++;
+        pending.set(id, { client, id: message.id, method: message.method });
+        write({ ...message, id });
+      });
+      client.onClose(() => {
+        clients.delete(client);
+        for (const [sessionId, owner] of owners) {
+          if (owner !== client) continue;
+          owners.delete(sessionId);
+          write({ id: nextId++, method: "Target.detachFromTarget", params: { sessionId } });
+        }
+      });
+    },
+    /** The browser went away: close every connection. */
+    close() {
+      for (const client of [...clients]) client.close();
+      clients.clear();
+      pending.clear();
+      owners.clear();
+    },
+  };
 }
 
 async function startBrowser(entry) {
@@ -396,8 +606,8 @@ async function startBrowser(entry) {
   );
   const flags = [
     `--user-data-dir=${profile}`,
-    `--remote-debugging-port=${user.cdpPort}`,
-    "--remote-debugging-address=127.0.0.1",
+    // DevTools on fds 3 and 4, never a port (above).
+    "--remote-debugging-pipe",
     // The container is the boundary; Chromium's own sandbox needs privileges
     // this container does not have.
     "--no-sandbox",
@@ -422,30 +632,33 @@ async function startBrowser(entry) {
     ...(PROXY ? [`--proxy-server=${PROXY}`, "--proxy-bypass-list=<-loopback>"] : []),
     "about:blank",
   ];
-  const chrome = spawnAs(user, ["chromium", ...flags], { stdio: "ignore" });
+  const chrome = spawnAs(user, ["chromium", ...flags], {
+    stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"],
+  });
+  const relay = cdpRelay(chrome);
   entry.chrome = chrome;
-  entry.wsPath = null;
+  entry.relay = null;
   chrome.on("exit", () => {
+    relay.close();
     if (entry.chrome !== chrome) return;
     entry.chrome = null;
-    entry.wsPath = null;
+    entry.relay = null;
   });
 
   // Up to about 30 s: a busy host (or a Raspberry Pi) can take 20 s to start it.
-  for (let i = 0; i < 120; i += 1) {
-    try {
-      const info = await cdpVersion(user.cdpPort);
-      entry.wsPath = new URL(info.webSocketDebuggerUrl).pathname;
-      touch(entry);
-      log("browser started", { agent: user.agentId, slot: user.slot });
-      return entry;
-    } catch {
-      if (chrome.exitCode !== null) break;
-      await new Promise((r) => setTimeout(r, 250));
-    }
+  const answered = await Promise.race([
+    relay.call("Browser.getVersion").then((reply) => !reply.error),
+    new Promise((resolve) => chrome.once("exit", () => resolve(false))),
+    new Promise((resolve) => setTimeout(() => resolve(false), 30_000)),
+  ]);
+  if (!answered || chrome.exitCode !== null) {
+    killGroup(chrome.pid);
+    throw httpError(503, "The browser did not start");
   }
-  killGroup(chrome.pid);
-  throw httpError(503, "The browser did not start");
+  entry.relay = relay;
+  touch(entry);
+  log("browser started", { agent: user.agentId, slot: user.slot });
+  return entry;
 }
 
 /** The agent's desktop, started if needed. */
@@ -471,7 +684,7 @@ async function desktopFor(agentId) {
 /** The agent's desktop with its browser running. */
 async function browserFor(agentId) {
   const entry = await desktopFor(agentId);
-  if (entry.chrome && entry.chrome.exitCode === null && entry.wsPath) return entry;
+  if (entry.chrome && entry.chrome.exitCode === null && entry.relay) return entry;
   if (!browserStarting.has(agentId)) {
     browserStarting.set(
       agentId,
@@ -629,7 +842,24 @@ async function upgradeDesktop(req, socket, head, url) {
 }
 
 /** Stop everything an agent's user is running. */
+/**
+ * agentId → how many times its computer was restarted. A command that began
+ * before a restart must not start after it (DT.06): each step checks.
+ */
+const restarts = new Map();
+const restartCount = (agentId) => restarts.get(agentId) ?? 0;
+
+/** What a command returns when a restart stopped it before it began. */
+const STOPPED_BY_RESTART = {
+  exitCode: 128,
+  stdout: "",
+  stderr: "The computer was restarted before this command ran.\n",
+  truncated: false,
+  timedOut: false,
+};
+
 async function stopAgent(agentId) {
+  restarts.set(agentId, restartCount(agentId) + 1);
   stopDesktop(agentId, "restart");
   await loadState();
   const slot = slots.get(agentId);
@@ -639,6 +869,114 @@ async function stopAgent(agentId) {
     kill.on("close", resolve);
     kill.on("error", resolve);
   });
+}
+
+// ── Showing the agent's work ────────────────────────────────────────────────
+//
+// While an agent's desktop is up, its commands run in its own terminal there
+// (DT.06): each in a new tab of tmux session "work", shown in an "Agent
+// terminal" window brought to the front, apart from the person's terminal
+// ("main"). `one-for-all-run` shows the command and its output as it runs and
+// saves both streams and the exit code, so the tool gets what an unseen run
+// would return: same shell, folder, umask, closed stdin, limits and caps.
+
+/** Tabs kept in the agent's terminal; older ones close. */
+const WORK_TABS = 8;
+
+/** A shell snippet that raises the agent's window of this class, if it has one. */
+function bringToFront(windowClass) {
+  return `xdotool search --onlyvisible --class ${windowClass} 2>/dev/null | tail -n 1 | xargs -r xdotool windowactivate 2>/dev/null; true`;
+}
+
+async function execShown(user, command, cwd, timeoutMs, generation) {
+  const id = randomUUID().slice(0, 12);
+  const dir = `${user.home}/.run/work/${id}`;
+  const prepared = await runAs(
+    user,
+    'umask 077 && mkdir -p -- "$1" && printf %s "$2" >"$1/cwd" && cat >"$1/command"',
+    [dir, cwd],
+    { input: command },
+  );
+  if (restartCount(user.agentId) !== generation) return STOPPED_BY_RESTART;
+  if (prepared.exitCode !== 0)
+    return runAs(user, 'cd -- "$1" && umask 007 && eval "$2"', [cwd, command], { timeoutMs });
+
+  if (restartCount(user.agentId) !== generation) return STOPPED_BY_RESTART;
+  // A new tab named after the command; the window opens (or comes forward).
+  const name =
+    (command.trim().split(/\s+/)[0] ?? "command").replace(/[^\w.-]/g, "").slice(0, 20) || "command";
+  const opened = await runAs(
+    user,
+    [
+      "tmux has-session -t work 2>/dev/null || tmux new-session -d -s work -x 110 -y 30",
+      // No tab, no run: only then may it run unseen instead (exit 9).
+      'tmux new-window -t work: -n "$2" one-for-all-run "$1" || exit 9',
+      // Oldest first by window id (tab numbers get reused), never the newest.
+      `tmux list-windows -t work -F '#{window_id}' | tr -d @ | sort -n | head -n -${WORK_TABS} | sed 's/^/@/' | xargs -r -n 1 tmux kill-window -t`,
+      '[ -n "$(tmux list-clients -t work)" ] || (setsid one-for-all-terminal --agent >/dev/null 2>&1 &)',
+      "sleep 0.3",
+      bringToFront("AgentTerminal"),
+    ].join("; "),
+    [dir, name],
+  );
+  if (opened.exitCode === 9) {
+    void runAs(user, 'rm -rf -- "$1"', [dir]).catch(() => {});
+    if (restartCount(user.agentId) !== generation) return STOPPED_BY_RESTART;
+    return runAs(user, 'cd -- "$1" && umask 007 && eval "$2"', [cwd, command], { timeoutMs });
+  }
+
+  if (restartCount(user.agentId) !== generation) {
+    return { ...STOPPED_BY_RESTART, stderr: "The computer was restarted as this command began.\n" };
+  }
+  // Wait for it to finish, or for its runner to vanish (the tab closed), or
+  // never to start; on the time limit, stop everything it started.
+  const waited = await runAs(
+    user,
+    [
+      // Pauses use bash's own read on a private fifo: no sleep processes.
+      'i=0; mkfifo -- "$1/tick" 2>/dev/null',
+      'while [ ! -e "$1/exit" ]; do',
+      '  if [ -e "$1/runner" ]; then kill -0 "$(cat -- "$1/runner")" 2>/dev/null || exit 2',
+      // Not started after 5 s: cancel, unless it started just now. The runner
+      // records itself before it checks for the mark, and this marks before
+      // it checks again, so the command runs once, here or unseen.
+      '  elif [ $i -gt 50 ]; then touch "$1/cancel"; [ -e "$1/runner" ] || exit 3; fi',
+      '  i=$((i + 1)); read -rt 0.1 _ <>"$1/tick"',
+      "done",
+    ].join("\n"),
+    [dir],
+    { timeoutMs },
+  );
+  if (waited.exitCode === 3) {
+    // The tab never ran it: run it unseen instead.
+    void runAs(user, 'rm -rf -- "$1"', [dir]).catch(() => {});
+    if (restartCount(user.agentId) !== generation) return STOPPED_BY_RESTART;
+    return runAs(user, 'cd -- "$1" && umask 007 && eval "$2"', [cwd, command], { timeoutMs });
+  }
+  if (waited.timedOut || waited.exitCode === 2) {
+    await runAs(
+      user,
+      'kill -KILL -- "-$(cat -- "$1/pid")" 2>/dev/null; for i in $(seq 30); do [ -e "$1/exit" ] && break; sleep 0.1; done',
+      [dir],
+    );
+  }
+  const [stdout, stderr, exit] = await Promise.all([
+    runAs(user, 'cat -- "$1/stdout" 2>/dev/null', [dir]),
+    runAs(user, 'cat -- "$1/stderr" 2>/dev/null', [dir]),
+    runAs(user, 'cat -- "$1/exit" 2>/dev/null', [dir]),
+  ]);
+  void runAs(user, 'rm -rf -- "$1"', [dir]).catch(() => {});
+  const code = Number.parseInt(exit.stdout.trim(), 10);
+  const cutOff = !waited.timedOut && Number.isNaN(code);
+  return {
+    exitCode: waited.timedOut ? 128 : cutOff ? 1 : code,
+    stdout: stdout.stdout,
+    stderr: cutOff
+      ? `${stderr.stdout}(Its terminal tab was closed before the command finished.)\n`
+      : stderr.stdout,
+    truncated: stdout.truncated || stderr.truncated,
+    timedOut: waited.timedOut,
+  };
 }
 
 // ── HTTP ────────────────────────────────────────────────────────────────────
@@ -684,6 +1022,41 @@ function textArg(value, name, max = 100_000) {
   return value;
 }
 
+/**
+ * Opens $2 (relative to $1) in the app for its type, as the agent, and prints
+ * the app's name. Exit 4: no such file; 5: no app here opens it.
+ */
+const OPEN_SCRIPT = `
+p=$2; case "$p" in "~") p=$HOME ;; "~/"*) p="$HOME/\${p:2}" ;; esac
+cd -- "$1" || exit 1
+[ -e "$p" ] || { echo "There is no $2 on this computer." >&2; exit 4; }
+full=$(realpath -- "$p")
+name=$(basename -- "$full")
+if [ -d "$full" ]; then
+  app=pcmanfm; set -- "$full"
+else
+  case "\${name,,}" in
+    *.docx|*.doc|*.odt|*.rtf|*.abw) app=abiword; set -- "$full" ;;
+    *.xlsx|*.xls|*.ods|*.csv|*.tsv|*.gnumeric) app=gnumeric; set -- "$full" ;;
+    *.png|*.jpg|*.jpeg|*.gif|*.webp|*.bmp) app=feh; set -- --scale-down --auto-zoom --title "$name" "$full" ;;
+    *)
+      if [ "$(file -b --mime-encoding -- "$full")" = binary ]; then
+        echo "No app on this computer opens $name. Send it to the person with files.send instead." >&2
+        exit 5
+      fi
+      app=mousepad; set -- "$full" ;;
+  esac
+fi
+(setsid "$app" "$@" >/dev/null 2>&1 &)
+echo "$app"
+`;
+
+/**
+ * Sets $p to the path in $2, with a leading ~ as the agent's own home, as the
+ * shell would read it; relative paths stay relative to the workspace.
+ */
+const PATH_ARG = 'p=$2; case "$p" in "~") p=$HOME ;; "~/"*) p="$HOME/${p:2}" ;; esac; cd -- "$1"';
+
 /** While a person has the computer (ADR-0040), the agent's own requests wait. */
 function refuseIfTakenOver(body) {
   if (takenOver.has(body.agent) && body.person !== true) {
@@ -701,7 +1074,13 @@ const routes = {
       Math.max(Number(body.timeoutMs) || DEFAULT_TIMEOUT, 1_000),
       MAX_TIMEOUT,
     );
+    const generation = restartCount(user.agentId);
     await ensureVenv(user);
+    if (restartCount(user.agentId) !== generation) return STOPPED_BY_RESTART;
+    // While its desktop is up, the agent's command runs where people can see it.
+    if (desktops.has(user.agentId)) {
+      return execShown(user, command, cwd, timeoutMs, generation);
+    }
     // `cd` happens as the agent, so it can only enter what the agent may.
     const result = await runAs(user, 'cd -- "$1" && umask 007 && eval "$2"', [cwd, command], {
       timeoutMs,
@@ -712,7 +1091,7 @@ const routes = {
   async "POST /files/read"(body) {
     const user = await agentUser(body.agent);
     const path = textArg(body.path, "path", 4096);
-    const result = await runAs(user, 'cd -- "$1" && cat -- "$2"', [WORKSPACE, path], {
+    const result = await runAs(user, `${PATH_ARG} && cat -- "$p"`, [WORKSPACE, path], {
       binary: true,
     });
     if (result.exitCode !== 0)
@@ -730,7 +1109,7 @@ const routes = {
     if (content.length > MAX_FILE) throw httpError(413, "The file is larger than 10 MB");
     const result = await runAs(
       user,
-      'cd -- "$1" && umask 007 && mkdir -p -- "$(dirname -- "$2")" && cat > "$2"',
+      `${PATH_ARG} && umask 007 && mkdir -p -- "$(dirname -- "$p")" && cat > "$p"`,
       [WORKSPACE, path],
       { input: content },
     );
@@ -744,7 +1123,7 @@ const routes = {
     const path = body.path === undefined ? "." : textArg(body.path, "path", 4096);
     const result = await runAs(
       user,
-      'cd -- "$1" && find "$2" -mindepth 1 -maxdepth 1 -printf "%y\\t%s\\t%T@\\t%f\\n" | head -n 1001',
+      `${PATH_ARG} && find "$p" -mindepth 1 -maxdepth 1 -printf "%y\\t%s\\t%T@\\t%f\\n" | head -n 1001`,
       [WORKSPACE, path],
     );
     if (result.exitCode !== 0)
@@ -766,7 +1145,29 @@ const routes = {
     // While a person has taken over, only the person's own connection gets in.
     refuseIfTakenOver(body);
     const entry = await browserFor(body.agent);
-    return { path: `/cdp/${entry.user.agentId}${entry.wsPath}` };
+    // The agent's browsing comes to the front, as its commands do (DT.06).
+    if (body.person !== true) {
+      void runAs(entry.user, bringToFront("chromium"), []).catch(() => {});
+    }
+    return { path: `/cdp/${entry.user.agentId}` };
+  },
+
+  async "POST /open"(body) {
+    // A file or folder in its app on the desktop (ADR-0043). Only apps that
+    // send nothing anywhere: never the browser, which could fetch what a
+    // file points at.
+    refuseIfTakenOver(body);
+    const user = await agentUser(body.agent);
+    const path = textArg(body.path, "path", 4096);
+    await desktopFor(user.agentId);
+    const result = await runAs(user, OPEN_SCRIPT, [WORKSPACE, path]);
+    if (result.exitCode !== 0) {
+      throw httpError(
+        result.exitCode === 4 ? 404 : 400,
+        result.stderr.trim() || "Couldn't open it",
+      );
+    }
+    return { app: result.stdout.trim() };
   },
 
   async "POST /takeover"(body) {
@@ -807,47 +1208,24 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-// CDP over WebSocket: /cdp/<agent>/devtools/... is piped to that agent's
-// browser, which listens on 127.0.0.1 only. Host and Origin are rewritten,
-// since Chromium accepts DevTools connections only from local pages.
+// DevTools over WebSocket: /cdp/<agent> joins that agent's browser relay
+// (above). The browser itself listens nowhere.
 server.on("upgrade", (req, socket, head) => {
   const url = new URL(req.url ?? "/", "http://sandbox");
   if (url.pathname.startsWith("/desktop/")) return void upgradeDesktop(req, socket, head, url);
-  const match = /^\/cdp\/([A-Za-z0-9-]{1,64})(\/devtools\/.+)$/.exec(url.pathname);
+  const match = /^\/cdp\/([A-Za-z0-9-]{1,64})(\/.*)?$/.exec(url.pathname);
   const entry = match ? desktops.get(match[1]) : undefined;
-  if (!authorized(req, url) || !entry?.chrome || entry.chrome.exitCode !== null) {
+  if (!authorized(req, url) || !entry?.relay) {
     socket.end(`HTTP/1.1 ${authorized(req, url) ? "404 Not Found" : "401 Unauthorized"}\r\n\r\n`);
     return;
   }
+  const client = acceptWebSocket(req, socket, head);
+  if (!client) return;
   touch(entry);
-  const upstream = net.connect(entry.user.cdpPort, "127.0.0.1", () => {
-    const headers = Object.entries(req.headers)
-      .filter(([name]) => !["host", "origin", "authorization"].includes(name))
-      .map(([name, value]) => `${name}: ${Array.isArray(value) ? value.join(", ") : value}`);
-    upstream.write(
-      [
-        `GET ${match[2]} HTTP/1.1`,
-        `host: 127.0.0.1:${entry.user.cdpPort}`,
-        ...headers,
-        "",
-        "",
-      ].join("\r\n"),
-    );
-    if (head.length) upstream.write(head);
-    upstream.pipe(socket);
-    socket.pipe(upstream);
-  });
+  entry.relay.attach(client);
   // An open connection (someone watching, a long tool call) keeps the browser in use.
   const keepAlive = setInterval(() => touch(entry), 60_000);
-  const close = () => {
-    clearInterval(keepAlive);
-    upstream.destroy();
-    socket.destroy();
-  };
-  upstream.on("error", close);
-  upstream.on("close", close);
-  socket.on("error", close);
-  socket.on("close", close);
+  socket.on("close", () => clearInterval(keepAlive));
 });
 
 // Volumes come up owned by whoever created them: put the layout right.

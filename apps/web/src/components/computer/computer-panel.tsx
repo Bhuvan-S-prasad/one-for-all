@@ -2,6 +2,7 @@ import type { Agent } from "@ofa/contracts";
 import { Hand, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { DesktopView } from "@/components/computer/desktop-view";
+import { FilesView } from "@/components/computer/files-view";
 import { ScreenView } from "@/components/computer/screen-view";
 import { cn } from "@/lib/utils";
 
@@ -110,10 +111,15 @@ export function ComputerPanel({
         </div>
       </div>
       {/* The desktop is 1280×800: keep its shape. */}
-      <ComputerView agent={agent} control={false} className="aspect-16/10 w-full" />
+      <ComputerView agent={agent} control={false} className="aspect-16/10 w-full shrink-0" />
       <p className="text-[12.5px] leading-snug text-muted-foreground">
-        {`${agent.name}'s computer, live: its browser, terminal and files. Take over to sign in or do something yourself; ${agent.name} waits until you hand it back.`}
+        {`Live. Take over to sign in or do something yourself; ${agent.name} waits until you hand it back.`}
       </p>
+      {/* Its files under the screen, so both are in view (DT.08). */}
+      <section aria-label={`${agent.name}'s files`} className="flex min-h-0 flex-1 flex-col gap-2">
+        <h3 className="eyebrow text-muted-foreground">Files</h3>
+        <FilesView agent={agent} className="min-h-0 flex-1" />
+      </section>
     </aside>
   );
 }

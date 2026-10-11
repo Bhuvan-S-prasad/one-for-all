@@ -63,6 +63,10 @@ function fakeSandbox(overrides: Partial<SandboxHandle> = {}) {
       truncated: false,
     }),
     browser: async () => browser,
+    openFile: async (agentId, path) => (
+      calls.push(["openFile", agentId, path]),
+      { app: "abiword" }
+    ),
     shareLogin: async () => ({ cookies: 0 }),
     screen: async () => {
       throw new Error("no screen in tests");
@@ -179,6 +183,44 @@ describe("computer tools", () => {
     expect((await byName(files, "files.list").run({ path: "." } as never, ctx)).content).toBe(
       "data/\nb.txt  1,200 B  2026-10-04 10:00",
     );
+  });
+
+  it("send a file the agent made to the person, as a file card with its type", async () => {
+    const docx = new Uint8Array([0x50, 0x4b, 3, 4, 0, 0]);
+    const { provider } = fakeSandbox({
+      readFile: async (_agent, path) =>
+        path.endsWith(".docx") ? docx : new TextEncoder().encode("plain notes"),
+    });
+    const put: unknown[] = [];
+    const withArtifacts: ToolRunContext = {
+      ...ctx,
+      tainted: true,
+      artifacts: {
+        put: async (input: unknown) => (put.push(input), { id: "art-1" }) as never,
+      } as never,
+    };
+    const share = byName(fileTools(provider), "files.send");
+    expect(share.annotations).toEqual({ idempotent: true }); // To the person: not outbound.
+    const result = await share.run({ path: "reports/ai-agents.docx" } as never, withArtifacts);
+    expect(result).toEqual({
+      content: "Shared ai-agents.docx (6 bytes); it shows under your reply.",
+      untrusted: false,
+      artifactId: "art-1",
+    });
+    expect(put).toEqual([
+      {
+        key: "run-1:3:send",
+        kind: "file",
+        name: "ai-agents.docx",
+        mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        content: docx,
+        untrusted: true, // The run read outside content.
+      },
+    ]);
+    // An unknown name: text if it reads as text, otherwise bytes.
+    put.length = 0;
+    await share.run({ path: "notes" } as never, withArtifacts);
+    expect(put[0]).toMatchObject({ mimeType: "text/plain" });
   });
 
   it("don't dump binary files on the model", async () => {

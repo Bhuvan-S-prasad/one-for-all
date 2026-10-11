@@ -21,6 +21,8 @@ const TOOL_LABELS: Record<string, [doing: string, done: string]> = {
   "files.read": ["Reading a file", "Read a file"],
   "files.write": ["Writing a file", "Wrote a file"],
   "files.list": ["Looking in a folder", "Looked in a folder"],
+  "files.send": ["Sending you a file", "Sent you a file"],
+  "desktop.open": ["Opening it on the desktop", "Opened it on the desktop"],
   delegate_task: ["Handing work to another agent", "Handed work to another agent"],
   message_agent: ["Messaging another agent", "Messaged another agent"],
   schedule_task: ["Scheduling a task for later", "Scheduled a task for later"],
@@ -58,7 +60,9 @@ function detailFor(tool: string, args: unknown): string | null {
   if (tool === "browser.type" && typeof a.text === "string") return `“${a.text.slice(0, 40)}”`;
   if (tool === "browser.press" && typeof a.key === "string") return a.key;
   if (tool === "shell.run" && typeof a.command === "string") return a.command.slice(0, 80);
-  if (tool.startsWith("files.") && typeof a.path === "string") return a.path;
+  if ((tool.startsWith("files.") || tool === "desktop.open") && typeof a.path === "string") {
+    return a.path;
+  }
   return null;
 }
 
@@ -294,6 +298,8 @@ const DOING: Record<string, string> = {
   "files.read": "Reading",
   "files.write": "Writing",
   "files.list": "Looking in",
+  "files.send": "Sending",
+  "desktop.open": "Opening",
 };
 
 /** The live phase of an active run, from its latest events. */

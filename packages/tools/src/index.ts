@@ -30,6 +30,7 @@ export {
   shellTool,
   useSavedLoginTool,
 } from "./builtins/computer";
+export { desktopTools } from "./builtins/desktop";
 export { htmlTitle, htmlToText } from "./builtins/html";
 export { recallTool, rememberTool, todoTool } from "./builtins/memory";
 export {

@@ -1,0 +1,28 @@
+#!/bin/bash
+# One of the agent's commands, run in its terminal on the desktop (DT.06):
+# shown as it runs, and captured exactly as an unseen run would be. The
+# sandbox service writes <dir>/command and <dir>/cwd, opens a terminal tab
+# running this, and waits for <dir>/exit (or for this runner to vanish); it
+# then reads <dir>/stdout and <dir>/stderr. Stdin is closed, as unseen.
+dir=$1
+echo $$ >"$dir/runner"
+# Too late: the service gave up waiting and ran it unseen instead.
+[ -e "$dir/cancel" ] && exit 0
+command=$(cat -- "$dir/command")
+cwd=$(cat -- "$dir/cwd")
+
+printf '\033[38;2;212;255;58m❯\033[0m \033[1m%s\033[0m\n' "$command"
+mkfifo -- "$dir/out" "$dir/err"
+tee -- "$dir/stdout" <"$dir/out" &
+out=$!
+tee -- "$dir/stderr" <"$dir/err" >&2 &
+err=$!
+# Its own session, so a time limit can stop everything it started.
+setsid bash -c 'echo $$ >"$3/pid"; cd -- "$1" && umask 007 && eval "$2"' \
+  bash "$cwd" "$command" "$dir" </dev/null >"$dir/out" 2>"$dir/err" &
+wait $!
+code=$?
+wait "$out" "$err"
+echo "$code" >"$dir/exit"
+[ "$code" -eq 0 ] || printf '\033[38;2;168;168;173m(exit %s)\033[0m\n' "$code"
+exec bash

@@ -136,6 +136,12 @@ export interface SandboxHandle {
   listFiles(agentId: AgentId, path: string): Promise<{ entries: FileEntry[]; truncated: boolean }>;
   browser(agentId: AgentId): Promise<AgentBrowser>;
   /**
+   * Open a file or folder in its app on the agent's desktop, starting the
+   * desktop if needed (ADR-0043): documents in AbiWord, spreadsheets in
+   * Gnumeric, images in a viewer, text in the editor, folders in Files.
+   */
+  openFile(agentId: AgentId, path: string): Promise<{ app: string }>;
+  /**
    * Copy one site's cookies (its logins) from one agent's browser to
    * another's. Only on a person's explicit request (ADR-0010).
    */

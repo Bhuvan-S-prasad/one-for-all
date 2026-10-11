@@ -28,6 +28,7 @@ FROM node:${NODE_VERSION}-bookworm-slim
 # The light desktop on each agent's screen (ADR-0040): openbox (windows),
 # tint2 (the dock), pcmanfm (desktop icons and files), xterm with tmux (the
 # terminal), mousepad (text), abiword and gnumeric (Word and Excel files),
+# feh (images),
 # x11vnc (watching), xdotool and scrot (input and screenshots, ADR-0041),
 # and dbus with the AT-SPI bridge (the accessibility tree of desktop apps).
 #
@@ -38,7 +39,7 @@ RUN apt-get update \
     bash ca-certificates chromium curl file fonts-dejavu-core fonts-liberation \
     fonts-noto-core git jq less procps python3 tini unzip util-linux xauth xvfb zip \
     python3-docx python3-openpyxl python3-pip python3-venv \
-    abiword adwaita-icon-theme at-spi2-core dbus gnumeric libatk-adaptor mousepad \
+    abiword adwaita-icon-theme at-spi2-core dbus feh gnumeric libatk-adaptor mousepad \
     openbox pcmanfm python3-pyatspi scrot tint2 tmux x11vnc xdotool xterm \
   && rm -rf /var/lib/apt/lists/* \
   && dbus-uuidgen --ensure=/etc/machine-id
@@ -53,7 +54,7 @@ COPY desktop/pcmanfm.conf desktop/desktop-items-0.conf /etc/xdg/pcmanfm/one-for-
 COPY desktop/libfm.conf /etc/xdg/libfm/libfm.conf
 COPY desktop/tmux.conf /etc/tmux.conf
 COPY desktop/applications/ /usr/share/applications/
-COPY --chmod=755 desktop/one-for-all-terminal desktop/one-for-all-browser /usr/local/bin/
+COPY --chmod=755 desktop/one-for-all-terminal desktop/one-for-all-browser desktop/one-for-all-run /usr/local/bin/
 COPY desktop/wallpaper.mjs /tmp/wallpaper.mjs
 RUN mkdir -p /usr/share/backgrounds \
   && node /tmp/wallpaper.mjs /usr/share/backgrounds/one-for-all.png \

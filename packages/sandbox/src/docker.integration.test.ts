@@ -128,6 +128,20 @@ describe.skipIf(!up)("Docker sandbox (integration)", { timeout: 60_000 }, () => 
     ]);
   });
 
+  it("reads ~ in file paths as the agent's own home", async () => {
+    await handle.writeFile(alice, "~/notes/tilde.txt", "mine\n");
+    expect((await handle.exec(alice, "cat ~/notes/tilde.txt")).stdout).toBe("mine\n");
+    expect(new TextDecoder().decode(await handle.readFile(alice, "~/notes/tilde.txt"))).toBe(
+      "mine\n",
+    );
+    const { entries } = await handle.listFiles(alice, "~/notes");
+    expect(entries.map((e) => e.name)).toContain("tilde.txt");
+    // Another agent's ~ is its own.
+    await expect(handle.readFile(bob, "~/notes/tilde.txt")).rejects.toMatchObject({
+      code: "not_found",
+    });
+  });
+
   it("can't write outside what the agent owns", async () => {
     await expect(handle.writeFile(alice, "/etc/evil", "x")).rejects.toBeInstanceOf(SandboxError);
     expect((await handle.exec(alice, "touch /opt/sandbox/x")).exitCode).not.toBe(0);
@@ -208,6 +222,70 @@ describe.skipIf(!up)("Docker sandbox (integration)", { timeout: 60_000 }, () => 
     expect(peek.exitCode).not.toBe(0);
   });
 
+  it("shows the agent's commands in its terminal while its desktop is up, with the same results", async () => {
+    await handle.browser(alice); // The desktop is up.
+    const marker = `shown-${randomUUID().slice(0, 8)}`;
+    const result = await handle.exec(alice, `echo ${marker}; echo oops >&2; cat; exit 3`);
+    // Same as an unseen run: both streams apart, the exit code, stdin closed.
+    expect(result).toMatchObject({
+      exitCode: 3,
+      stdout: `${marker}\n`,
+      stderr: "oops\n",
+      timedOut: false,
+    });
+    // And it is on screen: a tab in the agent's terminal, which is open.
+    const screen = await handle.exec(
+      alice,
+      "for w in $(tmux list-windows -t work -F '#{window_id}'); do tmux capture-pane -p -t \"$w\"; done; xdotool search --onlyvisible --class AgentTerminal | wc -l",
+    );
+    expect(screen.stdout).toContain(marker);
+    expect(screen.stdout.trim().split("\n").at(-1)).not.toBe("0");
+    // The folder and time limit behave as before.
+    expect((await handle.exec(alice, "pwd")).stdout).toBe("/workspace\n");
+    const slow = await handle.exec(alice, "sleep 30 & sleep 30", { timeoutMs: 1_500 });
+    expect(slow.timedOut).toBe(true);
+    expect(
+      (await handle.exec(alice, 'pgrep -c -u "$(id -u)" -x sleep || true')).stdout.trim(),
+    ).toBe("0");
+  });
+
+  it("opens files in their apps on the agent's desktop, never in the browser", async () => {
+    const made = await handle.exec(
+      alice,
+      [
+        "mkdir -p open-check && cd open-check",
+        "python3 -c \"import docx, openpyxl; d = docx.Document(); d.add_heading('Report', 0); d.save('r.docx'); b = openpyxl.Workbook(); b.active.append(['a', 1]); b.save('s.xlsx')\"",
+        "printf 'notes' > n.txt; printf '<img src=https://example.com/x>' > p.html",
+        "printf '%%PDF-1.4\\n\\000\\001' > d.pdf",
+        "scrot i.png", // A real image: the desktop itself.
+      ].join(" && "),
+    );
+    expect(made.exitCode).toBe(0);
+    const apps: Record<string, string> = {};
+    for (const name of ["r.docx", "s.xlsx", "n.txt", "p.html", "i.png", "."]) {
+      apps[name] = (await handle.openFile(alice, `open-check/${name}`)).app;
+    }
+    expect(apps).toEqual({
+      "r.docx": "abiword",
+      "s.xlsx": "gnumeric",
+      "n.txt": "mousepad",
+      "p.html": "mousepad", // As text: the browser would fetch what it points at.
+      "i.png": "feh",
+      ".": "pcmanfm",
+    });
+    await expect(handle.openFile(alice, "open-check/d.pdf")).rejects.toMatchObject({
+      code: "bad_request",
+    });
+    await expect(handle.openFile(alice, "open-check/missing.docx")).rejects.toMatchObject({
+      code: "not_found",
+    });
+    const running = await handle.exec(
+      alice,
+      'sleep 1; for p in abiword gnumeric mousepad feh; do pgrep -u "$(id -u)" -x "$p" >/dev/null && echo "$p"; done; pkill -u "$(id -u)" -x abiword; pkill -u "$(id -u)" -x gnumeric; pkill -u "$(id -u)" -x mousepad; pkill -u "$(id -u)" -x feh; rm -rf /workspace/open-check',
+    );
+    expect(running.stdout.trim().split("\n")).toEqual(["abiword", "gnumeric", "mousepad", "feh"]);
+  });
+
   it("streams the agent's desktop to a watcher over VNC, on no TCP port", async () => {
     const stream = await handle.desktop(alice, { control: false });
     try {
@@ -243,6 +321,34 @@ describe.skipIf(!up)("Docker sandbox (integration)", { timeout: 60_000 }, () => 
       await handle.takeover(alice, false);
     }
     expect((await handle.exec(alice, "echo back")).stdout).toBe("back\n");
+  });
+
+  it("opens no DevTools port another agent could use: the browser is driven over a pipe", async () => {
+    await handle.browser(alice);
+    const uid = (await handle.exec(alice, "id -u")).stdout.trim();
+    // No listening TCP socket at all owned by Alice's processes, and no
+    // debugging port on her browser's command line.
+    const probe = await handle.exec(
+      bob,
+      [
+        `ps -o args= -u ${uid} | grep -c -- '--remote-debugging-port' || true`,
+        `ps -o args= -u ${uid} | grep -c -- '--remote-debugging-pipe' || true`,
+        "cat /proc/net/tcp /proc/net/tcp6 | awk '$4 == \"0A\"' | wc -l",
+      ].join("; "),
+    );
+    const [port, pipe, listening] = probe.stdout.trim().split("\n").map(Number);
+    expect(port).toBe(0);
+    expect(pipe).toBeGreaterThan(0);
+    // Only the sandbox service's own port (and Docker's DNS) listen.
+    expect(listening).toBeLessThanOrEqual(2);
+    // Two connections at once (an agent's tool and a person's view) each get their own replies.
+    const [a, b] = await Promise.all([handle.browser(alice), handle.browser(alice)]);
+    const [one, two] = await Promise.all([
+      a.open(`data:text/html,${encodeURIComponent("<title>One</title><h1>One</h1>")}`),
+      b.snapshot(),
+    ]);
+    expect(one.title).toBe("One");
+    expect(two.url).toBeTruthy();
   });
 
   it("can't open private addresses in the browser either", async () => {
@@ -298,6 +404,8 @@ describe.skipIf(!up)("Docker sandbox (integration)", { timeout: 60_000 }, () => 
     void handle.exec(bob, "sleep 120", { timeoutMs: 130_000 }).catch(() => {});
     await new Promise((r) => setTimeout(r, 500));
     await handle.restart(bob);
-    expect((await handle.exec(bob, "pgrep -c sleep || true")).stdout.trim()).toBe("0");
+    expect((await handle.exec(bob, 'pgrep -c -u "$(id -u)" -x sleep || true')).stdout.trim()).toBe(
+      "0",
+    );
   });
 });

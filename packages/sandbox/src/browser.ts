@@ -35,17 +35,23 @@ const KEYS: Record<string, { code: string; keyCode: number; text?: string }> = {
 };
 export const BROWSER_KEYS = Object.keys(KEYS);
 
-/** The agent's browser, given the WebSocket address of its CDP endpoint. */
-export function createCdpBrowser(endpoint: () => Promise<string>): AgentBrowser {
-  async function withPage<T>(work: (page: Page) => Promise<T>): Promise<T> {
-    const cdp = await connectCdp(await endpoint());
+/**
+ * Attach to the agent's current tab (the last one opened), opening one if
+ * there is none. Chromium's own pages (chrome://, devtools://) don't count.
+ * A tab can be swapped out just as the browser starts ("Not attached to an
+ * active page"), so on that error the tabs are listed again, once.
+ */
+export async function attachToTab(cdp: CdpConnection): Promise<string> {
+  for (let attempt = 0; ; attempt += 1) {
     try {
       const { targetInfos } = await cdp.send<{
         targetInfos: { targetId: string; type: string; url: string }[];
       }>("Target.getTargets");
-      const pages = targetInfos.filter((t) => t.type === "page" && !t.url.startsWith("devtools:"));
+      const tabs = targetInfos.filter(
+        (t) => t.type === "page" && !/^(chrome|devtools):/.test(t.url),
+      );
       const targetId =
-        pages.at(-1)?.targetId ??
+        tabs.at(-1)?.targetId ??
         (await cdp.send<{ targetId: string }>("Target.createTarget", { url: "about:blank" }))
           .targetId;
       const { sessionId } = await cdp.send<{ sessionId: string }>("Target.attachToTarget", {
@@ -53,7 +59,21 @@ export function createCdpBrowser(endpoint: () => Promise<string>): AgentBrowser 
         flatten: true,
       });
       await cdp.send("Page.enable", {}, sessionId);
-      return await work({ cdp, session: sessionId });
+      return sessionId;
+    } catch (error) {
+      const gone = error instanceof Error && /not attached|no target/i.test(error.message);
+      if (!gone || attempt >= 1) throw error;
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  }
+}
+
+/** The agent's browser, given the WebSocket address of its CDP endpoint. */
+export function createCdpBrowser(endpoint: () => Promise<string>): AgentBrowser {
+  async function withPage<T>(work: (page: Page) => Promise<T>): Promise<T> {
+    const cdp = await connectCdp(await endpoint());
+    try {
+      return await work({ cdp, session: await attachToTab(cdp) });
     } finally {
       cdp.close();
     }

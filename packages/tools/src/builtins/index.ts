@@ -8,6 +8,7 @@ import type {
 import type { ToolDefinition } from "../define";
 import { artifactsReadTool } from "./artifacts";
 import { browserTools, fileTools, shellTool, useSavedLoginTool } from "./computer";
+import { desktopTools } from "./desktop";
 import { recallTool, rememberTool, todoTool } from "./memory";
 import { remindMeTool, scheduleTaskTool } from "./schedule";
 import { runSkillTool, saveSkillTool } from "./skills";
@@ -47,6 +48,7 @@ export function builtinTools(deps: BuiltinToolDeps): ToolDefinition<never>[] {
     useSavedLoginTool(deps.sandbox ?? null),
     shellTool(deps.sandbox ?? null),
     ...fileTools(deps.sandbox ?? null),
+    ...desktopTools(deps.sandbox ?? null),
     artifactsReadTool(),
     loadToolkitTool(),
     delegateTaskTool(deps.team ?? null),

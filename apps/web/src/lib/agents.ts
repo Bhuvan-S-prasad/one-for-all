@@ -138,7 +138,13 @@ export const BUILTIN_TOOLS = [
   {
     name: "files.*",
     label: "Work with files",
-    hint: "Read and write files on its computer, shared with your other agents.",
+    hint: "Read and write files on its computer, shared with your other agents, and send you files it made (Word, Excel, images).",
+    starter: false,
+  },
+  {
+    name: "desktop.*",
+    label: "Use desktop apps",
+    hint: "Open files on its desktop so you can watch: reports in a word processor, sheets in a spreadsheet, folders in Files.",
     starter: false,
   },
   {

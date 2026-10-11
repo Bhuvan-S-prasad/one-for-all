@@ -10,6 +10,7 @@ import { clientIp } from "./lib/request";
 import { hostCheck, originCheck } from "./middleware/perimeter";
 import { requestContext } from "./middleware/request-context";
 import { requireSession, requireTenant } from "./middleware/session";
+import { agentFileRoutes } from "./routes/agent-files";
 import { agentRoutes } from "./routes/agents";
 import { approvalRoutes } from "./routes/approvals";
 import { connectionCallbackRoutes, mcpServerRoutes } from "./routes/mcp-servers";
@@ -96,6 +97,7 @@ export function createApp(container: Container): App {
   app.route("/api/setup", setupRoutes({ ...container, limiter: authLimiter }));
   app.route("/api/session", sessionRoutes({ ...container, limiter: authLimiter }));
   app.route("/api/agents", agentRoutes(container));
+  app.route("/api/agents", agentFileRoutes(container));
   app.route("/api/threads", threadRoutes(container));
   app.route("/api/runs", runRoutes(container));
   app.route("/api/approvals", approvalRoutes(container));
