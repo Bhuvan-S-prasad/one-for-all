@@ -1,0 +1,31 @@
+{
+  "_metadata": { "major_version": 2, "minor_version": 1 },
+  "display_information": {
+    "name": "One-for-All",
+    "description": "Lets your One-for-All agents read and post in Slack as you, within what you allow.",
+    "background_color": "#0e0e0f"
+  },
+  "oauth_config": {
+    "redirect_urls": ["https://YOUR-ADDRESS/api/connections/callback"],
+    "scopes": {
+      "user": [
+        "channels:history",
+        "channels:read",
+        "groups:history",
+        "groups:read",
+        "im:history",
+        "im:read",
+        "mpim:history",
+        "mpim:read",
+        "search:read.public",
+        "users:read",
+        "chat:write"
+      ]
+    }
+  },
+  "settings": {
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

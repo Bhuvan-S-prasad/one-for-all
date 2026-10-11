@@ -97,7 +97,6 @@ npm-debug.log*
 pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-docs/
 
 # ── Tool caches ─────────────────────────────────────────────
 # graft code-index cache (local only)
