@@ -5,6 +5,7 @@ import {
   type PageSnapshot,
   type SandboxHandle,
   type SandboxProvider,
+  SandboxError,
 } from "@ofa/core";
 import { z } from "zod";
 import { defineTool, type ToolRunContext } from "../define";
@@ -67,6 +68,22 @@ const MIME: Record<string, string> = {
   webp: "image/webp",
   zip: "application/zip",
 };
+
+/** Files that aren't text: files.write would make a broken one under that name. */
+const NOT_TEXT = new Set([
+  "docx",
+  "xlsx",
+  "pptx",
+  "odt",
+  "ods",
+  "pdf",
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "zip",
+]);
 
 /** A shared file's type: from its name, else text if it reads as text. */
 function sharedType(name: string, bytes: Uint8Array): string {
@@ -398,13 +415,21 @@ export function fileTools(sandbox: SandboxProvider | null) {
     defineTool({
       name: "files.write",
       description:
-        "Write a text file on your computer, replacing it if it exists; folders are created as needed. Paths are relative to /workspace, which your other agents can read too; ~ is your own folder.",
+        "Write a text file on your computer, replacing it if it exists; folders are created as needed. Only text: make Word and Excel files with Python (python-docx, openpyxl) through shell.run. Paths are relative to /workspace, which your other agents can read too; ~ is your own folder.",
       input: z.object({
         path: z.string().min(1).max(4_096),
         content: z.string().max(500_000),
       }),
       annotations: { idempotent: true },
       async run({ path, content }, ctx) {
+        const ext = path.toLowerCase().split(".").pop() ?? "";
+        if (NOT_TEXT.has(ext)) {
+          // Text under a .docx name opens nowhere, and its file card would claim to be Word.
+          throw new SandboxError(
+            "bad_request",
+            `files.write writes text, so it can't make a .${ext} file. Make Word and Excel files with Python (python-docx, openpyxl) through shell.run, then send them with files.send.`,
+          );
+        }
         await (await computer(sandbox, ctx)).writeFile(ctx.agentId, path, content);
         // A copy for the person, shown as a file card with the reply (M3.06).
         const kept = await ctx.artifacts?.put({

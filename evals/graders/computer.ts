@@ -32,9 +32,10 @@ export const EVAL_COMPUTER_AGENT = "eval-desk";
 
 const MARK = "~/.eval-start";
 
-// Runs as the agent, so it reads and removes only what that agent may; files
-// in the workspace are removed only when the agent owns them and made them
-// during the attempt.
+// Runs as the agent, so it reads and removes only what that agent may. Files
+// changed during the attempt are read whoever made them (an agent writing
+// over a file keeps its owner); in the workspace, only the ones the agent
+// owns, so made, are removed.
 const COLLECT = String.raw`
 import json, os
 home = os.path.expanduser("~")
@@ -78,7 +79,7 @@ for root in ("/workspace", home):
                 st = os.stat(p)
             except OSError:
                 continue
-            if st.st_uid != uid or st.st_mtime_ns <= start or len(out) >= 200:
+            if st.st_mtime_ns <= start or len(out) >= 200:
                 continue
             shown = "~" + p[len(home):] if p.startswith(home + "/") else p
             ext = os.path.splitext(name)[1].lower()
@@ -89,7 +90,7 @@ for root in ("/workspace", home):
                 kind = ext[1:] if ext in (".docx", ".xlsx") else "other"
                 entry.update(kind=kind, text=None, error=f"{type(e).__name__}: {e}"[:300])
             out.append(entry)
-            if root == "/workspace":
+            if root == "/workspace" and st.st_uid == uid:
                 made.append(p)
 
 for p in made:

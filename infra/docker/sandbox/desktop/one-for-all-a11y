@@ -63,6 +63,9 @@ TEXTUAL = {"label", "heading", "status bar", "caption", "alert", "notification",
 # Controls whose value matters even without a label.
 FIELDS = {"text", "entry", "password text", "spin button", "table cell", "combo box"}
 CONTAINERS_WITH_TEXT = {"document frame", "document text", "document web", "text"}
+# Where typing without clear adds to the end. Not table cells: ctrl+End there
+# jumps to a sheet's last cell.
+APPENDABLE = {"text", "entry", "document text", "document frame"}
 
 
 class Stale(Exception):
@@ -94,11 +97,19 @@ def name_of(node):
 
 
 def text_of(node, limit):
+    """The control's text with its line breaks kept: a list in an editor is lines, not one run of words."""
     def read():
         text = node.queryText()
-        return text.getText(0, min(text.characterCount, limit))
+        shown = text.getText(0, min(text.characterCount, limit))
+        return shown + ("…" if text.characterCount > limit else "")
 
-    return re.sub(r"\s+", " ", safe(read, "") or "").strip()
+    text = re.sub(r"[ \t\r\f\v]+", " ", safe(read, "") or "")
+    return re.sub(r" *\n *", "\n", text).strip(" ")
+
+
+def quoted(value):
+    """A value as the model reads it: in quotes, line breaks as \\n."""
+    return json.dumps(value, ensure_ascii=False)
 
 
 def flags(node):
@@ -140,6 +151,24 @@ def active_window_name():
     return subprocess.run(
         ["xdotool", "getactivewindow", "getwindowname"], capture_output=True, text=True, timeout=10
     ).stdout.strip()
+
+
+def active_window_pid():
+    out = subprocess.run(
+        ["xdotool", "getactivewindow", "getwindowpid"], capture_output=True, text=True, timeout=10
+    ).stdout.strip()
+    return int(out) if out.isdigit() else None
+
+
+def in_front_of(shown, title):
+    """The window X says is in front: by title, else (a dialog X names after its app) by process."""
+    match = next((w for w in shown if name_of(w[2]) == title), None)
+    if match is not None or not title:
+        return match
+    pid = active_window_pid()
+    same = [w for w in shown if pid is not None and safe(w[0].get_process_id, -1) == pid]
+    dialogs = [w for w in same if role_of(w[2]) in ("dialog", "alert", "file chooser")]
+    return (dialogs or same or [None])[0]
 
 
 def windows():
@@ -208,7 +237,7 @@ class Outline:
                     continue
             if role in CONTAINERS_WITH_TEXT:
                 value = text_of(child, TEXT_PREVIEW)
-                extra = f' value="{value}"' if value else ""
+                extra = f" value={quoted(value)}" if value.strip() else ""
                 self.add(depth, child, pid, here, extra=extra)
                 self.walk(child, pid, here, depth + 1)
             elif role in ACTIONABLE and not name_of(child) and role not in FIELDS:
@@ -217,7 +246,7 @@ class Outline:
                 self.walk(child, pid, here, depth)
             elif role in ACTIONABLE:
                 value = text_of(child, 80) if role in FIELDS else ""
-                extra = f' value="{value}"' if value and value != name_of(child) else ""
+                extra = f" value={quoted(value)}" if value.strip() and value != name_of(child) else ""
                 self.add(depth, child, pid, here, extra=extra)
                 if role in ("menu", "combo box", "list item", "tree item", "page tab"):
                     self.walk(child, pid, here, depth + 1)
@@ -234,7 +263,7 @@ def snapshot():
     # Trust X for what is in front: the terminal and the browser publish no
     # tree, so the tree alone would name some other window.
     title = active_window_name()
-    in_front = next((w for w in shown if name_of(w[2]) == title), None)
+    in_front = in_front_of(shown, title)
     if title and in_front is None:
         outline.lines.append(
             f'(In front: "{title}", which this outline can\'t read: use the shell or browser tools, '
@@ -282,6 +311,19 @@ def frame_of(app, entry):
 
 def xdotool(*args):
     subprocess.run(["xdotool", *args], check=False, capture_output=True, timeout=10)
+
+
+def type_keys(text):
+    """Type text, pressing Return for each line break: xdotool's own newline is a key editors ignore."""
+    for i, line in enumerate(text.replace("\r\n", "\n").split("\n")):
+        if i:
+            xdotool("key", "--clearmodifiers", "Return")
+        if line:
+            # Its own time limit: a long text at 2 ms a key outlasts the usual 10 s.
+            subprocess.run(
+                ["xdotool", "type", "--delay", "2", "--", line],
+                check=False, capture_output=True, timeout=45,
+            )
 
 
 def bring_forward(app, entry):
@@ -392,7 +434,7 @@ def main():
         if action == "type_text":
             text = str(request.get("text", ""))[:10_000]
             if text:
-                xdotool("type", "--delay", "2", "--", text)
+                type_keys(text)
             if request.get("submit"):
                 xdotool("key", "--clearmodifiers", "Return")
             time.sleep(0.6)
@@ -418,8 +460,12 @@ def main():
                 # As a person would: some fields refill themselves on focus,
                 # so clearing through the tree first doesn't stick.
                 xdotool("key", "--clearmodifiers", "ctrl+a", "BackSpace")
+            elif entry["role"] in APPENDABLE:
+                # Otherwise the text goes at the end, as in browser.type: the
+                # model can't see where the caret happens to be.
+                xdotool("key", "--clearmodifiers", "ctrl+End")
             if text:
-                xdotool("type", "--delay", "2", "--", text)
+                type_keys(text)
             if request.get("submit"):
                 xdotool("key", "--clearmodifiers", "Return")
         elif action == "press":

@@ -294,6 +294,9 @@ importers:
       '@ofa/policy':
         specifier: workspace:*
         version: link:../packages/policy
+      '@ofa/sandbox':
+        specifier: workspace:*
+        version: link:../packages/sandbox
       '@ofa/tools':
         specifier: workspace:*
         version: link:../packages/tools

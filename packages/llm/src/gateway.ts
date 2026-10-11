@@ -7,6 +7,7 @@ import type {
   ModelInfo,
   ModelTier,
   TenantContext,
+  ToolDescriptor,
 } from "@ofa/core";
 import { generateText } from "ai";
 import { createCircuitBreaker, type CircuitBreaker } from "./breaker";
@@ -71,6 +72,27 @@ const BREAKER_FAILURES: readonly ModelErrorCode[] = ["unavailable", "timeout", "
 function costUsd(details: ModelDetails | undefined, input: number, output: number): number {
   if (!details) return 0;
   return (input * details.pricing.inputPerMTok + output * details.pricing.outputPerMTok) / 1e6;
+}
+
+/** Three or more unknown-token markers in a row. */
+const BROKE_DOWN = /(?:<unk>\s*){3,}/;
+
+/** A tool call cut off mid-stream: arguments that aren't JSON, or none at all (below). */
+const CUT_OFF = /JSONParseError|JSON parsing failed|as if cut off/;
+
+/**
+ * `{}` for a tool that requires arguments: what some free models send when
+ * the stream drops a long argument (a script to write), rather than broken JSON.
+ */
+function emptyCall(input: unknown, tool: ToolDescriptor | undefined): boolean {
+  const required = (tool?.inputSchema as { required?: unknown } | undefined)?.required;
+  return (
+    Array.isArray(required) &&
+    required.length > 0 &&
+    typeof input === "object" &&
+    input !== null &&
+    Object.keys(input).length === 0
+  );
 }
 
 function errorText(error: unknown): string {
@@ -189,7 +211,12 @@ export function createModelGateway(options: ModelGatewayOptions): LLMGateway {
           ? `Unknown tool: ${toolCall.toolName}`
           : "invalid" in toolCall && toolCall.invalid
             ? `Invalid arguments: ${errorText(toolCall.error)}`
-            : undefined;
+            : emptyCall(
+                  toolCall.input,
+                  request.tools?.find((t) => t.name === name),
+                )
+              ? "Invalid arguments: the call came with none, as if cut off; send it again with its arguments"
+              : undefined;
       return {
         id: toolCall.toolCallId,
         name: name ?? toolCall.toolName,
@@ -201,6 +228,11 @@ export function createModelGateway(options: ModelGatewayOptions): LLMGateway {
       // Some free models answer with nothing at all. Treat it as a failure so
       // the next model in the chain gets a chance.
       throw new ModelError("unknown", "The model returned an empty response");
+    }
+    if (BROKE_DOWN.test(result.text)) {
+      // A run of unknown-token markers: the model's output fell apart
+      // mid-answer (seen from a free vision model). Not an answer to show.
+      throw new ModelError("unknown", "The model's answer broke down into <unk> tokens");
     }
 
     const inputTokens = result.usage.inputTokens ?? 0;
@@ -232,6 +264,7 @@ export function createModelGateway(options: ModelGatewayOptions): LLMGateway {
       const retryAfter: number[] = [];
       const keys = new Map<string, string | undefined>();
       const skipProviders = new Set<string>();
+      let cutOff: Omit<LLMResponse, "attempts"> | undefined;
 
       const record = (candidate: Candidate, failure: ClassifiedError, apiKey?: string) => {
         attempts.push({
@@ -282,6 +315,18 @@ export function createModelGateway(options: ModelGatewayOptions): LLMGateway {
         try {
           const response = await call(candidate, request, apiKey);
           breaker.success(modelKey);
+          if (response.toolCalls.some((c) => c.invalid && CUT_OFF.test(c.invalid))) {
+            // A tool call whose arguments aren't even JSON, or are missing:
+            // the stream broke mid-call (free models do this on long arguments, like a script
+            // to write). The next model gets a chance; this answer is kept in
+            // case none does better.
+            record(candidate, {
+              code: "unknown",
+              message: "Its tool call was cut off (no usable arguments)",
+            });
+            cutOff ??= response;
+            continue;
+          }
           return { ...response, attempts };
         } catch (error) {
           const failure = classifyModelError(error, clock.now());
@@ -298,6 +343,7 @@ export function createModelGateway(options: ModelGatewayOptions): LLMGateway {
           if (failure.code === "auth") skipProviders.add(provider.id);
         }
       }
+      if (cutOff) return { ...cutOff, attempts };
       throw finalError(attempts, retryAfter);
     },
 

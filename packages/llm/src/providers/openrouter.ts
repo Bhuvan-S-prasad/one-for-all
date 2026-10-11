@@ -41,9 +41,11 @@ export const OPENROUTER_DEFAULT_TIERS: TierModels = {
 export const OPENROUTER_DEFAULT_VISION: readonly string[] = [
   // Spike on 2026-10-11 (DT.10), clicks on a real desktop screenshot in
   // fractions of the screen: 4 of 5, then 2, 2 and 2 (one 2 px off); all six
-  // free vision models read the screen right.
-  "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+  // free vision models read the screen right. dots leads since the end-to-end
+  // check (DT.13): nemotron, the best at pointing, put its reasoning in its
+  // answers and once broke down into <unk> tokens; it stays next in line.
   "dots-studio/dots-3-note-preview:free",
+  "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
   "google/gemma-4-26b-a4b-it:free",
   "google/gemma-4-31b-it:free",
 ];

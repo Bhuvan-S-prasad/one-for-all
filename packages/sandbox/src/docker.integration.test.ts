@@ -288,7 +288,7 @@ describe.skipIf(!up)("Docker sandbox (integration)", { timeout: 60_000 }, () => 
 
   it("reads and drives desktop apps through their accessibility tree", async () => {
     const name = `a11y-${randomUUID().slice(0, 8)}.txt`;
-    await handle.writeFile(alice, name, "first draft");
+    await handle.writeFile(alice, name, "first draft\nsecond line");
     expect((await handle.openFile(alice, name)).app).toBe("mousepad");
     const apps = await handle.desktopApps(alice);
     let snapshot = await apps.snapshot();
@@ -298,8 +298,14 @@ describe.skipIf(!up)("Docker sandbox (integration)", { timeout: 60_000 }, () => 
     }
     expect(snapshot.title).toContain(name);
     expect(snapshot.outline).toContain('menu "File"');
-    const field = /\[(\d+)\] text \(focused\) value="first draft"/.exec(snapshot.outline);
+    // Line breaks stay visible: an editor's text is lines, not one run of words.
+    const field = /\[(\d+)\] text \(focused\) value="first draft\\nsecond line"/.exec(
+      snapshot.outline,
+    );
     if (!field) throw new Error(`no text field in\n${snapshot.outline}`);
+    // Without clear, typing adds to the end, wherever the caret was.
+    const added = await apps.type(Number(field[1]), "\nthird line");
+    expect(added.outline).toContain(String.raw`value="first draft\nsecond line\nthird line"`);
     // Replace the text and save with the keyboard, as a person would.
     const typed = await apps.type(Number(field[1]), "edited through the tree", { clear: true });
     expect(typed.outline).toContain('value="edited through the tree"');

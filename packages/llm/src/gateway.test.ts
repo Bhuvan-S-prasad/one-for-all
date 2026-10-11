@@ -231,6 +231,36 @@ describe("model gateway", () => {
     expect(JSON.stringify(prompt[3])).toContain("web_search");
   });
 
+  it("replays a call whose arguments didn't parse as {}, so the next request isn't refused", async () => {
+    const provider = fakeProvider("fake", { m: say("Done") });
+    await gateway([provider]).generate(
+      {
+        tier: "fast",
+        tools: [webSearch],
+        messages: [
+          { role: "user", content: "Search" },
+          {
+            role: "assistant",
+            content: "",
+            // What a stream cut off mid-call leaves: the raw text, not an object.
+            toolCalls: [{ id: "c1", name: "web.search", args: '{"query": "x"' }],
+          },
+          {
+            role: "tool",
+            toolCallId: "c1",
+            toolName: "web.search",
+            content: "Error: Invalid arguments",
+          },
+        ],
+      },
+      ctx,
+    );
+    const assistant = (provider.calls[0]?.options.prompt ?? [])[1] as {
+      content: { type: string; input?: unknown }[];
+    };
+    expect(assistant.content.find((p) => p.type === "tool-call")?.input).toEqual({});
+  });
+
   it("falls back to the next model when one is down, and records the attempt", async () => {
     const provider = fakeProvider("fake", { down: fail(503), up: say("Fallback") });
     const response = await gateway([provider]).generate(
@@ -246,6 +276,66 @@ describe("model gateway", () => {
         message: "HTTP 503 (key [REDACTED])",
       },
     ]);
+  });
+
+  it("falls back when a model's tool call is cut off, and keeps it if none does better", async () => {
+    const cutOff = async () => ({
+      content: [
+        {
+          type: "tool-call" as const,
+          toolCallId: "c",
+          toolName: "web_search",
+          input: '{"query": "x"',
+        },
+      ],
+      finishReason: { unified: "tool-calls" as const, raw: "tool_calls" },
+      usage: usage(1, 1),
+      warnings: [],
+    });
+    const provider = fakeProvider("fake", { cut: cutOff, up: say("ok") });
+    const response = await gateway([provider]).generate(
+      { tier: "standard", messages: user("x"), tools: [webSearch] },
+      ctx,
+    );
+    expect(response.model).toBe("up");
+    expect(response.attempts[0]?.message).toMatch(/cut off/);
+
+    const only = fakeProvider("fake", { cut: cutOff });
+    const kept = await gateway([only]).generate(
+      { tier: "standard", messages: user("x"), tools: [webSearch] },
+      ctx,
+    );
+    expect(kept.model).toBe("cut");
+    expect(kept.toolCalls[0]?.invalid).toMatch(/Invalid arguments/);
+
+    // The other way a long argument gets lost: no arguments at all.
+    const emptied = fakeProvider("fake", {
+      empty: async () => ({
+        ...(await cutOff()),
+        content: [
+          { type: "tool-call" as const, toolCallId: "c", toolName: "web_search", input: "{}" },
+        ],
+      }),
+      up: say("ok"),
+    });
+    const after = await gateway([emptied]).generate(
+      { tier: "standard", messages: user("x"), tools: [webSearch] },
+      ctx,
+    );
+    expect(after.model).toBe("up");
+  });
+
+  it("falls back when a model's answer breaks down into <unk> tokens", async () => {
+    const provider = fakeProvider("fake", {
+      broken: say(`Done: the list now ends with "oat${"<unk>".repeat(40)}`),
+      up: say("Done: the list now ends with oat milk."),
+    });
+    const response = await gateway([provider]).generate(
+      { tier: "standard", messages: user("x") },
+      ctx,
+    );
+    expect(response.model).toBe("up");
+    expect(response.attempts[0]?.message).toMatch(/<unk>/);
   });
 
   it("falls back when a model returns nothing at all", async () => {

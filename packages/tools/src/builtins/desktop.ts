@@ -99,7 +99,7 @@ export function desktopTools(
   const clickHelp =
     "Click at a point on your desktop, as fractions of the screen from the top-left corner (x 0.5, y 0.5 is the middle), from your latest screenshot. Set double for a double-click. Returns a new screenshot.";
   const typeHelp =
-    "Type text into whatever has the keyboard on your desktop (click the field first), and press Enter afterwards if submit is set. Returns a new screenshot. Never type passwords.";
+    "Type text into whatever has the keyboard on your desktop, at its cursor (click the spot first), and press Enter afterwards if submit is set. Only for apps desktop.snapshot can't read: for a field the snapshot lists, use desktop.type, which puts the text at its end or replaces it. Returns a new screenshot. Never type passwords.";
   // What an app shows may come from outside (a document, a web page saved to a file).
   const shown = (snapshot: DesktopSnapshot) => ({
     content: desktopText(snapshot),
@@ -158,7 +158,7 @@ export function desktopTools(
     defineTool({
       name: "desktop.type",
       description:
-        "Type text into a field on your desktop by its number. Set clear to replace what is there, and submit to press Enter afterwards. In Gnumeric, type a cell like B3 into the cell-name field with submit, then type the value into the edit line with submit. Never type passwords.",
+        "Type text into a field on your desktop by its number. Without clear, the text goes at the end of what is there (start it with \\n to add a new line); set clear to replace it all. Set submit to press Enter afterwards. In Gnumeric, type a cell like B3 into the cell-name field with clear and submit, then the value into the edit line with clear and submit. Never type passwords.",
       input: z.object({
         ref,
         text: z.string().max(5_000),

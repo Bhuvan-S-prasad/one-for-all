@@ -183,6 +183,14 @@ describe("computer tools", () => {
     );
     expect(written).toEqual({ content: "Wrote notes/a.md (2 bytes).", untrusted: false });
     expect(calls).toContainEqual(["write", "agent-1", "notes/a.md", "é"]);
+    // Text under an Office name would be a broken file: refused, with the way that works.
+    await expect(
+      byName(files, "files.write").run(
+        { path: "reports/r.docx", content: "# Report" } as never,
+        ctx,
+      ),
+    ).rejects.toMatchObject({ code: "bad_request", message: expect.stringMatching(/python-docx/) });
+    expect(calls.filter((c) => c[0] === "write")).toHaveLength(1);
     expect((await byName(files, "files.list").run({ path: "." } as never, ctx)).content).toBe(
       "data/\nb.txt  1,200 B  2026-10-04 10:00",
     );

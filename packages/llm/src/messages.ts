@@ -51,6 +51,9 @@ export function toToolSet(tools: readonly ToolDescriptor[], names: ToolNames): T
   );
 }
 
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
 export function toModelMessages(messages: readonly LLMMessage[], names: ToolNames): ModelMessage[] {
   return messages.map((message): ModelMessage => {
     switch (message.role) {
@@ -81,7 +84,11 @@ export function toModelMessages(messages: readonly LLMMessage[], names: ToolName
               type: "tool-call" as const,
               toolCallId: call.id,
               toolName: names.wire(call.name),
-              input: call.args,
+              // A call whose arguments didn't parse (cut off mid-stream) is
+              // replayed as {}: providers refuse a whole request whose history
+              // holds arguments that aren't a JSON object. Its tool result
+              // already tells the model what was wrong.
+              input: isObject(call.args) ? call.args : {},
             })),
           ],
         };

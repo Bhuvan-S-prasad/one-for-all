@@ -56,6 +56,9 @@ COPY desktop/tmux.conf /etc/tmux.conf
 COPY desktop/applications/ /usr/share/applications/
 COPY --chmod=755 desktop/one-for-all-terminal desktop/one-for-all-browser desktop/one-for-all-run \
   desktop/one-for-all-a11y /usr/local/bin/
+COPY desktop/90_one-for-all.gschema.override /usr/share/glib-2.0/schemas/
+# The compiler sits in an arch folder (x86_64 or aarch64), off the PATH.
+RUN /usr/lib/*/glib-2.0/glib-compile-schemas /usr/share/glib-2.0/schemas
 COPY desktop/wallpaper.mjs /tmp/wallpaper.mjs
 RUN mkdir -p /usr/share/backgrounds \
   && node /tmp/wallpaper.mjs /usr/share/backgrounds/one-for-all.png \
