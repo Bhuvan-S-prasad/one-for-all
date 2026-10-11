@@ -1,5 +1,6 @@
 import type {
   MemoryStore,
+  RunContext,
   SandboxProvider,
   Scheduler,
   SkillLibrary,
@@ -8,6 +9,7 @@ import type {
 import type { ToolDefinition } from "../define";
 import { artifactsReadTool } from "./artifacts";
 import { browserTools, fileTools, shellTool, useSavedLoginTool } from "./computer";
+import { desktopTools } from "./desktop";
 import { recallTool, rememberTool, todoTool } from "./memory";
 import { remindMeTool, scheduleTaskTool } from "./schedule";
 import { runSkillTool, saveSkillTool } from "./skills";
@@ -30,6 +32,11 @@ export interface BuiltinToolDeps {
   readonly scheduler?: Scheduler | null;
   /** Saved procedures (M5.08); without it, the skill tools are never listed. */
   readonly skills?: SkillLibrary | null;
+  /**
+   * Whether this run's model can see images (DT.11); without it, the
+   * screenshot fallback's tools are never listed.
+   */
+  readonly vision?: (ctx: RunContext) => Promise<boolean>;
 }
 
 /**
@@ -47,6 +54,7 @@ export function builtinTools(deps: BuiltinToolDeps): ToolDefinition<never>[] {
     useSavedLoginTool(deps.sandbox ?? null),
     shellTool(deps.sandbox ?? null),
     ...fileTools(deps.sandbox ?? null),
+    ...desktopTools(deps.sandbox ?? null, deps.vision),
     artifactsReadTool(),
     loadToolkitTool(),
     delegateTaskTool(deps.team ?? null),

@@ -1,4 +1,5 @@
 export * from "./agent-file";
+export * from "./agent-files";
 export * from "./agents";
 export * from "./approvals";
 export * from "./artifacts";

@@ -1,4 +1,5 @@
 import type { LLMGateway } from "@ofa/core";
+import type { EvalComputer } from "./computer";
 import type { CheckResult, EvalCase, Transcript } from "./types";
 import { runAttempt } from "./world";
 
@@ -14,6 +15,8 @@ export interface AttemptReport {
   readonly costUsd: number;
   readonly models: readonly string[];
   readonly reply: string | null;
+  /** The tool calls, in order, each cut to a line: what to read when a case fails. */
+  readonly tools: readonly string[];
 }
 
 export interface CaseReport {
@@ -48,6 +51,10 @@ export function grade(evalCase: EvalCase, transcript: Transcript): AttemptReport
       ),
     ],
     reply: transcript.reply,
+    tools: transcript.toolCalls.map((c) => {
+      const line = `${c.name} ${JSON.stringify(c.args)}`;
+      return line.length > 200 ? `${line.slice(0, 199)}…` : line;
+    }),
   };
 }
 
@@ -55,6 +62,8 @@ export interface RunOptions {
   readonly llm: LLMGateway;
   readonly k: number;
   readonly wait?: (ms: number) => Promise<void>;
+  /** The computer for cases that need one (DT.12). */
+  readonly computer?: EvalComputer | null;
   readonly onAttempt?: (evalCase: EvalCase, n: number, report: AttemptReport) => void;
 }
 
@@ -70,6 +79,7 @@ export async function runCases(
       const transcript = await runAttempt(evalCase, {
         llm: options.llm,
         ...(options.wait ? { wait: options.wait } : {}),
+        ...(options.computer ? { computer: options.computer } : {}),
       });
       const report = grade(evalCase, transcript);
       attempts.push(report);

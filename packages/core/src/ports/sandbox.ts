@@ -59,6 +59,55 @@ export interface AgentBrowser {
 }
 
 /**
+ * What an agent sees of its desktop apps (DT.09, ADR-0041): the window in
+ * front as an outline from its accessibility tree, the other windows one line
+ * each. Controls carry a number, `[12] push button "Save"`, which `click` and
+ * `type` take.
+ */
+export interface DesktopSnapshot {
+  /** The window in front. */
+  readonly title: string;
+  readonly outline: string;
+}
+
+/** An agent's desktop apps, driven through the accessibility tree; each action returns the desktop afterwards. */
+export interface AgentDesktop {
+  snapshot(): Promise<DesktopSnapshot>;
+  click(ref: number): Promise<DesktopSnapshot>;
+  type(
+    ref: number,
+    text: string,
+    options?: { clear?: boolean; submit?: boolean },
+  ): Promise<DesktopSnapshot>;
+  /** Keys in xdotool's form: `ctrl+s`, `Return`, `alt+F4`; several separated by spaces. */
+  press(keys: string): Promise<DesktopSnapshot>;
+  /** The window and control a number names, without changing anything (for approval cards). */
+  describe(ref: number): Promise<{
+    readonly window: string;
+    readonly element: { readonly role: string; readonly name: string };
+  }>;
+  /** The screen as a JPEG (DT.11): the fallback for apps the tree can't read. */
+  screenshot(): Promise<DesktopScreenshot>;
+  /** Click at fractions of the screen (0 to 1; pixels when above 1); the screen afterwards. */
+  clickAt(x: number, y: number, options?: { double?: boolean }): Promise<DesktopScreenshot>;
+  /** Type into whatever has focus; the screen afterwards. */
+  typeText(text: string, options?: { submit?: boolean }): Promise<DesktopScreenshot>;
+}
+
+/** A screenshot of an agent's desktop (DT.11). Nothing is kept beyond the run's own artifacts. */
+export interface DesktopScreenshot {
+  /** Base64 JPEG. */
+  readonly data: string;
+  readonly mediaType: "image/jpeg";
+  readonly width: number;
+  readonly height: number;
+  /** The window in front. */
+  readonly title: string;
+  /** Where a click landed, in pixels. */
+  readonly clicked?: readonly [number, number];
+}
+
+/**
  * One frame of an agent's browser as a person sees it (M3.07): a JPEG of the
  * page, and the page's size in CSS pixels, which input coordinates use.
  */
@@ -109,6 +158,20 @@ export interface ScreenSession {
   close(): void;
 }
 
+/**
+ * A person's live view of an agent's whole desktop (ADR-0040): the VNC (RFB)
+ * byte stream, both ways, for a VNC client to draw. A watcher's input is
+ * ignored by the computer itself; only a viewer with control can act.
+ * Nothing is recorded.
+ */
+export interface DesktopStream {
+  onData(listener: (chunk: Uint8Array<ArrayBuffer>) => void): void;
+  /** Called once when the view closes, from either side. */
+  onEnd(listener: (reason: string) => void): void;
+  send(chunk: Uint8Array): void;
+  close(): void;
+}
+
 export interface SandboxHandle {
   readonly id: string;
   exec(
@@ -122,6 +185,14 @@ export interface SandboxHandle {
   listFiles(agentId: AgentId, path: string): Promise<{ entries: FileEntry[]; truncated: boolean }>;
   browser(agentId: AgentId): Promise<AgentBrowser>;
   /**
+   * Open a file or folder in its app on the agent's desktop, starting the
+   * desktop if needed (ADR-0043): documents in AbiWord, spreadsheets in
+   * Gnumeric, images in a viewer, text in the editor, folders in Files.
+   */
+  openFile(agentId: AgentId, path: string): Promise<{ app: string }>;
+  /** The agent's desktop apps through their accessibility tree (DT.09), starting the desktop if needed. */
+  desktopApps(agentId: AgentId): Promise<AgentDesktop>;
+  /**
    * Copy one site's cookies (its logins) from one agent's browser to
    * another's. Only on a person's explicit request (ADR-0010).
    */
@@ -129,8 +200,14 @@ export interface SandboxHandle {
   /** Watch an agent's browser, starting it if needed (a person's view, M3.07). */
   screen(agentId: AgentId): Promise<ScreenSession>;
   /**
-   * Hand the agent's browser to a person, or back (M3.07). While a person has
-   * it, the agent's browser tools are refused and say why.
+   * Watch an agent's desktop, starting it if needed (ADR-0040). `control`
+   * sends the viewer's mouse and keyboard too, and needs a takeover first.
+   */
+  desktop(agentId: AgentId, options: { control: boolean }): Promise<DesktopStream>;
+  /**
+   * Hand the agent's computer to a person, or back (M3.07, ADR-0040). While a
+   * person has it, the agent's browser, commands and file writes are refused
+   * and say why.
    */
   takeover(agentId: AgentId, on: boolean): Promise<void>;
   /** Stop what an agent is running (its browser and commands), or everyone's. */

@@ -1,0 +1,5 @@
+# Defaults for the agents' desktop apps (DT.12). A restart stops an agent's
+# apps without asking, so Mousepad would otherwise open next time with a
+# "restore the previous session?" dialog in front of the file it was asked for.
+[org.xfce.mousepad.preferences.file]
+session-restore='never'

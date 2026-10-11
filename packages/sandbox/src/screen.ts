@@ -65,7 +65,7 @@ export async function createScreenSession(endpoint: string): Promise<ScreenSessi
       targetInfos: { targetId: string; type: string; url: string }[];
     }>("Target.getTargets");
     const page = targetInfos
-      .filter((t) => t.type === "page" && !t.url.startsWith("devtools:"))
+      .filter((t) => t.type === "page" && !/^(chrome|devtools):/.test(t.url))
       .at(-1);
     const targetId =
       page?.targetId ??

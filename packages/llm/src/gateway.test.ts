@@ -231,6 +231,36 @@ describe("model gateway", () => {
     expect(JSON.stringify(prompt[3])).toContain("web_search");
   });
 
+  it("replays a call whose arguments didn't parse as {}, so the next request isn't refused", async () => {
+    const provider = fakeProvider("fake", { m: say("Done") });
+    await gateway([provider]).generate(
+      {
+        tier: "fast",
+        tools: [webSearch],
+        messages: [
+          { role: "user", content: "Search" },
+          {
+            role: "assistant",
+            content: "",
+            // What a stream cut off mid-call leaves: the raw text, not an object.
+            toolCalls: [{ id: "c1", name: "web.search", args: '{"query": "x"' }],
+          },
+          {
+            role: "tool",
+            toolCallId: "c1",
+            toolName: "web.search",
+            content: "Error: Invalid arguments",
+          },
+        ],
+      },
+      ctx,
+    );
+    const assistant = (provider.calls[0]?.options.prompt ?? [])[1] as {
+      content: { type: string; input?: unknown }[];
+    };
+    expect(assistant.content.find((p) => p.type === "tool-call")?.input).toEqual({});
+  });
+
   it("falls back to the next model when one is down, and records the attempt", async () => {
     const provider = fakeProvider("fake", { down: fail(503), up: say("Fallback") });
     const response = await gateway([provider]).generate(
@@ -246,6 +276,66 @@ describe("model gateway", () => {
         message: "HTTP 503 (key [REDACTED])",
       },
     ]);
+  });
+
+  it("falls back when a model's tool call is cut off, and keeps it if none does better", async () => {
+    const cutOff = async () => ({
+      content: [
+        {
+          type: "tool-call" as const,
+          toolCallId: "c",
+          toolName: "web_search",
+          input: '{"query": "x"',
+        },
+      ],
+      finishReason: { unified: "tool-calls" as const, raw: "tool_calls" },
+      usage: usage(1, 1),
+      warnings: [],
+    });
+    const provider = fakeProvider("fake", { cut: cutOff, up: say("ok") });
+    const response = await gateway([provider]).generate(
+      { tier: "standard", messages: user("x"), tools: [webSearch] },
+      ctx,
+    );
+    expect(response.model).toBe("up");
+    expect(response.attempts[0]?.message).toMatch(/cut off/);
+
+    const only = fakeProvider("fake", { cut: cutOff });
+    const kept = await gateway([only]).generate(
+      { tier: "standard", messages: user("x"), tools: [webSearch] },
+      ctx,
+    );
+    expect(kept.model).toBe("cut");
+    expect(kept.toolCalls[0]?.invalid).toMatch(/Invalid arguments/);
+
+    // The other way a long argument gets lost: no arguments at all.
+    const emptied = fakeProvider("fake", {
+      empty: async () => ({
+        ...(await cutOff()),
+        content: [
+          { type: "tool-call" as const, toolCallId: "c", toolName: "web_search", input: "{}" },
+        ],
+      }),
+      up: say("ok"),
+    });
+    const after = await gateway([emptied]).generate(
+      { tier: "standard", messages: user("x"), tools: [webSearch] },
+      ctx,
+    );
+    expect(after.model).toBe("up");
+  });
+
+  it("falls back when a model's answer breaks down into <unk> tokens", async () => {
+    const provider = fakeProvider("fake", {
+      broken: say(`Done: the list now ends with "oat${"<unk>".repeat(40)}`),
+      up: say("Done: the list now ends with oat milk."),
+    });
+    const response = await gateway([provider]).generate(
+      { tier: "standard", messages: user("x") },
+      ctx,
+    );
+    expect(response.model).toBe("up");
+    expect(response.attempts[0]?.message).toMatch(/<unk>/);
   });
 
   it("falls back when a model returns nothing at all", async () => {
@@ -374,7 +464,80 @@ describe("model gateway", () => {
       id: "big",
       contextWindow: 32_768,
       maxOutputTokens: 1_000,
+      vision: false,
     });
+  });
+
+  // Images (DT.10): only models that read them get a request with them.
+  const looks = (id: string, supportsImages: boolean): ModelDetails => ({
+    id,
+    contextWindow: 32_000,
+    maxOutputTokens: 1_000,
+    supportsTools: true,
+    supportsImages,
+    pricing: { inputPerMTok: 0, outputPerMTok: 0 },
+  });
+  const screenshot = [
+    {
+      role: "user" as const,
+      content: "What is on the screen?",
+      images: [{ data: "iVBORw0KGgo=", mediaType: "image/png" as const }],
+    },
+  ];
+
+  it("sends a request with images only to models that read them", async () => {
+    const provider = fakeProvider(
+      "fake",
+      { text: say("blind"), sees: say("a window") },
+      { details: [looks("text", false), looks("sees", true)] },
+    );
+    const g = gateway([provider]);
+    const answer = await g.generate({ tier: "fast", messages: screenshot }, ctx);
+    expect(answer.model).toBe("sees");
+    expect(provider.calls.map((c) => c.model)).toEqual(["sees"]);
+    // The image travels as an image part after the text.
+    const sent = provider.calls[0]?.options.prompt.at(-1);
+    expect(sent).toMatchObject({
+      role: "user",
+      content: [
+        { type: "text", text: "What is on the screen?" },
+        { type: "file", mediaType: "image/png" },
+      ],
+    });
+    // Text-only requests still go down the tier as before.
+    expect((await g.generate({ tier: "fast", messages: user("hi") }, ctx)).model).toBe("text");
+    expect((await g.modelFor("fast", ctx)).vision).toBe(true);
+  });
+
+  it("falls back to the vision chain when the tier's models can't read images", async () => {
+    const provider = fakeProvider(
+      "fake",
+      { text: say("blind"), eyes: say("I see a dock") },
+      {
+        tiers: { fast: ["text"], standard: ["text"], strong: ["text"] },
+        details: [looks("text", false), looks("eyes", true)],
+      },
+    );
+    const withVision = gateway([provider], { vision: [{ provider: "fake", model: "eyes" }] });
+    expect((await withVision.generate({ tier: "fast", messages: screenshot }, ctx)).model).toBe(
+      "eyes",
+    );
+    expect((await withVision.modelFor("fast", ctx)).vision).toBe(true);
+
+    // The vision chain is ranked for pointing at a screen: it goes first.
+    const both = fakeProvider(
+      "fake",
+      { sees: say("tier"), eyes: say("vision") },
+      { details: [looks("sees", true), looks("eyes", true)] },
+    );
+    const ranked = gateway([both], { vision: [{ provider: "fake", model: "eyes" }] });
+    expect((await ranked.generate({ tier: "fast", messages: screenshot }, ctx)).model).toBe("eyes");
+
+    const without = gateway([provider]);
+    expect((await without.modelFor("fast", ctx)).vision).toBe(false);
+    await expect(
+      without.generate({ tier: "fast", messages: screenshot }, ctx),
+    ).rejects.toMatchObject({ code: "bad_request" });
   });
 });
 
@@ -387,6 +550,7 @@ describe("OpenRouter adapter", () => {
         pricing: { prompt: "0", completion: "0" },
         top_provider: { max_completion_tokens: 8_192 },
         supported_parameters: ["tools", "temperature"],
+        architecture: { input_modalities: ["text", "image"] },
       },
       {
         id: "vendor/paid",
@@ -435,7 +599,7 @@ describe("OpenRouter adapter", () => {
     return { requests, fetchImpl };
   }
 
-  it("reads the catalog: windows, prices, tool support", async () => {
+  it("reads the catalog: windows, prices, tool and image support", async () => {
     const { fetchImpl } = fakeOpenRouter();
     const models = await createOpenRouterProvider({ fetch: fetchImpl }).listModels();
     expect(models).toEqual([
@@ -444,6 +608,7 @@ describe("OpenRouter adapter", () => {
         contextWindow: 131_072,
         maxOutputTokens: 8_192,
         supportsTools: true,
+        supportsImages: true,
         pricing: { inputPerMTok: 0, outputPerMTok: 0 },
       },
       {
@@ -451,6 +616,7 @@ describe("OpenRouter adapter", () => {
         contextWindow: 200_000,
         maxOutputTokens: undefined,
         supportsTools: false,
+        supportsImages: false,
         pricing: { inputPerMTok: 3, outputPerMTok: 15 },
       },
     ]);

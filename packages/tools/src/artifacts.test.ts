@@ -97,6 +97,24 @@ const long = defineTool({
   },
 });
 
+// A desktop screenshot (DT.11): shown to the model once, kept for people.
+const shot = defineTool({
+  name: "test.shot",
+  description: "A screenshot",
+  input: z.object({}),
+  annotations: { readOnly: true },
+  async run() {
+    return {
+      content: "Your desktop now.",
+      untrusted: true,
+      image: {
+        data: Buffer.from("jpeg-bytes").toString("base64"),
+        mediaType: "image/jpeg" as const,
+      },
+    };
+  },
+});
+
 function setup(grants: AgentProfile["grants"] = [{ tool: "test.long", mode: "auto" }]) {
   const agent: AgentProfile = {
     id: ctx.agentId,
@@ -115,7 +133,11 @@ function setup(grants: AgentProfile["grants"] = [{ tool: "test.long", mode: "aut
   const agents = { get: async () => agent };
   const artifacts = memoryArtifacts();
   const executor = createToolExecutor({
-    registry: createToolRegistry([long, artifactsReadTool()] as unknown as ToolDefinition<never>[]),
+    registry: createToolRegistry([
+      long,
+      shot,
+      artifactsReadTool(),
+    ] as unknown as ToolDefinition<never>[]),
     policy: createPolicyEngine({ agents }),
     calls: calls(),
     agents,
@@ -188,5 +210,22 @@ describe("artifacts", () => {
       { tool: "artifacts.read", mode: "blocked" },
     ]);
     expect((await executor.listTools(ctx)).map((t) => t.name)).not.toContain("artifacts.read");
+  });
+
+  it("keeps a screenshot as a run artifact and passes the image on to the model", async () => {
+    const { executor, artifacts } = setup([{ tool: "test.shot", mode: "auto" }]);
+    const outcome = await executor.execute(call("test.shot", {}, "run-1:s1"), ctx);
+    expect(outcome).toMatchObject({
+      status: "ok",
+      content: "Your desktop now.",
+      image: { mediaType: "image/jpeg" },
+    });
+    if (outcome.status !== "ok") return;
+    expect(artifacts.rows.get(outcome.artifactId!)).toMatchObject({
+      kind: "output",
+      name: "Screenshot",
+      mimeType: "image/jpeg",
+      untrusted: true,
+    });
   });
 });

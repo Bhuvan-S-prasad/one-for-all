@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Browser
+Comment=Open a new browser window
+Exec=one-for-all-browser %U
+Icon=web-browser
+Terminal=false
+Categories=Network;WebBrowser;

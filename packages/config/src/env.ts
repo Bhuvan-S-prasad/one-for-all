@@ -74,6 +74,8 @@ export const envSchema = z
     LLM_MODELS_FAST: z.string().optional(),
     LLM_MODELS_STANDARD: z.string().optional(),
     LLM_MODELS_STRONG: z.string().optional(),
+    /** Models that read images and call tools, for screenshots (DT.10). */
+    LLM_MODELS_VISION: z.string().optional(),
 
     /** Self-hosted SearXNG for web.search. Unset: web search reports it is not set up. */
     SEARXNG_URL: z.url().optional(),

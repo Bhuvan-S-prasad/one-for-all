@@ -51,12 +51,28 @@ export function toToolSet(tools: readonly ToolDescriptor[], names: ToolNames): T
   );
 }
 
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
 export function toModelMessages(messages: readonly LLMMessage[], names: ToolNames): ModelMessage[] {
   return messages.map((message): ModelMessage => {
     switch (message.role) {
       case "system":
+        return { role: "system", content: message.content };
       case "user":
-        return { role: message.role, content: message.content };
+        if (!message.images?.length) return { role: "user", content: message.content };
+        return {
+          role: "user",
+          content: [
+            { type: "text" as const, text: message.content },
+            ...message.images.map((image) => ({
+              // A file part with an image type: the AI SDK's current form for images.
+              type: "file" as const,
+              data: image.data,
+              mediaType: image.mediaType,
+            })),
+          ],
+        };
       case "assistant": {
         const calls = message.toolCalls ?? [];
         if (calls.length === 0) return { role: "assistant", content: message.content };
@@ -68,7 +84,11 @@ export function toModelMessages(messages: readonly LLMMessage[], names: ToolName
               type: "tool-call" as const,
               toolCallId: call.id,
               toolName: names.wire(call.name),
-              input: call.args,
+              // A call whose arguments didn't parse (cut off mid-stream) is
+              // replayed as {}: providers refuse a whole request whose history
+              // holds arguments that aren't a JSON object. Its tool result
+              // already tells the model what was wrong.
+              input: isObject(call.args) ? call.args : {},
             })),
           ],
         };

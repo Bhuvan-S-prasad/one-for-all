@@ -7,6 +7,7 @@ import type {
   ModelInfo,
   ModelTier,
   TenantContext,
+  ToolDescriptor,
 } from "@ofa/core";
 import { generateText } from "ai";
 import { createCircuitBreaker, type CircuitBreaker } from "./breaker";
@@ -40,6 +41,12 @@ export interface ModelGatewayOptions {
   apiKey(ctx: TenantContext, provider: ModelProvider): Promise<string | undefined>;
   /** Tier overrides from the environment. */
   readonly tiers?: TierOverrides;
+  /**
+   * Models that read images, best first (`LLM_MODELS_VISION`); without it the
+   * primary provider's defaults (DT.10). A request with images goes to these
+   * first, then to the tier's own models that read them.
+   */
+  readonly vision?: readonly ModelRef[];
   /** Per-workspace tier overrides (Settings, later), laid over `tiers`. */
   workspaceTiers?(ctx: TenantContext): Promise<TierOverrides>;
   /** How long a call may wait in the quota queue before giving up. Default 20 s. */
@@ -65,6 +72,27 @@ const BREAKER_FAILURES: readonly ModelErrorCode[] = ["unavailable", "timeout", "
 function costUsd(details: ModelDetails | undefined, input: number, output: number): number {
   if (!details) return 0;
   return (input * details.pricing.inputPerMTok + output * details.pricing.outputPerMTok) / 1e6;
+}
+
+/** Three or more unknown-token markers in a row. */
+const BROKE_DOWN = /(?:<unk>\s*){3,}/;
+
+/** A tool call cut off mid-stream: arguments that aren't JSON, or none at all (below). */
+const CUT_OFF = /JSONParseError|JSON parsing failed|as if cut off/;
+
+/**
+ * `{}` for a tool that requires arguments: what some free models send when
+ * the stream drops a long argument (a script to write), rather than broken JSON.
+ */
+function emptyCall(input: unknown, tool: ToolDescriptor | undefined): boolean {
+  const required = (tool?.inputSchema as { required?: unknown } | undefined)?.required;
+  return (
+    Array.isArray(required) &&
+    required.length > 0 &&
+    typeof input === "object" &&
+    input !== null &&
+    Object.keys(input).length === 0
+  );
 }
 
 function errorText(error: unknown): string {
@@ -111,19 +139,40 @@ export function createModelGateway(options: ModelGatewayOptions): LLMGateway {
     return resolveTiers(primary, options.tiers ?? {}, workspace);
   }
 
-  async function chainFor(tier: ModelTier, ctx: TenantContext): Promise<Candidate[]> {
-    const chain = (await tiersFor(ctx))[tier];
-    const candidates = chain.flatMap((ref): Candidate[] => {
+  function candidatesOf(chain: readonly ModelRef[]): Candidate[] {
+    return chain.flatMap((ref): Candidate[] => {
       const provider = providers.get(ref.provider);
       if (!provider) return [];
       const key = formatModelRef(ref);
       // A per-model bucket with no limits, so a 429 can pause just this model.
       return [{ ref, key, provider, limits: [...provider.rateLimits(ref.model), { bucket: key }] }];
     });
+  }
+
+  async function chainFor(tier: ModelTier, ctx: TenantContext): Promise<Candidate[]> {
+    const candidates = candidatesOf((await tiersFor(ctx))[tier]);
     if (candidates.length === 0) {
       throw new ModelError("bad_request", `No models are configured for the ${tier} tier`);
     }
     return candidates;
+  }
+
+  /**
+   * For a request with images: the vision chain first (ranked by the vision
+   * spike for pointing at things on a screen), then the tier's own models that
+   * read images.
+   */
+  async function imageChain(tierChain: readonly Candidate[]): Promise<Candidate[]> {
+    const vision = candidatesOf(
+      options.vision?.length
+        ? options.vision
+        : (primary.defaultVision ?? []).map((model) => ({ provider: primary.id, model })),
+    );
+    const all = [...vision, ...tierChain.filter((t) => !vision.some((v) => v.key === t.key))];
+    const sees = await Promise.all(
+      all.map(async (c) => (await catalog.get(c.provider, c.ref.model))?.supportsImages === true),
+    );
+    return all.filter((_, i) => sees[i]);
   }
 
   async function call(
@@ -162,7 +211,12 @@ export function createModelGateway(options: ModelGatewayOptions): LLMGateway {
           ? `Unknown tool: ${toolCall.toolName}`
           : "invalid" in toolCall && toolCall.invalid
             ? `Invalid arguments: ${errorText(toolCall.error)}`
-            : undefined;
+            : emptyCall(
+                  toolCall.input,
+                  request.tools?.find((t) => t.name === name),
+                )
+              ? "Invalid arguments: the call came with none, as if cut off; send it again with its arguments"
+              : undefined;
       return {
         id: toolCall.toolCallId,
         name: name ?? toolCall.toolName,
@@ -174,6 +228,11 @@ export function createModelGateway(options: ModelGatewayOptions): LLMGateway {
       // Some free models answer with nothing at all. Treat it as a failure so
       // the next model in the chain gets a chance.
       throw new ModelError("unknown", "The model returned an empty response");
+    }
+    if (BROKE_DOWN.test(result.text)) {
+      // A run of unknown-token markers: the model's output fell apart
+      // mid-answer (seen from a free vision model). Not an answer to show.
+      throw new ModelError("unknown", "The model's answer broke down into <unk> tokens");
     }
 
     const inputTokens = result.usage.inputTokens ?? 0;
@@ -191,11 +250,21 @@ export function createModelGateway(options: ModelGatewayOptions): LLMGateway {
 
   return {
     async generate(request, ctx) {
-      const candidates = await chainFor(request.tier, ctx);
+      let candidates = await chainFor(request.tier, ctx);
+      if (request.messages.some((m) => m.role === "user" && m.images?.length)) {
+        candidates = await imageChain(candidates);
+        if (candidates.length === 0) {
+          throw new ModelError(
+            "bad_request",
+            `No model for the ${request.tier} tier reads images; set LLM_MODELS_VISION`,
+          );
+        }
+      }
       const attempts: LLMAttempt[] = [];
       const retryAfter: number[] = [];
       const keys = new Map<string, string | undefined>();
       const skipProviders = new Set<string>();
+      let cutOff: Omit<LLMResponse, "attempts"> | undefined;
 
       const record = (candidate: Candidate, failure: ClassifiedError, apiKey?: string) => {
         attempts.push({
@@ -246,6 +315,18 @@ export function createModelGateway(options: ModelGatewayOptions): LLMGateway {
         try {
           const response = await call(candidate, request, apiKey);
           breaker.success(modelKey);
+          if (response.toolCalls.some((c) => c.invalid && CUT_OFF.test(c.invalid))) {
+            // A tool call whose arguments aren't even JSON, or are missing:
+            // the stream broke mid-call (free models do this on long arguments, like a script
+            // to write). The next model gets a chance; this answer is kept in
+            // case none does better.
+            record(candidate, {
+              code: "unknown",
+              message: "Its tool call was cut off (no usable arguments)",
+            });
+            cutOff ??= response;
+            continue;
+          }
           return { ...response, attempts };
         } catch (error) {
           const failure = classifyModelError(error, clock.now());
@@ -262,6 +343,7 @@ export function createModelGateway(options: ModelGatewayOptions): LLMGateway {
           if (failure.code === "auth") skipProviders.add(provider.id);
         }
       }
+      if (cutOff) return { ...cutOff, attempts };
       throw finalError(attempts, retryAfter);
     },
 
@@ -279,6 +361,7 @@ export function createModelGateway(options: ModelGatewayOptions): LLMGateway {
         id: first.ref.model,
         contextWindow: windows.length > 0 ? Math.min(...windows) : FALLBACK_CONTEXT_WINDOW,
         maxOutputTokens: details[0]?.maxOutputTokens,
+        vision: (await imageChain(all)).length > 0,
       };
     },
   };

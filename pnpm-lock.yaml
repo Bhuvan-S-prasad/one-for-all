@@ -218,6 +218,9 @@ importers:
       '@fontsource-variable/geist-mono':
         specifier: 5.3.0
         version: 5.3.0
+      '@novnc/novnc':
+        specifier: 1.7.0
+        version: 1.7.0
       '@ofa/client':
         specifier: workspace:*
         version: link:../../packages/client
@@ -291,6 +294,9 @@ importers:
       '@ofa/policy':
         specifier: workspace:*
         version: link:../packages/policy
+      '@ofa/sandbox':
+        specifier: workspace:*
+        version: link:../packages/sandbox
       '@ofa/tools':
         specifier: workspace:*
         version: link:../packages/tools
@@ -1308,6 +1314,9 @@ packages:
   '@noble/hashes@2.4.0':
     resolution: {integrity: sha512-X5XaVWZIBCT7HHZGm5I7ZQXDwLG+bGXuSrMQAW+7Zvl87h1kmc1ZB1VSRJcpUfoUrGQp4Fkoxm5kZ+Ms+aW+eA==}
     engines: {node: '>= 20.19.0'}
+
+  '@novnc/novnc@1.7.0':
+    resolution: {integrity: sha512-ucEJOx4T2avIRCleodk7YobZj5O2Ga2AeLfQ69A/yjG9HHba2+PDgwSkN3FttrmG+70ZGx21sElNFouK13RzyA==}
 
   '@openrouter/ai-sdk-provider@3.1.0':
     resolution: {integrity: sha512-BQy1TA9fKrh47s9ivsO6FY5QimN7GUF0i8Qon3pkxQclEgShso0dClpcWn8OIyPLEZZPFaFKgI8TW4S/O0p0Dw==}
@@ -4292,6 +4301,8 @@ snapshots:
   '@noble/ciphers@2.4.0': {}
 
   '@noble/hashes@2.4.0': {}
+
+  '@novnc/novnc@1.7.0': {}
 
   '@openrouter/ai-sdk-provider@3.1.0(ai@7.0.123(zod@4.6.5))(zod@4.6.5)':
     dependencies:

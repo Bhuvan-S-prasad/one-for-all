@@ -3,6 +3,7 @@ import { asId, type AgentId, type ScreenSession, type TenantContext } from "@ofa
 import { getAgent, recordAudit } from "@ofa/db";
 import type { UpgradeWebSocket, WSContext } from "hono/ws";
 import type { Container } from "../container";
+import type { ComputerControl } from "./control";
 
 // Watching and taking over an agent's browser (M3.07, ADR-0025):
 //   GET /api/agents/:id/screen            watch (frames only)
@@ -20,10 +21,8 @@ const MAX_BUFFERED = 2 * 1024 * 1024;
 export function screenHandler(
   deps: Pick<Container, "db" | "sandbox" | "logger">,
   upgrade: UpgradeWebSocket,
+  controllers: ComputerControl,
 ) {
-  /** Agent ID → the socket that has control. */
-  const controllers = new Map<string, WSContext>();
-
   return upgrade((c) => {
     const tenant = c.get("tenant") as TenantContext;
     const agentId = asId<AgentId>(c.req.param("id") ?? "");
@@ -47,8 +46,7 @@ export function screenHandler(
           if (!agent) throw new Error("No such agent.");
           const handle = await deps.sandbox.acquire(tenant);
 
-          if (wantsControl && !controllers.has(agentId)) {
-            controllers.set(agentId, ws);
+          if (wantsControl && controllers.claim(agentId, tenant.userId, ws)) {
             control = true;
             await handle.takeover(agentId, true);
             await audit("computer.takeover_started");
@@ -68,7 +66,7 @@ export function screenHandler(
           send(ws, {
             type: "status",
             control,
-            takenOverByOther: !control && controllers.has(agentId),
+            takenOverByOther: !control && controllers.heldByOther(agentId, tenant.userId),
           });
         } catch (error) {
           send(ws, {
@@ -100,11 +98,11 @@ export function screenHandler(
         }
       },
 
-      async onClose() {
+      async onClose(_event, ws) {
         closed = true;
         session?.close();
-        if (control) {
-          controllers.delete(agentId);
+        // Hand back only if control didn't move to a newer window of this person.
+        if (control && controllers.release(agentId, ws)) {
           try {
             await (await deps.sandbox?.acquire(tenant))?.takeover(agentId, false);
           } catch (error) {

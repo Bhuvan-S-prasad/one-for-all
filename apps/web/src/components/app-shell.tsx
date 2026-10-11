@@ -371,7 +371,7 @@ function Sidebar(props: {
         })}
       </nav>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto border-t border-sidebar-border pt-3">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-x-hidden overflow-y-auto border-t border-sidebar-border pt-3">
         <AgentList
           collapsed={collapsed}
           agents={props.agents}

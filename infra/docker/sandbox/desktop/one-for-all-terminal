@@ -1,0 +1,18 @@
+#!/bin/sh
+# The desktop's terminal (ADR-0040): xterm attached to a tmux session,
+# started if it isn't running. `--agent` opens the agent's own terminal
+# (session "work", where its commands appear, DT.06); otherwise the person's
+# (session "main"). Extra arguments run in a new session.
+session=main
+title=Terminal
+class=Terminal
+if [ "$1" = "--agent" ]; then
+  shift
+  session=work
+  title="Agent terminal"
+  class=AgentTerminal
+fi
+exec xterm -title "$title" -class "$class" \
+  -fa Monospace -fs 10 -bg '#0e0e0f' -fg '#f4f4f0' -cr '#d4ff3a' \
+  -geometry 110x30 -bc -sl 0 +sb -u8 \
+  -e tmux new-session -A -s "$session" "$@"

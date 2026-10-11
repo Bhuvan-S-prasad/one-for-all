@@ -3,6 +3,7 @@ import type { HarnessOptions, RunResult } from "@ofa/harness";
 import type { MailboxFixture, MailRecord } from "../fixtures/mailbox";
 import type { FixtureSite, SiteRecord } from "../fixtures/site";
 import type { WebFixture } from "../fixtures/web";
+import type { SavedFile } from "./computer";
 
 /** What one attempt left behind: the reply, the run log and the end state. */
 export interface Transcript {
@@ -19,6 +20,13 @@ export interface Transcript {
   readonly mail: MailRecord | null;
   /** Requests for a person, with the answer the case's person gave. */
   readonly approvals: readonly ApprovalRecord[];
+  /**
+   * Files the run made or changed on the agent's computer, with their text,
+   * for cases with a computer (DT.12); null otherwise.
+   */
+  readonly files: readonly SavedFile[] | null;
+  /** Files sent to the person with the reply (`files.send`), in order. */
+  readonly sent: readonly SentFile[];
   /** Work handed to teammates (M5.13), one entry per handoff, in order. */
   readonly children: readonly ChildTranscript[];
   readonly durationMs: number;
@@ -32,6 +40,13 @@ export interface ChildTranscript {
   readonly reply: string | null;
   readonly tainted: boolean;
   readonly toolCalls: readonly { readonly name: string; readonly args: unknown }[];
+}
+
+/** A file the agent sent under its reply. */
+export interface SentFile {
+  readonly name: string;
+  readonly mimeType: string;
+  readonly size: number;
 }
 
 export interface CheckResult {
@@ -60,6 +75,13 @@ export interface EvalCase {
   readonly site?: FixtureSite;
   /** A mailbox app, as if connected (M4.12). */
   readonly mailbox?: MailboxFixture;
+  /**
+   * A real computer (DT.12): the agent works in the dev sandbox from
+   * `pnpm infra:up`, with its terminal, files and desktop apps. `files` are
+   * put in place first (paths may start with `~`, the agent's home).
+   * Skipped when the sandbox isn't running.
+   */
+  readonly computer?: { readonly files?: Readonly<Record<string, string>> };
   /**
    * The person answering approval requests: true approves. By default they
    * approve everything, as someone watching a task they asked for would.

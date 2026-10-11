@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Editor
+Comment=Edit text files
+Exec=mousepad %F
+Icon=accessories-text-editor
+Terminal=false
+Categories=Utility;TextEditor;

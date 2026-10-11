@@ -1,6 +1,6 @@
 import type { AgentId, MessageId, RunId, ThreadId } from "../ids";
 import type { RunContext, TenantContext } from "../tenant";
-import type { ModelTier } from "./llm";
+import type { LLMImage, ModelTier } from "./llm";
 import type { MemoryScope } from "./memory";
 import type { GrantMode, Verdict } from "./policy";
 import type { ToolDescriptor } from "./tools";
@@ -232,6 +232,8 @@ export type ToolOutcome =
       readonly untrusted: boolean;
       /** Long output kept as an artifact (the content says how to reopen it), or a file kept for people. */
       readonly artifactId?: string;
+      /** A screenshot the model is shown after this result (DT.11); the run keeps it as an artifact. */
+      readonly image?: LLMImage;
       readonly verdict: Verdict;
       readonly reasons: readonly string[];
       readonly durationMs: number;

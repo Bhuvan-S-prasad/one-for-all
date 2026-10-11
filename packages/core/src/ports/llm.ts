@@ -27,9 +27,20 @@ export const MODEL_ERROR_CODES = [
 ] as const;
 export type ModelErrorCode = (typeof MODEL_ERROR_CODES)[number];
 
+/** An image a model is shown (DT.10): base64 bytes and their type. */
+export interface LLMImage {
+  readonly data: string;
+  readonly mediaType: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+}
+
 export type LLMMessage =
   | { readonly role: "system"; readonly content: string }
-  | { readonly role: "user"; readonly content: string }
+  | {
+      readonly role: "user";
+      readonly content: string;
+      /** Shown after the text; only models that read images get such a request. */
+      readonly images?: readonly LLMImage[];
+    }
   | {
       readonly role: "assistant";
       readonly content: string;
@@ -105,6 +116,11 @@ export interface ModelInfo {
   readonly id: string;
   readonly contextWindow: number;
   readonly maxOutputTokens: number | undefined;
+  /**
+   * Whether a request with images can be served for this tier (DT.10): a
+   * model in its chain reads images, or the vision chain has one.
+   */
+  readonly vision: boolean;
 }
 
 /**

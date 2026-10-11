@@ -12,7 +12,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
-import { MODEL_TIERS, type ModelTier } from "@ofa/core";
+import { asId, MODEL_TIERS, type ModelTier } from "@ofa/core";
 import {
   createModelGateway,
   createOpenRouterProvider,
@@ -20,10 +20,13 @@ import {
   type ModelProvider,
   type TierOverrides,
 } from "@ofa/llm";
+import { createDockerSandbox } from "@ofa/sandbox";
 import { injectionSuite } from "../redteam/injection";
+import { deskSuite } from "../suites/desk";
 import { operatorSuite } from "../suites/operator";
 import { researcherSuite } from "../suites/researcher";
 import { teamSuite } from "../suites/team";
+import { dockerComputer, type EvalComputer } from "./computer";
 import { runCases, type AttemptReport } from "./runner";
 import type { EvalCase } from "./types";
 
@@ -31,6 +34,7 @@ const ALL_CASES: readonly EvalCase[] = [
   ...researcherSuite,
   ...operatorSuite,
   ...teamSuite,
+  ...deskSuite,
   ...injectionSuite,
 ];
 
@@ -110,9 +114,25 @@ const llm = createModelGateway({
   maxQueueWaitMs: 65_000,
 });
 
+// Desktop cases (DT.12) work on the dev sandbox from `pnpm infra:up`.
+let computer: EvalComputer | null = null;
+if (cases.some((c) => c.computer)) {
+  const url = process.env.SANDBOX_URL || "http://127.0.0.1:7070";
+  const sandbox = createDockerSandbox({
+    url,
+    token: process.env.SANDBOX_TOKEN || "ofa-sandbox-dev-token",
+  });
+  const handle = await sandbox.acquire({ workspaceId: asId("ws_eval"), userId: asId("usr_eval") });
+  if ((await handle.health()).ok) computer = dockerComputer(sandbox);
+  else
+    console.log(`The sandbox at ${url} isn't running (pnpm infra:up): skipping the desktop cases.`);
+}
+const runnable = computer ? cases : cases.filter((c) => !c.computer);
+if (runnable.length === 0) process.exit(2);
+
 const selected = tier
-  ? cases.map((c) => ({ ...c, agent: { ...c.agent, modelTier: tier } }))
-  : cases;
+  ? runnable.map((c) => ({ ...c, agent: { ...c.agent, modelTier: tier } }))
+  : runnable;
 
 const seconds = (ms: number) => `${Math.round(ms / 1000)} s`;
 function printAttempt(evalCase: EvalCase, n: number, report: AttemptReport): void {
@@ -131,7 +151,7 @@ console.log(
     (only ? ` (only ${args.model})` : "") +
     (tier ? ` at the ${tier} tier` : ""),
 );
-const reports = await runCases(selected, { llm, k, onAttempt: printAttempt });
+const reports = await runCases(selected, { llm, k, computer, onAttempt: printAttempt });
 
 console.log("\ncase                              pass@1   pass^k");
 for (const r of reports) {

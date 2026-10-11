@@ -32,6 +32,24 @@ export const OPENROUTER_DEFAULT_TIERS: TierModels = {
   ],
 };
 
+/**
+ * Free models that read images and call tools, best first (DT.10): they
+ * serve requests with images (screenshots) when a tier's own models can't.
+ * Chosen by `pnpm --filter @ofa/llm spike:vision`; override with
+ * LLM_MODELS_VISION.
+ */
+export const OPENROUTER_DEFAULT_VISION: readonly string[] = [
+  // Spike on 2026-10-11 (DT.10), clicks on a real desktop screenshot in
+  // fractions of the screen: 4 of 5, then 2, 2 and 2 (one 2 px off); all six
+  // free vision models read the screen right. dots leads since the end-to-end
+  // check (DT.13): nemotron, the best at pointing, put its reasoning in its
+  // answers and once broke down into <unk> tokens; it stays next in line.
+  "dots-studio/dots-3-note-preview:free",
+  "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+  "google/gemma-4-26b-a4b-it:free",
+  "google/gemma-4-31b-it:free",
+];
+
 export interface OpenRouterOptions {
   readonly baseURL?: string;
   /** Free models share one quota per account: 20 requests a minute. */
@@ -42,6 +60,7 @@ export interface OpenRouterOptions {
    */
   readonly freeRequestsPerDay?: number;
   readonly defaultTiers?: TierModels;
+  readonly defaultVision?: readonly string[];
   /** For tests. */
   readonly fetch?: typeof fetch;
 }
@@ -55,6 +74,7 @@ const catalogSchema = z.object({
       pricing: z.object({ prompt: z.string(), completion: z.string() }).partial().nullish(),
       top_provider: z.object({ max_completion_tokens: z.number().nullish() }).nullish(),
       supported_parameters: z.array(z.string()).nullish(),
+      architecture: z.object({ input_modalities: z.array(z.string()).nullish() }).nullish(),
     }),
   ),
 });
@@ -83,6 +103,7 @@ export function createOpenRouterProvider(options: OpenRouterOptions = {}): Model
     label: "OpenRouter",
     requiresApiKey: true,
     defaultTiers: options.defaultTiers ?? OPENROUTER_DEFAULT_TIERS,
+    defaultVision: options.defaultVision ?? OPENROUTER_DEFAULT_VISION,
 
     languageModel(modelId, { apiKey, reasoning }) {
       // `apiKey` is always passed: without it the SDK would read
@@ -112,6 +133,7 @@ export function createOpenRouterProvider(options: OpenRouterOptions = {}): Model
         contextWindow: model.context_length ?? 0,
         maxOutputTokens: model.top_provider?.max_completion_tokens ?? undefined,
         supportsTools: model.supported_parameters?.includes("tools") ?? false,
+        supportsImages: model.architecture?.input_modalities?.includes("image") ?? false,
         pricing: {
           inputPerMTok: perMillion(model.pricing?.prompt),
           outputPerMTok: perMillion(model.pricing?.completion),

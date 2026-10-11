@@ -2,6 +2,7 @@ import type {
   ArtifactInput,
   ArtifactRecord,
   JsonSchema,
+  LLMImage,
   MemoryScope,
   RunContext,
   ToolAnnotations,
@@ -74,6 +75,8 @@ export interface ToolRunResult {
   readonly untrusted: boolean;
   /** An artifact the tool kept (e.g. a copy of a file it wrote), shown to people with the result. */
   readonly artifactId?: string;
+  /** An image the model is shown with the result: a screenshot of the desktop (DT.11). */
+  readonly image?: LLMImage;
 }
 
 export interface ToolDefinition<Input = unknown> {

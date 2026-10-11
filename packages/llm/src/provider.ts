@@ -17,6 +17,8 @@ export interface ModelDetails {
   readonly contextWindow: number;
   readonly maxOutputTokens: number | undefined;
   readonly supportsTools: boolean;
+  /** It reads images as well as text (DT.10). */
+  readonly supportsImages?: boolean;
   /** US dollars per million tokens; zero for free models. */
   readonly pricing: { readonly inputPerMTok: number; readonly outputPerMTok: number };
 }
@@ -43,6 +45,11 @@ export interface ModelProvider {
   readonly requiresApiKey: boolean;
   /** Models per tier until the workspace or environment sets its own. */
   readonly defaultTiers: TierModels;
+  /**
+   * Models that read images and call tools, best first (DT.10): they serve a
+   * request with images when the tier's own models can't.
+   */
+  readonly defaultVision?: readonly string[];
 
   /**
    * An AI SDK language model for one call. The key is passed per call because

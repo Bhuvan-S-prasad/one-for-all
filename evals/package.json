@@ -15,6 +15,7 @@
     "@ofa/harness": "workspace:*",
     "@ofa/llm": "workspace:*",
     "@ofa/policy": "workspace:*",
+    "@ofa/sandbox": "workspace:*",
     "@ofa/tools": "workspace:*"
   },
   "devDependencies": {

@@ -44,6 +44,8 @@ export const queryKeys = {
   skills: (agentId?: string) => ["skills", agentId ?? "all"] as const,
   skillLists: ["skills"] as const,
   episodes: (agentId?: string) => ["episodes", agentId ?? "all"] as const,
+  agentFiles: (agentId: string, root: string, path: string) =>
+    ["agents", agentId, "files", root, path] as const,
 };
 
 /** Shared by hooks and router loaders, so both read the same cache entry. */

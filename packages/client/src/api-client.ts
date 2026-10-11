@@ -1,4 +1,7 @@
 import {
+  agentFileListSchema,
+  type AgentFileList,
+  type AgentFileRoot,
   agentFileSchema,
   importAgentResponseSchema,
   type AgentFile,
@@ -267,6 +270,16 @@ export function createApiClient(options: ApiClientOptions = {}) {
         `/api/agents/${encodeURIComponent(id)}/threads${query(page)}`,
         threadSummaryPageSchema,
       ),
+    /** A folder of an agent's files: its shared workspace or its own home (DT.08). */
+    agentFiles: (id: string, root: AgentFileRoot, path = ""): Promise<AgentFileList> =>
+      request(
+        "GET",
+        `/api/agents/${encodeURIComponent(id)}/files${query({ root, path })}`,
+        agentFileListSchema,
+      ),
+    /** Where to download one of an agent's files (always as a download). */
+    agentFileUrl: (id: string, root: AgentFileRoot, path: string): string =>
+      `${baseUrl}/api/agents/${encodeURIComponent(id)}/files/content${query({ root, path })}`,
     /** Start a new chat with an agent (an empty current chat is reused). */
     newThread: (id: string): Promise<Thread> =>
       request("POST", `/api/agents/${encodeURIComponent(id)}/threads`, threadSchema),

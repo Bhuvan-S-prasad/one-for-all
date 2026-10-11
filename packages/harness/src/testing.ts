@@ -237,6 +237,7 @@ export function createScriptedLLM(
         id: "scripted-model",
         contextWindow: 32_000,
         maxOutputTokens: 4_000,
+        vision: false,
       };
     },
   };

@@ -41,6 +41,8 @@ export interface Config {
       readonly fast: string | undefined;
       readonly standard: string | undefined;
       readonly strong: string | undefined;
+      /** Models that read images (DT.10). */
+      readonly vision: string | undefined;
     };
   };
   readonly search: { readonly searxngUrl: string | undefined };
@@ -141,6 +143,7 @@ export function loadConfig(source: Record<string, string | undefined> = process.
         fast: env.LLM_MODELS_FAST,
         standard: env.LLM_MODELS_STANDARD,
         strong: env.LLM_MODELS_STRONG,
+        vision: env.LLM_MODELS_VISION,
       },
     },
     search: {
