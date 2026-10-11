@@ -1,0 +1,14 @@
+import { asId } from "@ofa/core";
+import { createDockerSandbox } from "./docker";
+const sandbox = createDockerSandbox({ url: "http://127.0.0.1:7070", token: "ofa-sandbox-dev-token" });
+const handle = await sandbox.acquire({ workspaceId: asId("w"), userId: asId("u") } as never);
+const t0 = Date.now();
+const session = await handle.screen(asId("f7a8eee4-8315-46e2-a42b-88aa31e79eeb"));
+console.log("session after", Date.now() - t0, "ms");
+let frames = 0;
+session.onFrame((f) => { frames += 1; if (frames === 1) console.log("first frame", f.width, f.height, f.url, "after", Date.now() - t0, "ms"); });
+session.onEnd((r) => console.log("end", r));
+await new Promise((r) => setTimeout(r, 4000));
+console.log("frames", frames);
+session.close();
+process.exit(0);
