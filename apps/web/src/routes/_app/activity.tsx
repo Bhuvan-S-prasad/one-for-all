@@ -814,6 +814,13 @@ function EventLine({ event }: { event: RunEvent }) {
           {title(`${event.payload.tool} failed`, "bad")} {note(event.payload.message)}
         </div>
       );
+    case "tool.reused":
+      return (
+        <div>
+          {title(`${event.payload.tool} again`)}{" "}
+          {note("The same search as earlier in this run; its result was given back")}
+        </div>
+      );
     case "run.tainted":
       return (
         <div>

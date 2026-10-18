@@ -7,6 +7,9 @@ import {
   type AgentDirectory,
   type AgentProfile,
   type ApprovalStore,
+  type ChatLedgerEntry,
+  type ChatRecord,
+  type ChatRecordStore,
   type ChildRunResult,
   type LLMGateway,
   type LLMRequest,
@@ -27,6 +30,15 @@ import {
   type ToolOutcome,
   type Verdict,
 } from "@ofa/core";
+import {
+  addToLedger,
+  carriedPlan,
+  handoffEntry,
+  ledgerEntry,
+  progressLine,
+  quotesOutside,
+  stopReply,
+} from "./chat-record";
 import { compactTurns } from "./compaction";
 import {
   assembleContext,
@@ -92,6 +104,11 @@ export interface HarnessDeps {
   readonly team?: TeamDirectory;
   /** Skills the agent may use (M5.08): `/slug` in the request applies one. */
   readonly skills?: SkillLibrary;
+  /**
+   * Each agent's working record per chat (ADR-0045): read at the start, saved
+   * as the run goes, so the next run in the chat carries on from it.
+   */
+  readonly chats?: ChatRecordStore;
   /**
    * Replaces known secret values (the vault's redaction). Applied to every
    * run event, approval request and reply before it is stored (hard rule 4).
@@ -185,6 +202,20 @@ function preview(text: string, length: number): string {
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+/** The search a `web.search` call asked for, written the same way each time. */
+function searchKey(args: unknown): string | null {
+  const query = (args as { query?: unknown } | null)?.query;
+  if (typeof query !== "string") return null;
+  const key = query
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}$]+/gu, " ")
+    .trim();
+  return key || null;
+}
+
+/** From here a run is told to finish (ADR-0045): this share of its token or step budget. */
+const WRAP_UP_AT = 0.8;
 
 const STOP_NOTES: Partial<Record<RunStopReason, string>> = {
   step_budget: "I stopped before finishing: I reached my step limit for one task.",
@@ -330,6 +361,8 @@ export async function runAgent(
     hook = { ctx, agent };
     proactive = start.proactive;
     let tainted = start.tainted;
+    // A handoff's thread is new each time, so only other runs keep a record (ADR-0045).
+    const keepsRecord = !!deps.chats && !!input.threadId && input.trigger !== "delegation";
 
     if (agent.status !== "active") {
       return await finish({
@@ -442,6 +475,18 @@ export async function runAgent(
         start.proactive ? { readOnly: true } : undefined,
       );
       const model = await deps.llm.modelFor(agent.modelTier, ctx);
+      // What this agent already did in this chat (ADR-0045). A record that
+      // quotes outside content (a tainted child's answer) taints this run too.
+      const record: ChatRecord | null = keepsRecord
+        ? await deps.chats!.get(ctx, input.threadId as ThreadId)
+        : null;
+      const taintedByRecord = !start.tainted && quotesOutside(record);
+      if (taintedByRecord) {
+        await log([
+          runEvent("context-taint", "run.tainted", { source: "earlier work in this chat" }),
+        ]);
+        await deps.runs.update(ctx, ctx.runId, { tainted: true });
+      }
       return {
         history,
         memories,
@@ -451,8 +496,11 @@ export async function runAgent(
         request: request.slice(0, 600),
         skill,
         episodes,
+        record,
+        taintedByRecord,
       };
     });
+    if (context.taintedByRecord) tainted = true;
     const budget = contextBudget(context.window, options.maxContextTokens ?? 32_000);
 
     // Addresses the run was given (§10.3): in the conversation, and in what
@@ -467,12 +515,18 @@ export async function runAgent(
       if ((message.handoff || message.agentMessage || message.scheduled) && start.tainted) continue;
       learnUrls(message.content);
     }
+    // So were the record's, unless a run that wrote it had read outside content.
+    if (context.record && !context.record.tainted) {
+      for (const entry of context.record.ledger) learnUrls(entry.text);
+    }
 
     // ── The loop ─────────────────────────────────────────────────────────────
     let usage = EMPTY_USAGE;
     let turns: Turn[] = [];
     let summary: string | null = null;
-    let todos: { text: string; done: boolean }[] | null = null;
+    // A plan the last run in this chat left open carries on here (ADR-0045).
+    let todos: { text: string; done: boolean }[] | null = carriedPlan(context.record);
+    const planCarried = todos !== null;
     const seen = new Map<string, number>();
     let finalText: string | null = null;
     let stopReason: RunStopReason = "step_budget";
@@ -480,8 +534,45 @@ export async function runAgent(
     // rebuild on replay from the memoized tool steps.
     let tools = context.tools;
     const loadedToolkits = new Set<string>();
+    // The chat record (ADR-0045): built only from step results, so a replay
+    // rebuilds it the same way. `thisRun` is what this run added.
+    let ledger: ChatLedgerEntry[] = [...(context.record?.ledger ?? [])];
+    const thisRun: ChatLedgerEntry[] = [];
+    let recordChanged = false;
+    const record = (ended: RunStopReason | null): ChatRecord => ({
+      plan: todos ?? context.record?.plan ?? null,
+      ledger,
+      notes: summary ?? context.record?.notes ?? null,
+      stopReason: ended,
+      runId: ctx.runId,
+      tainted: tainted || (context.record?.tainted ?? false),
+    });
+    const keep = (entries: readonly (ChatLedgerEntry | null)[]) => {
+      const kept = entries.filter((e): e is ChatLedgerEntry => e !== null);
+      if (kept.length === 0) return;
+      ledger = addToLedger(ledger, kept);
+      thisRun.push(...kept);
+      recordChanged = true;
+    };
+    const saveRecord = async (id: string, ended: RunStopReason | null) => {
+      if (!keepsRecord) return;
+      const now = record(ended);
+      // Nothing worth carrying, and nothing to replace.
+      if (!context.record && !now.plan && now.ledger.length === 0 && !now.notes) return;
+      await steps.run(id, async () => {
+        const redacted = await redactJson(redact, ctx, now);
+        await deps.chats!.save(ctx, input.threadId as ThreadId, redacted as ChatRecord);
+        return true;
+      });
+    };
+    // Searches this run made, so the same one again reuses its result (ADR-0045).
+    const searches = new Map<string, { toolCallId: string; content: string; untrusted: boolean }>();
 
     for (let i = 0; i < agent.budgets.steps; i += 1) {
+      // Most of the budget spent: the task block says to finish (ADR-0045).
+      const wrapUp =
+        usage.inputTokens + usage.outputTokens >= agent.budgets.tokens * WRAP_UP_AT ||
+        (i + 1) / agent.budgets.steps >= WRAP_UP_AT;
       // Steering (§6.3, M5.05): what the person wrote here while the run
       // worked joins it at this step boundary, instead of waiting its turn.
       if (input.threadId && deps.runs.claimFollowUps) {
@@ -517,6 +608,9 @@ export async function runAgent(
           history: context.history,
           summary,
           turns,
+          record: context.record,
+          planCarried,
+          wrapUp,
         },
         budget,
       );
@@ -537,6 +631,9 @@ export async function runAgent(
                 history: context.history,
                 summary: result.summary,
                 turns: turns.slice(result.replaced),
+                record: context.record,
+                planCarried,
+                wrapUp,
               },
               budget,
             );
@@ -562,6 +659,7 @@ export async function runAgent(
         });
         if (compacted) {
           summary = compacted.summary;
+          recordChanged = true;
           learnUrls(compacted.summary);
           turns = turns.slice(compacted.replaced);
           usage = addUsage(usage, compacted, { model: 1 });
@@ -577,6 +675,9 @@ export async function runAgent(
               history: context.history,
               summary,
               turns,
+              record: context.record,
+              planCarried,
+              wrapUp,
             },
             budget,
           );
@@ -666,9 +767,27 @@ export async function runAgent(
         const call = withLoadHint(offered, tools);
         /** The call as it ran: with the person's changes, if they made any. */
         let ran: ToolCallTurn = call;
-        let result: ToolStepResult = await steps.run(toolCallId, () =>
-          runTool(toolCallId, call, tainted),
-        );
+        // The same search again in this run gets its earlier result (ADR-0045):
+        // nothing runs, so there is no new call to check or count.
+        const key = call.name === "web.search" && !call.invalid ? searchKey(call.args) : null;
+        const earlier = key ? searches.get(key) : undefined;
+        let result: ToolStepResult = earlier
+          ? await steps.run(`${toolCallId}-reused`, async () => {
+              await log([
+                runEvent(`${toolCallId}-reused`, "tool.reused", {
+                  toolCallId,
+                  tool: call.name,
+                  reusedFrom: earlier.toolCallId,
+                }),
+              ]);
+              return {
+                content: `You already ran this search in this task, so here are the same results again. Use them, or search for something different.\n${earlier.content}`,
+                untrusted: earlier.untrusted,
+                ok: true,
+                taintedNow: false,
+              };
+            })
+          : await steps.run(toolCallId, () => runTool(toolCallId, call, tainted));
         if (result.approval) {
           const decision = await askPerson(toolCallId, call, result.approval);
           if (decision.status === "approved" && decision.site) allowedSites.add(decision.site);
@@ -698,11 +817,30 @@ ${result.content}`,
             };
           }
         }
-        usage = addUsage(usage, { inputTokens: 0, outputTokens: 0, costUsd: 0 }, { tool: 1 });
+        if (!earlier) {
+          usage = addUsage(usage, { inputTokens: 0, outputTokens: 0, costUsd: 0 }, { tool: 1 });
+        }
         if (result.taintedNow) tainted = true;
         if (result.ok && call.name === "todo.write") {
           const items = (call.args as { items?: { text: string; done: boolean }[] }).items;
-          if (Array.isArray(items)) todos = items;
+          if (Array.isArray(items)) {
+            todos = items;
+            recordChanged = true;
+          }
+        }
+        if (key && result.ok && !earlier) {
+          searches.set(key, { toolCallId, content: result.content, untrusted: result.untrusted });
+        }
+        // What it did, for the chat record; a handoff is kept when its answer is in.
+        if (!earlier && ran.name !== DELEGATE_TASK) {
+          keep([
+            ledgerEntry(
+              ran,
+              result,
+              tools.find((t) => t.name === ran.name),
+              ctx.runId,
+            ),
+          ]);
         }
         if (result.ok && call.name === "load_toolkit") {
           const args = call.args as { app?: unknown; tools?: unknown };
@@ -763,15 +901,26 @@ ${result.content}`,
           }
           if (done.untrusted) tainted = true;
           learnUrls(done.content);
+          keep([handoffEntry(h.args, done, ctx.runId)]);
         }
       }
+
+      // Saved as the run goes (ADR-0045), so a run that fails or is stopped
+      // still leaves what it did for the next one.
+      if (recordChanged) {
+        await saveRecord(`record-${i}`, null);
+        recordChanged = false;
+      }
     }
+    await saveRecord("record-end", stopReason);
 
     // ── Reply ────────────────────────────────────────────────────────────────
+    // Stopped early: what it did and what is left, from the record (ADR-0045).
+    const plan = todos ?? context.record?.plan ?? null;
     const replyText =
       stopReason === "final_answer"
         ? finalText || "I don't have anything to add."
-        : (STOP_NOTES[stopReason] ?? "I stopped before finishing.");
+        : stopReply(STOP_NOTES[stopReason] ?? "I stopped before finishing.", thisRun, plan);
     // A check with nothing to report stays quiet (M5.10): no message, so the
     // person hears from it only when something needs them.
     const quiet =
@@ -812,6 +961,7 @@ ${result.content}`,
       reply: reply?.content ?? null,
       tainted,
       request: context.request,
+      progress: stopReason === "final_answer" ? null : progressLine(thisRun, plan),
     });
   } catch (error) {
     await chain.error(hook, error);
@@ -1151,6 +1301,8 @@ ${result.content}`,
     error?: { code: string; message: string };
     /** What was asked, for the run's episode. */
     request?: string;
+    /** A stopped run's progress from its record, for the episode (ADR-0045). */
+    progress?: string | null;
   }): Promise<RunResult> {
     await steps.run("finish", async () => {
       if (hook) await chain.runEnd(hook, { status: result.status, stopReason: result.stopReason });
@@ -1175,10 +1327,14 @@ ${result.content}`,
       if (result.reply !== null && deps.memory?.writeEpisode) {
         const done = result.stopReason === "final_answer";
         const asked = result.request ? `Asked: ${preview(result.request, 200)} — ` : "";
+        // A stopped run says how far it got, not just that it stopped (ADR-0045).
+        const came = done
+          ? `Answered: ${preview(result.reply, 300)}`
+          : `Stopped (${result.stopReason.replaceAll("_", " ")})${result.progress ? `: ${preview(result.progress, 300)}` : ""}`;
         await deps.memory
           .writeEpisode(ctx, {
             threadId: input.threadId,
-            summary: `${asked}${done ? "Answered" : "Stopped"}: ${preview(result.reply, 300)}`,
+            summary: `${asked}${came}`,
             outcome: done ? "done" : "stopped",
             tainted: result.tainted,
           })

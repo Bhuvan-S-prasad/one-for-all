@@ -82,10 +82,12 @@ export const TASK_STATE: PromptTemplate<{
   readonly task: string;
   readonly plan: string;
   readonly notes: string;
+  /** Most of the run's token or step budget is spent (ADR-0045). */
+  readonly wrapUp?: boolean;
 }> = {
   id: "harness.task",
-  version: 1,
-  render: ({ task, plan, notes }) =>
+  version: 2,
+  render: ({ task, plan, notes, wrapUp }) =>
     [
       task ? `The request you are working on:\n${task}` : "",
       plan,
@@ -97,6 +99,35 @@ export const TASK_STATE: PromptTemplate<{
             "Carry on from these notes. When you have what you need, write the finished answer for the person. Do not send the notes themselves.",
           ].join("\n")
         : "",
+      wrapUp
+        ? "You have used most of your budget for this task. Finish the item you are on, then write your answer now with what you have. Keep your plan up to date: what is left is kept, and the person can ask you to continue."
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+};
+
+/**
+ * What this agent already did in this chat (ADR-0045), from its record, in
+ * the system block. Written by the harness, not the model; a quote from
+ * outside content stays wrapped as such.
+ */
+export const CHAT_RECORD: PromptTemplate<{
+  readonly ended: string;
+  readonly plan: string;
+  readonly done: string;
+  readonly notes: string;
+}> = {
+  id: "harness.session",
+  version: 1,
+  render: ({ ended, plan, done, notes }) =>
+    [
+      "Earlier in this chat you already did this work (your own record, kept by the system; the person may not have seen all of it).",
+      ended,
+      plan ? `Your plan then:\n${plan}` : "",
+      done ? `Done:\n${done}` : "",
+      notes ? `Your notes then:\n${notes}` : "",
+      "Don't redo work listed here: reuse what it found and made. If the person asks you to continue, carry on with what is still open. If they ask for something new, start fresh, using anything here that helps.",
     ]
       .filter(Boolean)
       .join("\n\n"),

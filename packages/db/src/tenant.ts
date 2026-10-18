@@ -19,6 +19,7 @@ export const TENANT_TABLES = [
   "agent_grant",
   "thread",
   "thread_member",
+  "thread_state",
   "message",
   "run",
   "run_event",

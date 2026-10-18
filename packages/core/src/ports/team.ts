@@ -1,5 +1,6 @@
 import type { AgentId, MessageId, RunId, ThreadId } from "../ids";
 import type { RunContext } from "../tenant";
+import type { AgentCapability } from "./runtime";
 
 // Agents working as a team (ARCHITECTURE.md §6.3, M5.01). A run hands a piece
 // of work to another agent as a child run: the child starts from a brief,
@@ -12,6 +13,33 @@ export interface TeamMember {
   readonly slug: string;
   readonly name: string;
   readonly job: string;
+  /** What it can do, from its grants (ADR-0044); absent where nobody worked it out. */
+  readonly capabilities?: readonly AgentCapability[];
+}
+
+/** About 1,000 tokens of cards at the 32k window; agents past that get one line (ADR-0044). */
+export const ROSTER_CARD_CHARS = 4_000;
+
+/**
+ * A team as the model reads it (ADR-0044): each agent's handle, name and job,
+ * and a `can:` line from its grants. Full cards until the roster is long,
+ * then one line each, so a large team still fits.
+ */
+export function rosterText(members: readonly TeamMember[], maxChars = ROSTER_CARD_CHARS): string {
+  let used = 0;
+  return members
+    .map((m) => {
+      const head = `- ${m.slug} (${m.name}): ${m.job}`;
+      if (!m.capabilities) return head;
+      const can = m.capabilities.length
+        ? m.capabilities.map((c) => `${c.area}: ${c.abilities.join(", ")}`).join("; ")
+        : "no tools; answers from what it knows";
+      const card = `${head}\n  can: ${can}`;
+      if (used + card.length > maxChars) return head;
+      used += card.length;
+      return card;
+    })
+    .join("\n");
 }
 
 /** A child run made for a handoff, ready to run and be waited on. */

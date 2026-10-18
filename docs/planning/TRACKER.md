@@ -26,8 +26,8 @@ The single place to see what is done, what is in progress and what comes next. A
 
 | | |
 |---|---|
-| **Current milestone** | M6 Everywhere (Desktop done) |
-| **Next task** | M6.01 device pairing |
+| **Current milestone** | Teams and continuity (before M6) |
+| **Next task** | TC.06 coordinator role |
 | **Blockers** | None. Dev services must be running (`pnpm infra:up`) for integration tests |
 | **Decisions pending** | License (see [ARCHITECTURE.md §19](../architecture/ARCHITECTURE.md#19-open-questions)); needed before first public push, not before M1 work |
 
@@ -45,6 +45,7 @@ The single place to see what is done, what is in progress and what comes next. A
 | [M4 Integrations & policy](#m4-integrations--policy) | Connect apps; agent waits for approval before sending | ✅ Done | 13 / 13 |
 | [M5 The team](#m5-the-team) | Agents delegate to each other; routines run alone | ✅ Done | 13 / 13 |
 | [Desktop](#desktop) | Watch an agent work on its own desktop; it makes Word and Excel files | ✅ Done | 14 / 14 |
+| [Teams and continuity](#teams-and-continuity) | "Continue" continues; a coordinator routes by capability | 🟨 In progress | 5 / 9 |
 | [M6 Everywhere](#m6-everywhere) | Approve from the phone; chat on Telegram and Slack | ⬜ Not started | 0 / 8 |
 | [M7 Hardening](#m7-hardening) | Evals gate CI; backups; E2B and cloud adapters | ⬜ Not started | 0 / 11 |
 
@@ -280,6 +281,25 @@ Stays where it is: the approval card (M4.09), the file card (M3.06) and the comp
 
 ---
 
+## Teams and continuity
+
+**Goal:** an agent continues work across runs in a chat instead of starting over, and a coordinator routes work by what each agent can do, enforced in code.
+**Done when:** a chief of staff given the laptop task (2026-10-18) hands research to the Researcher and the spreadsheet to the operator, drafts the email last, and, stopped by its budget, continues on "continue" without redoing finished work.
+**Found (2026-10-18, live run):** the chief did 22 tool calls of its own research, delegated only the draft, hit its 120k budget; "continue" started over (only chat text reaches the next run; the plan is per run; the episode said "Stopped: token budget"). Applies to every agent in every chat.
+**ADRs:** 0044, 0045
+
+- [x] TC.01 ADRs and architecture: ADR-0044 the team roster from grants, coordinators delegate first; ADR-0045 a chat keeps each agent's working state. ARCHITECTURE.md §6.2, §6.3, §7, §8, §15, §16, §18; the ADR index → Both written and accepted; §6.2 the chat record and the 80% warning, §6.3 "The roster" and "Coordinators" rows (replacing "Chief of staff"), §7 the "Earlier in this chat" block and "Work carries across runs", §8 a "Chat record" row, §15 `thread_state`, §16 two rows, §18 the milestone
+- [x] TC.02 Chat record: `thread_state` (one row per thread and agent, RLS), port and Postgres adapter, the ledger built in the loop from tool step results (actions, handoffs, searches, pages; untrusted results not quoted), saved in its own step after each model step that changed it, merged with the previous record (40 entries) — **Deps:** TC.01 → Migration `0017_thread_state` (RLS by hand; `TENANT_TABLES` lists it). Core `ChatRecord`, `ChatLedgerEntry`, `ChatRecordStore` (the port is named for the record, not "session"); `createChatRecordStore` upserts on thread and agent; `HarnessDeps.chats`, wired in `container.ts`. `packages/harness/src/chat-record.ts`: `ledgerEntry` (searches by query, pages by URL, actions with up to three short arguments and the result only when it came from inside; reads and bookkeeping left out), `handoffEntry` (a tainted child's answer kept as `untrusted`), `addToLedger` (a repeated lookup moves to the end; when full, lookups go first). The loop saves `record-<i>` after a step that changed the plan, ledger or notes, and `record-end` with the stop reason, redacted; a failed or cancelled run keeps what it saved (stop reason null). Handoff runs keep none (their thread is new each time); a run with nothing to carry writes no row. Tests: 1 DB integration (one row rewritten in place, another workspace reads nothing)
+- [x] TC.03 "Earlier in this chat" block (`harness.session@1`, about 1,500 tokens from history), open plan carried over when the last run stopped early, taint and addresses from a tainted record (ADR-0027) — **Deps:** TC.02 → `CHAT_RECORD` in the system block after memory: how the last run ended, the plan (unless carried), work done, searches and pages, notes, and "don't redo… continue… or start fresh". `session: 1,500` in the budget, taken from history; oldest lookups dropped first. `carriedPlan`: the open plan becomes `todos` unless the last run answered. A record quoting outside content starts the run tainted (`run.tainted` from "earlier work in this chat") and is shown wrapped; a tainted record's addresses don't count as given
+- [x] TC.04 Stop replies from the record ("Done… Left… Reply continue"), the 80% budget warning (`harness.task@2`), the same `web.search` twice in a run reused (`tool.reused`), episodes of stopped runs from the record — **Deps:** TC.02 → `stopReply` (this run's actions and handoffs, a count of lookups, the open plan, "Reply “continue” and I'll pick up from here"), no model call. The warning from 80% of tokens or steps. A search with the same normalised query returns the earlier result in a `-reused` step with a `tool.reused` event (new in contracts; Activity and the run timeline show it), not counted as a tool call. Episodes of stopped runs read "Stopped (token budget): did …; N lookups; left: …"
+- [x] TC.05 Capability cards: `ToolExecutor.capabilities` from grants and connected apps, on each `TeamMember`; `delegate_task` and `message_agent` list `slug (Name): job` with `can:`; cards capped at about 1,000 tokens — **Deps:** TC.01 → `capabilities(ctx, agentIds)` works out a batch in one pass (one toolkit listing): built-ins grouped by area in a few words (`web: search, read pages`, `terminal: run commands and Python`, `files: send files to the person`), connected apps by name with their actions, `(asks first)` for approve grants, platform tools left out, 8 per app then "N more". The team directory adds the cards (`TeamOptions.capabilities`, from the executor in `container.ts`); `rosterText` in core renders them, full cards to 4,000 characters then one line each (ranking by the request waits for TC.06, where the request is known). Tests: 3 tools unit (cards, roster cap, delegate listing), 2 API integration updated to the new roster
+- [ ] TC.06 Coordinator role: `spec.role` in contracts and the editor, a group's leader counts as one; team block and rules in the system prompt (`harness.team@1`), roster ranked by the request; covered tools hidden from coordinators; plan items with owners — **Deps:** TC.05
+- [ ] TC.07 Editor preview "What your coordinator sees": the live roster with cards — **Deps:** TC.06
+- [ ] TC.08 Evals: continue after a budget stop without redoing work; a coordinator routes research and drafts last; a 10-agent roster — **Deps:** TC.04, TC.06
+- [ ] TC.09 Live check: the laptop task again on the dev stack — **Deps:** TC.08
+
+---
+
 ## M6 Everywhere
 
 **Goal:** reach agents from the phone and chat apps.
@@ -335,12 +355,20 @@ Stays where it is: the approval card (M4.09), the file card (M3.06) and the comp
 - Failed runs show no usage: the harness writes usage when a run finishes, so a run that fails (Inngest's `onFailure`) records 0 model calls although its log has them. Found in DT.13
 - Default token budget: 120k ran out on the Desktop done-when task (research plus a Word and an Excel file) before the files were sent; 300k sufficed. A higher default, or a per-task hint, is the user's call. Found in DT.13
 - Phone takeover: show the page at a phone's width while a phone has control (a desktop page scaled to 390 px is hard to tap)
+- Use a person's ChatGPT plan to power agents ("Sign in with ChatGPT", OpenAI's open-source plan-usage track, researched 2026-10-18): a new `ModelProvider` file (ADR-0022), an OAuth flow with PKCE on a `127.0.0.1` loopback callback, tokens and rotating refresh in the vault with a background refresh, a "Connect ChatGPT" card in Settings, a "plan allowance used up" state, and an ADR. Spike first with a real Plus account: tool calling and image input over the Responses API with a plan token (`store: false`, `stream: true`), and the error when a cap is hit. Blockers: the license (the open-source track needs one) and whether remote VMs are supported (the sign-in must happen on the person's own computer and the credentials be copied over; no per-host usage or revoke). Docs: developers.openai.com/siwc
 
 ---
 
 ## Session log
 
 Newest first. Keep entries short.
+
+### 2026-10-18 (session 25)
+- **Done:** found in a live run that a chief of staff did its own research instead of delegating and that "continue" after its budget stop started over (only chat text reaches the next run). New milestone **Teams and continuity**; TC.01–TC.05 (5 of 9): ADR-0044 and ADR-0045, the chat record (`thread_state`), the "Earlier in this chat" block with plan carry-over and taint, stop replies, the 80% warning, reused searches, better episodes, capability cards in every roster.
+- **Also:** CI's format check failed on a leftover `packages/sandbox/src/screen-check.tmp.ts` (deleted); graft set up locally; the web app's dropdowns now use a themed `Select` (`components/ui/select.tsx`) instead of the browser's own.
+- **Checks:** unit tests in all 19 packages (harness 80, tools 63), DB integration 37, API integration 77, typecheck, lint (no errors), format. Migration 0017 applied to the dev database. Not run: sandbox, vault, memory and events integration (untouched), evals, and a live run.
+- **Next:** TC.06 coordinator role (role field, team block, hiding covered tools, plan owners), then TC.07–TC.09.
+- **Open:** the default token budget (still 120k); the roster isn't ranked by the request until TC.06.
 
 ### 2026-10-11 (session 24)
 - **Done:** DT.12 and DT.13: **Desktop is done** (14 of 14). Desktop evals on a real computer (report, laptop sheet, an edit in a desktop app, a red-team page that plants a command), the done-when checked live on the dev stack and in a fresh self-host bundle, RAM with three desktops recorded, arm64 images built and their programs run.

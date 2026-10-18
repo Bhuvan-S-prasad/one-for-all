@@ -3,6 +3,7 @@ import {
   check,
   foreignKey,
   index,
+  jsonb,
   pgTable,
   text,
   unique,
@@ -77,5 +78,47 @@ export const threadMember = pgTable(
     uniqueIndex("thread_member_agent_uq")
       .on(t.threadId, t.agentId)
       .where(sql`${t.agentId} is not null`),
+  ],
+);
+
+/** An agent's working record in a chat, as JSON (ADR-0045; the shape is `ChatRecord` in core). */
+export interface ThreadStateJson {
+  plan: { text: string; done: boolean }[] | null;
+  ledger: { kind: string; text: string; untrusted?: boolean; runId: string }[];
+  notes: string | null;
+  stopReason: string | null;
+  tainted: boolean;
+}
+
+/**
+ * Each agent's working record in a chat (ADR-0045): its plan, what it did and
+ * its notes, so the next run there carries on instead of starting over. One
+ * row per thread and agent, rewritten as each run goes.
+ */
+export const threadState = pgTable(
+  "thread_state",
+  {
+    id: id(),
+    workspaceId: workspaceId(),
+    threadId: uuid("thread_id").notNull(),
+    agentId: uuid("agent_id").notNull(),
+    state: jsonb("state").$type<ThreadStateJson>().notNull(),
+    /** The run that last wrote it. */
+    runId: uuid("run_id").notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: "thread_state_thread_fk",
+      columns: [t.workspaceId, t.threadId],
+      foreignColumns: [thread.workspaceId, thread.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "thread_state_agent_fk",
+      columns: [t.workspaceId, t.agentId],
+      foreignColumns: [agent.workspaceId, agent.id],
+    }).onDelete("cascade"),
+    uniqueIndex("thread_state_thread_agent_uq").on(t.threadId, t.agentId),
   ],
 );

@@ -199,6 +199,49 @@ export interface ThreadStore {
   ): Promise<MessageId>;
 }
 
+// ── The chat record (ADR-0045) ───────────────────────────────────────────────
+
+/** One thing an agent did in a chat, in the harness's words (ADR-0045). */
+export interface ChatLedgerEntry {
+  /** `action` changed something; `handoff` went to another agent; `search` and `read` looked. */
+  readonly kind: "action" | "handoff" | "search" | "read";
+  readonly text: string;
+  /** Quotes outside content (a tainted child's answer): shown wrapped, and taints the run that loads it. */
+  readonly untrusted?: boolean;
+  /** The run that did it. */
+  readonly runId: string;
+}
+
+export interface ChatPlanItem {
+  readonly text: string;
+  readonly done: boolean;
+}
+
+/**
+ * An agent's working record in one chat: what the next run there needs to
+ * carry on instead of starting over. Rewritten as each run goes.
+ */
+export interface ChatRecord {
+  /** The latest plan (`todo.write`), or none. */
+  readonly plan: readonly ChatPlanItem[] | null;
+  /** What was done, oldest first; the latest entries only. */
+  readonly ledger: readonly ChatLedgerEntry[];
+  /** Notes from compacted steps, if a run had any. */
+  readonly notes: string | null;
+  /** How the run that last wrote it ended; null while it runs, or if it never got to say (failed, stopped). */
+  readonly stopReason: string | null;
+  /** The run that last wrote it. */
+  readonly runId: string;
+  /** A run that wrote it had read outside content: its addresses don't count as given (ADR-0027). */
+  readonly tainted: boolean;
+}
+
+/** One record per chat and agent; `ctx.agentId` picks the agent. */
+export interface ChatRecordStore {
+  get(ctx: RunContext, threadId: ThreadId): Promise<ChatRecord | null>;
+  save(ctx: RunContext, threadId: ThreadId, record: ChatRecord): Promise<void>;
+}
+
 // ── Tool execution ───────────────────────────────────────────────────────────
 
 export interface ToolExecutionRequest {
@@ -274,8 +317,27 @@ export function toolkitToolName(app: string, tool: string): string {
   return `${app}.${name}`;
 }
 
+/**
+ * What an agent can do in one area (an app, or a group of built-in tools),
+ * in plain words, from its grants (ADR-0044): `web: search, read pages`.
+ */
+export interface AgentCapability {
+  readonly area: string;
+  /** What it can do there; `(asks first)` where its grant asks a person. */
+  readonly abilities: readonly string[];
+}
+
 /** Lists the tools an agent may use and runs them through policy (hard rule 5). */
 export interface ToolExecutor {
+  /**
+   * What each of these agents may use, by area (ADR-0044), from the same
+   * grants and connected apps that decide their tool lists. Platform tools
+   * every agent has (plan, memory, handoffs) are left out.
+   */
+  capabilities?(
+    ctx: RunContext,
+    agentIds: readonly AgentId[],
+  ): Promise<ReadonlyMap<string, readonly AgentCapability[]>>;
   /**
    * The tools the model sees. Apps with many tools stay behind `load_toolkit`
    * until the run loads them: `toolkits` holds whole apps by slug (`notes`)

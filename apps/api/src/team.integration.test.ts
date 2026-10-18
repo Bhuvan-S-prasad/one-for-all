@@ -214,8 +214,13 @@ describe.skipIf(!hasDb)("handing work to other agents (integration)", async () =
     // The coordinator saw the roster (not itself); a handed-over run saw no delegate_task.
     const coordinatorTools = llm.requests[0]?.tools ?? [];
     const delegate = coordinatorTools.find((t) => t.name === "delegate_task");
-    expect(delegate?.description).toContain("- researcher: Researcher, Researcher");
-    expect(delegate?.description).toContain("- writer: Writer, Writer");
+    // Each with a capability card from its grants (ADR-0044): neither has work tools here.
+    expect(delegate?.description).toContain(
+      "- researcher (Researcher): Researcher\n  can: no tools; answers from what it knows",
+    );
+    expect(delegate?.description).toContain(
+      "- writer (Writer): Writer\n  can: no tools; answers from what it knows",
+    );
     expect(delegate?.description).not.toContain("coordinator");
     const researcherCall = llm.requests.find((r) =>
       r.messages[0]?.content.includes("Your name is Researcher"),
@@ -385,8 +390,8 @@ describe.skipIf(!hasDb)("handing work to other agents (integration)", async () =
     const leadCall = llm.requests.find((r) => r.messages[0]?.content.includes("Your name is Lead"));
     const messageTool = leadCall?.tools?.find((t) => t.name === "message_agent");
     // In a group, only its members can be messaged.
-    expect(messageTool?.description).toContain("- researcher: Researcher, Researcher");
-    expect(messageTool?.description).not.toContain("coordinator:");
+    expect(messageTool?.description).toContain("- researcher (Researcher): Researcher");
+    expect(messageTool?.description).not.toContain("coordinator (");
 
     // The message woke the researcher: a run of its own in the group, started by the lead's.
     const woken = started.at(-1)!;

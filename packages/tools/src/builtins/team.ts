@@ -1,4 +1,4 @@
-import { findMember, type TeamDirectory } from "@ofa/core";
+import { findMember, rosterText, type TeamDirectory } from "@ofa/core";
 import { z } from "zod";
 import { defineTool } from "../define";
 
@@ -35,8 +35,10 @@ export function messageAgentTool(team: TeamDirectory | null) {
     async listed(ctx) {
       const contacts = team ? await team.contacts(ctx) : [];
       if (contacts.length === 0) return null;
-      const roster = contacts.map((m) => `- ${m.slug}: ${m.name}, ${m.job}`).join("\n");
-      return { description: `${MESSAGE_DESCRIPTION}\nAgents you can message here:\n${roster}` };
+      // Each with what it can do, from its grants (ADR-0044).
+      return {
+        description: `${MESSAGE_DESCRIPTION}\nAgents you can message here:\n${rosterText(contacts)}`,
+      };
     },
     async describe({ agent, message }) {
       const start = message.length > 160 ? `${message.slice(0, 159)}…` : message;
@@ -82,8 +84,10 @@ export function delegateTaskTool(team: TeamDirectory | null) {
     async listed(ctx) {
       const members = team ? await team.members(ctx) : [];
       if (members.length === 0) return null;
-      const roster = members.map((m) => `- ${m.slug}: ${m.name}, ${m.job}`).join("\n");
-      return { description: `${DESCRIPTION}\nAgents you can hand work to:\n${roster}` };
+      // Each with what it can do, from its grants (ADR-0044).
+      return {
+        description: `${DESCRIPTION}\nAgents you can hand work to (pick each by what it can do):\n${rosterText(members)}`,
+      };
     },
     async describe({ agent, brief }) {
       const start = brief.length > 160 ? `${brief.slice(0, 159)}…` : brief;

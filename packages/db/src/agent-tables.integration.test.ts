@@ -4,6 +4,7 @@ import {
   asId,
   type RunContext,
   type TenantContext,
+  type ThreadId,
   type UserId,
   type WorkspaceId,
 } from "@ofa/core";
@@ -12,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadRootEnv } from "./env";
 import {
   createApprovalStore,
+  createChatRecordStore,
   createDatabase,
   createPolicyRule,
   createPolicyRuleStore,
@@ -652,6 +654,37 @@ describe.skipIf(!appUrl || !ownerUrl)("agent tables (integration)", () => {
         created: false,
         existing: { status: "done", result: "found", untrusted: true },
       });
+    });
+
+    it("keeps one chat record per thread and agent, rewritten in place (ADR-0045)", async () => {
+      const rc = await runCtx();
+      const [t] = await withTenant(app.db, ctx, (tx) =>
+        tx
+          .insert(schema.thread)
+          .values({ workspaceId: ctx.workspaceId })
+          .returning({ id: schema.thread.id }),
+      );
+      const threadId = asId<ThreadId>(t?.id ?? "");
+      const chats = createChatRecordStore(app.db);
+      expect(await chats.get(rc, threadId)).toBeNull();
+      const record = {
+        plan: [{ text: "write the report", done: false }],
+        ledger: [{ kind: "action" as const, text: "Draft saved", runId: rc.runId }],
+        notes: null,
+        stopReason: null,
+        runId: rc.runId,
+        tainted: false,
+      };
+      await chats.save(rc, threadId, record);
+      await chats.save(rc, threadId, { ...record, stopReason: "token_budget" });
+      expect(await chats.get(rc, threadId)).toEqual({ ...record, stopReason: "token_budget" });
+      const rows = await withTenant(app.db, ctx, (tx) =>
+        tx.select().from(schema.threadState).where(eq(schema.threadState.threadId, threadId)),
+      );
+      expect(rows).toHaveLength(1);
+      // Another workspace reads nothing (row-level security).
+      const elsewhere = { ...rc, workspaceId: asId<WorkspaceId>(randomUUID()) };
+      expect(await chats.get(elsewhere, threadId)).toBeNull();
     });
   });
 });

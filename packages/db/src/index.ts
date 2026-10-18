@@ -164,6 +164,7 @@ export {
 export {
   createAgentDirectory,
   createRunStore,
+  createChatRecordStore,
   createThreadStore,
   createToolCallStore,
   type Publish,

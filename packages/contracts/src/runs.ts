@@ -200,6 +200,8 @@ const RUN_EVENT_PAYLOADS = {
     code: z.string().max(64),
     message: z.string().max(2_000),
   }),
+  /** The same search again in a run: its earlier result was given back, nothing ran (ADR-0045). */
+  "tool.reused": z.object({ toolCallId: idSchema, tool: toolName, reusedFrom: idSchema }),
   "memory.written": z.object({
     memoryId: idSchema,
     scope: z.enum(MEMORY_SCOPES),
@@ -249,6 +251,7 @@ export const runEventInputSchema = z.discriminatedUnion("type", [
   body("approval.decided"),
   body("tool.completed"),
   body("tool.failed"),
+  body("tool.reused"),
   body("memory.written"),
   body("delegation.started"),
   body("delegation.finished"),

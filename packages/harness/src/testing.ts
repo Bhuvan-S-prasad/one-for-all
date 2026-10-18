@@ -5,6 +5,8 @@ import {
   type ApprovalRecord,
   type ApprovalStore,
   type AgentProfile,
+  type ChatRecord,
+  type ChatRecordStore,
   type ChildRunRequest,
   type ChildRunResult,
   type ConversationMessage,
@@ -330,6 +332,22 @@ export function createMemoryApprovals(): ApprovalStore & { readonly records: App
       const open = records.filter((r) => r.runId === runId && r.status === "pending");
       for (const r of open) replace({ ...r, status: "expired", decidedAt: new Date() });
       return open.length;
+    },
+  };
+}
+
+/** Chat records in memory (ADR-0045), keyed by thread and agent. */
+export function createMemoryChatRecords(): ChatRecordStore & {
+  readonly records: Map<string, ChatRecord>;
+} {
+  const records = new Map<string, ChatRecord>();
+  return {
+    records,
+    async get(ctx, threadId) {
+      return records.get(`${threadId}:${ctx.agentId}`) ?? null;
+    },
+    async save(ctx, threadId, record) {
+      records.set(`${threadId}:${ctx.agentId}`, structuredClone(record));
     },
   };
 }
