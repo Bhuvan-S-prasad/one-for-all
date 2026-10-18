@@ -72,7 +72,10 @@ export function delegateTaskTool(team: TeamDirectory | null) {
         .string()
         .trim()
         .min(20, "Write a brief the other agent can act on alone")
-        .max(4_000)
+        .max(
+          4_000,
+          "The brief is over 4,000 characters. Don't paste findings or content into it: name the agents in include_results_from and say what to write",
+        )
         .describe("The work, with everything the other agent needs to do it"),
       include_results_from: z
         .array(z.string().trim().min(1).max(80))

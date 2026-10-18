@@ -2,6 +2,7 @@ import {
   asId,
   type AgentProfile,
   type ChildRunRequest,
+  type ChatRecord,
   type ChildRunResult,
   type RunContext,
   type TeamDirectory,
@@ -11,6 +12,7 @@ import {
 import { describe, expect, it } from "vitest";
 import {
   createFakeToolExecutor,
+  createMemoryChatRecords,
   createMemoryRuntime,
   createMemoStepRunner,
   createScriptedLLM,
@@ -95,6 +97,8 @@ function setup(
     id: string,
     child: ChildRunRequest,
   ) => Promise<ChildRunResult | null> | ChildRunResult | null,
+  /** What an earlier run in this chat left behind (ADR-0045). */
+  record?: ChatRecord,
 ) {
   const runtime = createMemoryRuntime();
   runtime.agents.profiles.set(ctx.agentId, profile("coord", "Coordinator"));
@@ -132,6 +136,8 @@ function setup(
         }
       : {}),
   });
+  const chats = createMemoryChatRecords();
+  if (record) void chats.save({ ...ctx, runId: asId("run_0") }, threadId, record);
   const deps = {
     llm,
     tools,
@@ -139,6 +145,7 @@ function setup(
     agents: runtime.agents,
     threads: runtime.threads,
     team,
+    chats,
   };
   const run = () => runAgent({ ctx, threadId, trigger: "message" }, deps, steps);
   return { runtime, llm, steps, run, handoffs, invoked };
@@ -533,6 +540,50 @@ describe("passing on every answer (TC.10)", () => {
     await run();
     expect(handoffs[2]?.brief).toContain(
       "### From researcher\nThinkPad T14, Framework 13.\n\n---\n\n10 h, 9 h.",
+    );
+  });
+});
+
+describe("passing on answers from earlier in the chat (TC.10)", () => {
+  it("a run that continues passes on a handoff answer kept in the chat record", async () => {
+    const earlier: ChatRecord = {
+      plan: null,
+      ledger: [
+        {
+          kind: "handoff",
+          text: "researcher was asked “laptops” → done: ThinkPad T14",
+          agent: "researcher",
+          answer: "ThinkPad T14 at $1,099.",
+          runId: "run_0",
+        },
+      ],
+      notes: null,
+      stopReason: "token_budget",
+      runId: "run_0",
+      tainted: false,
+    };
+    const { run, handoffs } = setup(
+      [
+        {
+          toolCalls: [
+            {
+              name: "delegate_task",
+              args: {
+                agent: "writer",
+                brief: "Write the report from the research.",
+                include_results_from: ["researcher"],
+              },
+            },
+          ],
+        },
+        { text: "Done." },
+      ],
+      () => childDone("Written."),
+      earlier,
+    );
+    await run();
+    expect(handoffs[0]?.brief).toContain(
+      "### From researcher\n(From earlier in this chat, shortened.) ThinkPad T14 at $1,099.",
     );
   });
 });

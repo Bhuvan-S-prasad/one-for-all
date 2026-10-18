@@ -1,69 +1,116 @@
-import type { RunEvent } from "@ofa/contracts";
+import type { Agent, RunEvent } from "@ofa/contracts";
 
 // Turn a run's event log into the steps a person cares about: what it looked
-// up, read or saved, and whether each worked. The full log is in Activity.
+// up, read, saved or handed on, and whether each worked. The full log is in
+// Activity. The trail reads like a person's notes (Perplexity's steps,
+// Claude's tool calls): what was done to what, quiet when it worked, plain
+// words when it didn't.
 
-const TOOL_LABELS: Record<string, [doing: string, done: string]> = {
-  "web.search": ["Searching the web", "Searched the web"],
-  "web.read_url": ["Reading a page", "Read a page"],
-  remember: ["Saving to memory", "Saved to memory"],
-  recall: ["Checking memory", "Checked memory"],
-  "todo.write": ["Planning", "Updated the plan"],
-  "browser.open": ["Opening a page", "Opened a page"],
-  "browser.snapshot": ["Looking at the page", "Looked at the page"],
-  "browser.click": ["Clicking", "Clicked"],
-  "browser.type": ["Typing", "Typed"],
-  "browser.press": ["Pressing a key", "Pressed a key"],
-  "browser.back": ["Going back", "Went back"],
-  "shell.run": ["Running a command", "Ran a command"],
-  use_saved_login: ["Signing in", "Signed in with a saved login"],
-  "artifacts.read": ["Reading saved output", "Read saved output"],
-  "files.read": ["Reading a file", "Read a file"],
-  "files.write": ["Writing a file", "Wrote a file"],
-  "files.list": ["Looking in a folder", "Looked in a folder"],
-  "files.send": ["Sending you a file", "Sent you a file"],
-  "desktop.open": ["Opening it on the desktop", "Opened it on the desktop"],
-  "desktop.snapshot": ["Looking at the desktop", "Looked at the desktop"],
-  "desktop.click": ["Clicking on the desktop", "Clicked on the desktop"],
-  "desktop.type": ["Typing on the desktop", "Typed on the desktop"],
-  "desktop.press": ["Pressing keys", "Pressed keys"],
-  "desktop.screenshot": ["Looking at the screen", "Looked at the screen"],
-  "desktop.click_at": ["Clicking on the screen", "Clicked on the screen"],
-  "desktop.type_text": ["Typing on the screen", "Typed on the screen"],
-  delegate_task: ["Handing work to another agent", "Handed work to another agent"],
-  message_agent: ["Messaging another agent", "Messaged another agent"],
-  schedule_task: ["Scheduling a task for later", "Scheduled a task for later"],
-  remind_me: ["Setting a reminder", "Set a reminder"],
-  run_skill: ["Opening a skill", "Opened a skill"],
-  save_skill: ["Saving a skill", "Saved a skill"],
+/** What a step is doing, what it did, and what it couldn't do ("Couldn't …"). */
+const TOOL_LABELS: Record<string, [doing: string, done: string, base: string]> = {
+  "web.search": ["Searching the web", "Searched the web", "search the web"],
+  "web.read_url": ["Reading a page", "Read a page", "read a page"],
+  remember: ["Saving to memory", "Saved to memory", "save to memory"],
+  recall: ["Checking memory", "Checked memory", "check memory"],
+  "todo.write": ["Planning", "Updated the plan", "update the plan"],
+  "browser.open": ["Opening a page", "Opened a page", "open a page"],
+  "browser.snapshot": ["Looking at the page", "Looked at the page", "look at the page"],
+  "browser.click": ["Clicking", "Clicked", "click"],
+  "browser.type": ["Typing", "Typed", "type"],
+  "browser.press": ["Pressing a key", "Pressed a key", "press a key"],
+  "browser.back": ["Going back", "Went back", "go back"],
+  "shell.run": ["Running a command", "Ran a command", "run a command"],
+  use_saved_login: ["Signing in", "Signed in with a saved login", "sign in"],
+  "artifacts.read": ["Reading saved output", "Read saved output", "read saved output"],
+  "files.read": ["Reading a file", "Read a file", "read a file"],
+  "files.write": ["Writing a file", "Wrote a file", "write a file"],
+  "files.list": ["Looking in a folder", "Looked in a folder", "look in a folder"],
+  "files.send": ["Sending you a file", "Sent you a file", "send you a file"],
+  "desktop.open": ["Opening it on the desktop", "Opened it on the desktop", "open it"],
+  "desktop.snapshot": ["Looking at the desktop", "Looked at the desktop", "see the desktop"],
+  "desktop.click": ["Clicking on the desktop", "Clicked on the desktop", "click"],
+  "desktop.type": ["Typing on the desktop", "Typed on the desktop", "type"],
+  "desktop.press": ["Pressing keys", "Pressed keys", "press keys"],
+  "desktop.screenshot": ["Looking at the screen", "Looked at the screen", "see the screen"],
+  "desktop.click_at": ["Clicking on the screen", "Clicked on the screen", "click"],
+  "desktop.type_text": ["Typing on the screen", "Typed on the screen", "type"],
+  schedule_task: ["Scheduling a task for later", "Scheduled a task for later", "schedule it"],
+  remind_me: ["Setting a reminder", "Set a reminder", "set a reminder"],
+  run_skill: ["Opening a skill", "Opened a skill", "open the skill"],
+  save_skill: ["Saving a skill", "Saved a skill", "save the skill"],
 };
 
 export interface RunStep {
   readonly id: string;
+  /** The tool behind the step, for its icon; null for a person's answer. */
+  readonly tool: string | null;
   readonly label: string;
   readonly detail: string | null;
   readonly state: "done" | "active" | "failed" | "blocked";
+  /** How long the call took, once it finished. */
+  readonly durationMs: number | null;
+}
+
+/** Agents by slug, so a handoff says who: "Asked Researcher". */
+export type AgentNames = ReadonlyMap<string, string>;
+
+export function agentNames(agents: readonly Agent[] | undefined): AgentNames {
+  return new Map((agents ?? []).map((a) => [a.slug.toLowerCase(), a.name]));
+}
+
+function oneLine(text: string, length: number): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > length ? `${flat.slice(0, length - 1)}…` : flat;
+}
+
+function agentName(slug: unknown, names: AgentNames | undefined): string {
+  if (typeof slug !== "string" || !slug.trim()) return "another agent";
+  const key = slug.trim().replace(/^@/, "").toLowerCase();
+  return names?.get(key) ?? key.charAt(0).toUpperCase() + key.slice(1).replace(/-/g, " ");
+}
+
+function labelsFor(
+  tool: string,
+  args: unknown,
+  names: AgentNames | undefined,
+): [doing: string, done: string, base: string] {
+  const a = (args ?? {}) as Record<string, unknown>;
+  if (tool === "delegate_task") {
+    const who = agentName(a.agent, names);
+    return [`Asking ${who}`, `Asked ${who}`, `ask ${who}`];
+  }
+  if (tool === "message_agent") {
+    const who = agentName(a.agent ?? a.to, names);
+    return [`Messaging ${who}`, `Messaged ${who}`, `message ${who}`];
+  }
+  const known = TOOL_LABELS[tool];
+  if (known) return known;
+  // App tools (gmail.create_draft): the action in words, under the app's name.
+  const [app, action] = tool.includes(".") ? tool.split(".", 2) : [null, tool];
+  const words = (action ?? tool).replace(/_/g, " ");
+  const where = app ? ` in ${app.charAt(0).toUpperCase()}${app.slice(1)}` : "";
+  return [
+    `Using ${tool}`,
+    `${words.charAt(0).toUpperCase()}${words.slice(1)}${where}`,
+    `use ${tool}`,
+  ];
+}
+
+function hostOrNull(url: unknown): string | null {
+  if (typeof url !== "string") return null;
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return null;
+  }
 }
 
 function detailFor(tool: string, args: unknown): string | null {
   const a = (args ?? {}) as Record<string, unknown>;
   if (tool === "web.search" && typeof a.query === "string") return a.query;
-  if (tool === "web.read_url" && typeof a.url === "string") {
-    try {
-      return new URL(a.url).hostname;
-    } catch {
-      return null;
-    }
-  }
+  if (tool === "web.read_url" || tool === "browser.open") return hostOrNull(a.url);
   if (tool === "remember" && typeof a.fact === "string") return a.fact;
   if (tool === "recall" && typeof a.query === "string") return a.query;
-  if (tool === "browser.open" && typeof a.url === "string") {
-    try {
-      return new URL(a.url).hostname;
-    } catch {
-      return null;
-    }
-  }
   if (tool === "browser.type" && typeof a.text === "string") return `“${a.text.slice(0, 40)}”`;
   if (tool === "browser.press" && typeof a.key === "string") return a.key;
   if (tool === "desktop.type" && typeof a.text === "string") return `“${a.text.slice(0, 40)}”`;
@@ -72,39 +119,86 @@ function detailFor(tool: string, args: unknown): string | null {
   if ((tool.startsWith("files.") || tool === "desktop.open") && typeof a.path === "string") {
     return a.path;
   }
+  if (tool === "delegate_task" && typeof a.brief === "string") return oneLine(a.brief, 140);
+  if (tool === "message_agent" && typeof a.message === "string") return oneLine(a.message, 140);
+  if (tool === "todo.write" && Array.isArray(a.items)) {
+    const items = a.items as { done?: unknown }[];
+    const done = items.filter((x) => x?.done === true).length;
+    return `${done} of ${items.length} done`;
+  }
+  if (tool === "artifacts.read" && typeof a.uri === "string") return a.uri;
+  if (typeof a.subject === "string") return a.subject;
   return null;
 }
 
-export function runSteps(events: readonly RunEvent[]): RunStep[] {
+/**
+ * A failure in plain words: what went wrong, not the validator's message.
+ * Unknown shapes pass through, shortened.
+ */
+export function plainError(message: string): string {
+  const unknown = /^Unknown tool:\s*(.+)$/i.exec(message.trim());
+  if (unknown) return `“${unknown[1]}” isn't one of its tools`;
+  const tooBig = /^(\w+):\s*Too big: expected \w+ to have <=\s*([\d,]+) (\w+)/i.exec(message);
+  if (tooBig) {
+    const limit = Number(tooBig[2]!.replace(/,/g, "")).toLocaleString("en");
+    return `The ${tooBig[1]} was too long (the limit is ${limit} ${tooBig[3]})`;
+  }
+  const tooSmall = /^(\w+):\s*Too small/i.exec(message);
+  if (tooSmall) return `The ${tooSmall[1]} was missing or empty`;
+  const missing = /^(\w+):\s*(Required|Invalid input: expected \w+, received undefined)/i.exec(
+    message,
+  );
+  if (missing) return `It left out the ${missing[1]}`;
+  return oneLine(message, 200);
+}
+
+export function runSteps(events: readonly RunEvent[], names?: AgentNames): RunStep[] {
   const steps = new Map<string, RunStep>();
+  const bases = new Map<string, string>();
+  const argsOf = new Map<string, unknown>();
   // Calls held for a person: what they would do, and their approval.
   const asked = new Map<string, string>();
   const approvalOf = new Map<string, string>();
   for (const event of events) {
     switch (event.type) {
       case "tool.called": {
-        const [doing] = TOOL_LABELS[event.payload.tool] ?? [`Using ${event.payload.tool}`];
-        steps.set(event.payload.toolCallId, {
-          id: event.payload.toolCallId,
+        const { tool, args, toolCallId } = event.payload;
+        const [doing, , base] = labelsFor(tool, args, names);
+        bases.set(toolCallId, base);
+        argsOf.set(toolCallId, args);
+        steps.set(toolCallId, {
+          id: toolCallId,
+          tool,
           label: doing,
-          detail: detailFor(event.payload.tool, event.payload.args),
+          detail: detailFor(tool, args),
           state: "active",
+          durationMs: null,
         });
         break;
       }
       case "tool.completed": {
         const step = steps.get(event.payload.toolCallId);
-        const [, done] = TOOL_LABELS[event.payload.tool] ?? ["", `Used ${event.payload.tool}`];
-        if (step) steps.set(step.id, { ...step, label: done, state: "done" });
+        if (!step) break;
+        const [, done] = labelsFor(event.payload.tool, argsOf.get(step.id), names);
+        steps.set(step.id, {
+          ...step,
+          label: done,
+          state: "done",
+          durationMs: event.payload.durationMs,
+        });
         break;
       }
       case "tool.failed": {
-        const step = steps.get(event.payload.toolCallId);
-        steps.set(event.payload.toolCallId, {
-          id: event.payload.toolCallId,
-          label: step?.label.replace(/^\w+ing/, "Tried") ?? `Couldn't use ${event.payload.tool}`,
-          detail: event.payload.message,
+        const { toolCallId, tool, message, durationMs } = event.payload;
+        const unknown = /^Unknown tool/i.test(message);
+        const base = bases.get(toolCallId) ?? labelsFor(tool, undefined, names)[2];
+        steps.set(toolCallId, {
+          id: toolCallId,
+          tool,
+          label: unknown ? "Reached for a tool it doesn't have" : `Couldn't ${base}`,
+          detail: plainError(message),
           state: "failed",
+          durationMs,
         });
         break;
       }
@@ -112,18 +206,22 @@ export function runSteps(events: readonly RunEvent[]): RunStep[] {
         if (event.payload.verdict === "deny") {
           steps.set(event.payload.toolCallId, {
             id: event.payload.toolCallId,
-            label: `Not allowed to use ${event.payload.tool}`,
+            tool: event.payload.tool,
+            label: `Not allowed to ${labelsFor(event.payload.tool, undefined, names)[2]}`,
             detail: event.payload.reasons[0] ?? null,
             state: "blocked",
+            durationMs: null,
           });
         } else if (event.payload.verdict !== "auto") {
-          const [doing] = TOOL_LABELS[event.payload.tool] ?? [`Using ${event.payload.tool}`];
+          const [doing] = labelsFor(event.payload.tool, undefined, names);
           asked.set(event.payload.toolCallId, doing);
           steps.set(event.payload.toolCallId, {
             id: event.payload.toolCallId,
+            tool: null,
             label: "Waiting for your answer",
             detail: doing,
             state: "active",
+            durationMs: null,
           });
         }
         break;
@@ -134,9 +232,11 @@ export function runSteps(events: readonly RunEvent[]): RunStep[] {
         if (call && event.payload.decision !== "approved" && event.payload.decision !== "edited") {
           steps.set(call, {
             id: call,
+            tool: null,
             label: event.payload.decision === "rejected" ? "You said no" : "No answer in time",
             detail: asked.get(call) ?? null,
             state: "blocked",
+            durationMs: null,
           });
         }
         break;
@@ -147,6 +247,63 @@ export function runSteps(events: readonly RunEvent[]): RunStep[] {
     }
   }
   return [...steps.values()];
+}
+
+/** Lookups that read as one step when they come in a row: "Searched the web · 4". */
+const GROUPED = new Set([
+  "web.search",
+  "web.read_url",
+  "recall",
+  "files.read",
+  "files.list",
+  "browser.snapshot",
+  "desktop.snapshot",
+  "desktop.screenshot",
+]);
+
+/** One row of the trail: a step, or a run of the same lookup with what each looked at. */
+export interface StepGroup {
+  readonly id: string;
+  readonly tool: string | null;
+  readonly label: string;
+  readonly state: RunStep["state"];
+  /** One step's detail, or each lookup's target in a group. */
+  readonly details: readonly string[];
+  readonly count: number;
+  readonly durationMs: number | null;
+}
+
+export function groupSteps(steps: readonly RunStep[]): StepGroup[] {
+  const rows: StepGroup[] = [];
+  for (const step of steps) {
+    const last = rows.at(-1);
+    if (
+      last &&
+      step.state === "done" &&
+      last.state === "done" &&
+      step.tool !== null &&
+      step.tool === last.tool &&
+      GROUPED.has(step.tool)
+    ) {
+      rows[rows.length - 1] = {
+        ...last,
+        details: step.detail ? [...last.details, step.detail] : last.details,
+        count: last.count + 1,
+        durationMs: (last.durationMs ?? 0) + (step.durationMs ?? 0),
+      };
+      continue;
+    }
+    rows.push({
+      id: step.id,
+      tool: step.tool,
+      label: step.label,
+      state: step.state,
+      details: step.detail ? [step.detail] : [],
+      count: 1,
+      durationMs: step.durationMs,
+    });
+  }
+  return rows;
 }
 
 // ── What a run is doing, and what it used (UX.07, UX.09) ─────────────────────
@@ -240,20 +397,35 @@ export function sourceFor(sources: readonly RunSource[], href: string): RunSourc
 }
 
 export interface RunSummary {
+  /** Teammates it handed work to, each counted once. */
+  readonly agentsAsked: number;
   readonly searches: number;
   readonly pagesRead: number;
+  /** Pages that wouldn't load. */
   readonly failed: number;
+  /** Other steps that didn't work. */
+  readonly stepsFailed: number;
   readonly compacted: boolean;
   readonly blocked: number;
 }
 
 export function runSummary(events: readonly RunEvent[]): RunSummary {
   const sources = runSources(events);
+  const asked = new Set(
+    events.flatMap((e) =>
+      e.type === "tool.called" && e.payload.tool === "delegate_task"
+        ? [String((e.payload.args as { agent?: unknown } | null)?.agent ?? "").toLowerCase()]
+        : [],
+    ),
+  );
+  const failed = events.filter((e) => e.type === "tool.failed");
   return {
+    agentsAsked: asked.size,
     searches: events.filter((e) => e.type === "tool.called" && e.payload.tool === "web.search")
       .length,
     pagesRead: sources.filter((s) => s.state === "read").length,
-    failed: events.filter((e) => e.type === "tool.failed").length,
+    failed: failed.filter((e) => e.payload.tool === "web.read_url").length,
+    stepsFailed: failed.filter((e) => e.payload.tool !== "web.read_url").length,
     compacted: events.some((e) => e.type === "run.compacted"),
     blocked: events.filter(
       (e) =>
@@ -265,14 +437,20 @@ export function runSummary(events: readonly RunEvent[]): RunSummary {
   };
 }
 
-/** "1 search · read 6 pages · 1 couldn't load", empty when nothing was used. */
+/** "asked 2 agents · 1 search · read 6 pages · 1 couldn't load", empty when nothing was used. */
 export function summaryLine(summary: RunSummary): string {
   const parts: string[] = [];
+  if (summary.agentsAsked)
+    parts.push(summary.agentsAsked === 1 ? "asked 1 agent" : `asked ${summary.agentsAsked} agents`);
   if (summary.searches)
     parts.push(summary.searches === 1 ? "1 search" : `${summary.searches} searches`);
   if (summary.pagesRead)
     parts.push(summary.pagesRead === 1 ? "read 1 page" : `read ${summary.pagesRead} pages`);
   if (summary.failed) parts.push(`${summary.failed} couldn't load`);
+  if (summary.stepsFailed)
+    parts.push(
+      summary.stepsFailed === 1 ? "1 step didn't work" : `${summary.stepsFailed} steps didn't work`,
+    );
   if (summary.blocked) parts.push(`${summary.blocked} not allowed`);
   return parts.join(" · ");
 }

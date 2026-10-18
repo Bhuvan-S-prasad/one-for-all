@@ -3,11 +3,11 @@ import type { Agent, Handoff } from "@ofa/contracts";
 import { Link } from "@tanstack/react-router";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
-import { StepList } from "@/components/chat/reply";
+import { StepList } from "@/components/chat/step-trail";
 import { Familiar } from "@/components/familiar";
 import { Markdown } from "@/components/markdown";
 import { parseMarkdown } from "@/lib/markdown";
-import { runSources, runSteps } from "@/lib/run-steps";
+import { agentNames, runSources, runSteps, type AgentNames } from "@/lib/run-steps";
 import { cn } from "@/lib/utils";
 
 // The work a reply handed to other agents (ADR-0032, TC.10): each handoff
@@ -27,10 +27,18 @@ function firstLine(text: string | null): string {
   return (text ?? "").replace(/\s+/g, " ").trim();
 }
 
-function HandoffCard({ handoff, agent }: { handoff: Handoff; agent: Agent | undefined }) {
+function HandoffCard({
+  handoff,
+  agent,
+  names,
+}: {
+  handoff: Handoff;
+  agent: Agent | undefined;
+  names: AgentNames;
+}) {
   const [open, setOpen] = useState(false);
   const { events } = useRun(open ? handoff.childRunId : undefined);
-  const steps = runSteps(events.data ?? []);
+  const steps = runSteps(events.data ?? [], names);
   const sources = useMemo(() => runSources(events.data ?? []), [events.data]);
   const answer = useMemo(() => parseMarkdown(handoff.reply ?? ""), [handoff.reply]);
   const status = STATUS[handoff.status];
@@ -118,6 +126,7 @@ export function Handoffs({
 }) {
   if (handoffs.length === 0) return null;
   const byId = new Map(agents.map((a) => [a.id, a]));
+  const names = agentNames(agents);
   return (
     <section aria-label="Work handed to the team" className="flex flex-col gap-2 sm:max-w-[88%]">
       <span className="eyebrow px-1 text-[11px] text-muted-foreground">
@@ -125,7 +134,7 @@ export function Handoffs({
       </span>
       <ul className="flex flex-col gap-2">
         {handoffs.map((h) => (
-          <HandoffCard key={h.childRunId} handoff={h} agent={byId.get(h.agentId)} />
+          <HandoffCard key={h.childRunId} handoff={h} agent={byId.get(h.agentId)} names={names} />
         ))}
       </ul>
     </section>

@@ -26,6 +26,7 @@ The roster is already live: `TeamDirectory.members` reads the active agents on e
   - **delegate first, in code:** a coordinator's tool list hides each of its own tools that an active teammate it can hand work to also has. With a Researcher on the team, the coordinator no longer sees `web.search`. A capability no teammate has stays with the coordinator, so a small team still works;
   - **owners in the plan:** `todo.write` items may name an owner (`[researcher] compare prices`);
   - **no `message_agent` outside a group it leads:** a message wakes an agent that answers later, after the coordinator has replied. In the live check (TC.09) a chief "continued" a stopped handoff by messaging and ended its turn waiting. It hands stopped work out again with `delegate_task`, with what was found and what is left. A group's leader keeps it to route messages (ADR-0033).
+  - **a brief is instructions, not data** (`harness.team@5`, amended 2026-10-18 after TC.09 run 5): a chief pasted research into briefs of up to 12,000 characters, hit the 4,000 limit, split one file into parts and asked the operator to write it six to nine times. The rule says to name teammates in `include_results_from` and say what the file should contain; the limit's error says the same.
 - **Policy is unchanged.** Hiding is a listing rule, like proactive checks' read-only list (M5.10). A hidden tool called anyway is refused as not available, and every handoff still goes through grant, policy and taint as before (ADR-0032).
 
 ## Alternatives considered

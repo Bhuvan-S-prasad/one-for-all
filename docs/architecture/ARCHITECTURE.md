@@ -714,7 +714,7 @@ Each milestone is a thin vertical slice through every layer and ends with someth
 | **M4 Integrations and policy** ✅ | MCP client and OAuth, catalog, grants UI, the full policy engine and rules, approval draft cards (edit before sending); Gmail on Google's own API. |
 | **M5 The team** ✅ | Delegation and fork-join, agent messages and group threads, interrupts, routines and read-only checks, tasks and reminders for later, skills, episodes and nightly memory consolidation, agent files, the team screens, multi-agent evals. |
 | **Desktop** ✅ | A light desktop per agent watched over VNC, the agent's work shown on it, Python packages and office files, `files.send` and a Files tab, desktop apps through the accessibility tree with a screenshot fallback. |
-| **Teams and continuity** | A chat record per agent so work continues across runs; stop replies and a budget warning; capability cards in the roster; a coordinator role that delegates first. |
+| **Teams and continuity** | A chat record per agent so work continues across runs; stop replies and a budget warning; capability cards in the roster; a coordinator role that delegates first; handoffs that pass results by name and show in the chat. Done (11 tasks). |
 | **M6 Everywhere** | Expo app with pairing and push, Telegram and Slack channels. |
 | **M7 Hardening** | Eval suites and red-team set in CI, backups, E2B adapter, cloud-mode adapters. |
 

@@ -1,11 +1,12 @@
 import type { Agent, Approval, FamiliarMood, Run, RunEvent } from "@ofa/contracts";
+import { useAgents } from "@ofa/client";
 import { Link } from "@tanstack/react-router";
 import { Square } from "lucide-react";
 import { ApprovalCard } from "@/components/approval-card";
 import { Familiar } from "@/components/familiar";
-import { StepList } from "@/components/chat/reply";
+import { StepList } from "@/components/chat/step-trail";
 import { countdown, duration } from "@/lib/format";
-import { runPhase, runSteps } from "@/lib/run-steps";
+import { agentNames, runPhase, runSteps } from "@/lib/run-steps";
 import { cn } from "@/lib/utils";
 
 // The run as it happens, at the bottom of the thread where the reply will
@@ -60,7 +61,8 @@ export function LiveRun({
   onStop: () => void;
 }) {
   const phase = runPhase(run.status, events);
-  const steps = runSteps(events);
+  const { data: agents } = useAgents();
+  const steps = runSteps(events, agentNames(agents));
   const started = run.startedAt ?? run.createdAt;
   const elapsed = duration(now - Date.parse(started));
 
@@ -113,11 +115,7 @@ export function LiveRun({
           </p>
         )}
 
-        {steps.length > 0 && (
-          <div className="rounded-[18px] border bg-card px-4 py-3.5">
-            <StepList steps={steps} limit={5} />
-          </div>
-        )}
+        {steps.length > 0 && <StepList steps={steps} limit={6} />}
 
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <button

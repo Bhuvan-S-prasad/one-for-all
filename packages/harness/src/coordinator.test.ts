@@ -161,7 +161,7 @@ describe("a coordinator (ADR-0044)", () => {
     expect(request.tools?.find((t) => t.name === "delegate_task")?.description).toBe(
       "Hand a piece of work to another agent.\nYour team, with what each one can do, is in your instructions.",
     );
-    expect(request.promptVersion).toContain("harness.team@4");
+    expect(request.promptVersion).toContain("harness.team@5");
   });
 
   it("is refused a teammate's tool if it calls it anyway, and nothing runs", async () => {

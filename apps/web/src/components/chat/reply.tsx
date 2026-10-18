@@ -5,17 +5,16 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
-  CircleSlash,
   Copy,
   Download,
   Lightbulb,
   Play,
   RotateCcw,
-  X,
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { FileCard } from "@/components/chat/file-card";
 import { Handoffs } from "@/components/chat/handoffs";
+import { StepList } from "@/components/chat/step-trail";
 import { Familiar } from "@/components/familiar";
 import { headingId, Markdown } from "@/components/markdown";
 import { duration, shortTime } from "@/lib/format";
@@ -25,8 +24,9 @@ import {
   runSteps,
   runSummary,
   summaryLine,
+  agentNames,
+  type AgentNames,
   type RunSource,
-  type RunStep,
 } from "@/lib/run-steps";
 import { useSeen } from "@/lib/use-now";
 import { cn } from "@/lib/utils";
@@ -35,63 +35,18 @@ import { cn } from "@/lib/utils";
 // answer as Markdown (a bubble, or a document when it is long), the pages it
 // read, and Copy / Try again.
 
-export function StepIcon({ state }: { state: RunStep["state"] }) {
-  const base = "mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full";
-  if (state === "done")
-    return (
-      <span className={cn(base, "bg-primary text-primary-foreground")}>
-        <Check className="size-3" strokeWidth={3} aria-label="Done" />
-      </span>
-    );
-  if (state === "failed")
-    return (
-      <span className={cn(base, "bg-destructive-surface text-destructive")}>
-        <X className="size-3" strokeWidth={3} aria-label="Failed" />
-      </span>
-    );
-  if (state === "blocked")
-    return (
-      <span className={cn(base, "bg-warning/15 text-warning")}>
-        <CircleSlash className="size-3" strokeWidth={3} aria-label="Not allowed" />
-      </span>
-    );
-  return (
-    <span className={cn(base, "border-2 border-primary")} aria-label="In progress">
-      <span className="size-2 animate-pulse rounded-full bg-primary" />
-    </span>
-  );
-}
-
-export function StepList({ steps, limit }: { steps: readonly RunStep[]; limit?: number }) {
-  const hidden = limit ? Math.max(0, steps.length - limit) : 0;
-  return (
-    <ol className="flex flex-col gap-2.5 text-sm">
-      {hidden > 0 && (
-        <li className="pl-[30px] text-xs text-muted-foreground">
-          {hidden} earlier step{hidden === 1 ? "" : "s"}
-        </li>
-      )}
-      {steps.slice(hidden).map((step) => (
-        <li key={step.id} className="flex items-start gap-2.5">
-          <StepIcon state={step.state} />
-          <span className={cn("min-w-0 flex-1", step.state === "active" && "font-semibold")}>
-            {step.label}
-            {step.detail && (
-              <span className="block truncate font-mono text-xs font-normal text-muted-foreground">
-                {step.detail}
-              </span>
-            )}
-          </span>
-        </li>
-      ))}
-    </ol>
-  );
-}
-
-/** "Worked 2 min 14 s · 1 search · read 6 pages", opening into the steps. */
-function WorkedLine({ run, events }: { run: Run; events: readonly RunEvent[] }) {
+/** "Worked 2 min 14 s · asked 2 agents · 1 search", opening into the trail. */
+function WorkedLine({
+  run,
+  events,
+  names,
+}: {
+  run: Run;
+  events: readonly RunEvent[];
+  names: AgentNames;
+}) {
   const [open, setOpen] = useState(false);
-  const steps = runSteps(events);
+  const steps = runSteps(events, names);
   const took =
     run.startedAt && run.endedAt
       ? duration(Date.parse(run.endedAt) - Date.parse(run.startedAt))
@@ -99,30 +54,29 @@ function WorkedLine({ run, events }: { run: Run; events: readonly RunEvent[] }) 
   const used = summaryLine(runSummary(events));
   const text = [took ? `Worked ${took}` : "Done", used].filter(Boolean).join(" · ");
   return (
-    <div className="flex min-w-0 flex-col gap-2">
+    <div className="flex min-w-0 basis-full flex-col gap-2.5">
       <button
         type="button"
         aria-expanded={open}
         onClick={() => setOpen(!open)}
         disabled={steps.length === 0}
-        className="flex h-7 max-w-full items-center gap-1.5 self-start rounded-full border bg-card px-2.5 text-[12px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:hover:text-muted-foreground"
+        className="group/worked flex max-w-full items-center gap-1.5 self-start rounded-md py-0.5 text-[13px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:hover:text-muted-foreground"
       >
-        <Check className="size-3 shrink-0 text-success" strokeWidth={3} aria-hidden />
         <span className="truncate">{text}</span>
-        {steps.length > 0 &&
-          (open ? (
-            <ChevronDown className="size-3.5 shrink-0" aria-hidden />
-          ) : (
-            <ChevronRight className="size-3.5 shrink-0" aria-hidden />
-          ))}
+        {steps.length > 0 && (
+          <ChevronRight
+            className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")}
+            aria-hidden
+          />
+        )}
       </button>
       {open && (
-        <div className="flex flex-col gap-3 rounded-[16px] border bg-card px-4 py-3.5">
+        <div className="flex flex-col gap-3 pb-1 pl-0.5 sm:max-w-[88%]">
           <StepList steps={steps} />
           <Link
             to="/activity"
             search={{ run: run.id }}
-            className="self-start text-[13px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            className="self-start pl-9 text-[12.5px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
           >
             Everything this run did →
           </Link>
@@ -426,7 +380,7 @@ export function Reply({
           <span className="text-[14px] font-semibold">{agent.name}</span>
         </span>
         {run.data && events.data && run.data.endedAt && (
-          <WorkedLine run={run.data} events={events.data} />
+          <WorkedLine run={run.data} events={events.data} names={agentNames(agents)} />
         )}
       </div>
 
