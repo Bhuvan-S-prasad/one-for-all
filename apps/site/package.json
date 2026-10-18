@@ -1,0 +1,38 @@
+{
+  "name": "@ofa/site",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The public landing page and docs (ADR-0046). Static; deployed on its own, never with the server.",
+  "type": "module",
+  "scripts": {
+    "dev:site": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
+    "lint": "eslint .",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@fontsource-variable/bricolage-grotesque": "5.3.0",
+    "@fontsource-variable/geist": "5.3.0",
+    "@fontsource-variable/geist-mono": "5.3.0",
+    "@ofa/client": "workspace:*",
+    "@ofa/contracts": "workspace:*",
+    "@ofa/core": "workspace:*",
+    "@tanstack/react-query": "5.104.0",
+    "@tanstack/react-router": "1.170.40",
+    "gsap": "3.15.0",
+    "lenis": "1.3.19",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@ofa/tailwind-config": "workspace:*",
+    "@tailwindcss/vite": "4.3.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "tailwindcss": "4.3.3",
+    "vite": "8.3.1"
+  }
+}

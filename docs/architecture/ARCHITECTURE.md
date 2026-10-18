@@ -605,6 +605,7 @@ Summary only. Full records (context, decision, alternatives, consequences) are i
 | [0043](../adr/0043-opening-a-file-on-the-desktop-is-not-outbound.md) | Security | Opening a file on the desktop is not outbound; never in the browser | An approval card each time a researched report is shown, for an action that can't send anything |
 | [0044](../adr/0044-team-roster-from-grants-coordinators-delegate.md) | Runtime | Capability cards from grants in every roster; coordinators plan, delegate first and lose the tools a teammate covers | A chief of staff did the research itself; a prompt rule per agent was ignored and doesn't scale |
 | [0045](../adr/0045-a-chat-keeps-its-working-state.md) | Runtime | Each agent keeps a working record per chat (plan, ledger, notes), saved as the run goes and shown to the next run | "Continue" after a budget stop started over: nothing but chat text reached the next run |
+| [0046](../adr/0046-public-site-and-docs-as-their-own-app.md) | Clients | The landing page and docs are `apps/site`, a static Vite app on Vercel that reads the decision records at build time | Docs that can't drift; the real familiars and routing on the page; no server code in public |
 
 **Rejected along the way:** Next.js (mobile and WebSocket fit), Express (untyped), Neon (free-tier limits), Prisma (vector support), BullMQ (no durable waits), Inngest Cloud (execution caps), Composio (lock-in and pricing), E2B-only (finite credit), hosted-only (cost and data custody).
 
@@ -637,6 +638,7 @@ one-for-all/
 │   │       │                     connections, routines, memory, settings
 │   │       ├── components/ui/    shadcn/ui primitives
 │   │       └── lib/              client instance, WS hook, formatters
+│   ├── site/                     public landing page and docs: static Vite app on Vercel (ADR-0046)
 │   └── mobile/                   Expo app (iOS/Android)
 │       ├── app/                  Expo Router screens
 │       └── src/
@@ -677,7 +679,7 @@ one-for-all/
 │   ├── architecture/             ARCHITECTURE.md (this file)
 │   ├── adr/                      one file per decision
 │   ├── planning/                 TRACKER.md: milestones, tasks, session log
-│   └── guides/                   google-oauth-client, slack-app-manifest, tailscale, backups
+│   └── guides/                   google-oauth-client, slack-app-manifest, site-on-vercel, tailscale, backups
 ├── .github/workflows/            ci.yml (lint, typecheck, test, evals), release.yml
 ├── package.json                  workspace scripts only
 ├── pnpm-workspace.yaml
@@ -693,7 +695,7 @@ one-for-all/
 |---|---|
 | R1 | Apps depend on packages. Packages never import from apps; apps never import from each other. |
 | R2 | `core` imports nothing internal. Every other package may import `core`. |
-| R3 | Web and mobile import only browser-safe packages: `core`, `contracts`, `client`. Server imports are a lint error. |
+| R3 | Web, mobile and the public site import only browser-safe packages: `core`, `contracts`, `client`. Server imports are a lint error. |
 | R4 | Adapters implement a `core` interface and are chosen only in a composition root (`container.ts`). |
 | R5 | Each package exposes one public `index.ts` through its `exports` field. Deep imports are lint errors. |
 | R6 | Unit tests sit next to the code as `*.test.ts`. Cross-package agent behavior is tested in `evals/`. |

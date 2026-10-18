@@ -9,3 +9,4 @@ docs/
 *.md
 packages/db/migrations/meta
 apps/web/src/routeTree.gen.ts
+.taste-skill/
