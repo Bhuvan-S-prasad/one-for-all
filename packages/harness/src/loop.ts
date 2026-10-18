@@ -232,12 +232,12 @@ function forCoordinator(tools: readonly ToolDescriptor[], team: CoordinatorTeam)
       // replied: it handed work on with it and ended its turn "waiting" (TC.09).
       .filter((t) => team.group || t.name !== MESSAGE_AGENT)
       .map((t) =>
-      t.name === DELEGATE_TASK
-        ? {
-            ...t,
-            description: `${t.description.split(`\n${ROSTER_HEADING}`)[0]}\nYour team, with what each one can do, is in your instructions.`,
-          }
-        : t,
+        t.name === DELEGATE_TASK
+          ? {
+              ...t,
+              description: `${t.description.split(`\n${ROSTER_HEADING}`)[0]}\nYour team, with what each one can do, is in your instructions.`,
+            }
+          : t,
       )
   );
 }
@@ -252,6 +252,9 @@ function searchKey(args: unknown): string | null {
     .trim();
   return key || null;
 }
+
+/** A tool call written out as text: not an answer. */
+const TOOL_MARKUP = /<\/?(?:\w+_)?function_call|<invoke\b|<parameter\b|<tool_call\b/i;
 
 /** From here a run is told to finish (ADR-0045): this share of its token or step budget. */
 const WRAP_UP_AT = 0.8;
@@ -350,6 +353,12 @@ export async function runAgent(
   let hook: RunHookContext | null = null;
   /** Addresses the run was given, in `urlKey` form (filled in as the run goes). */
   const knownUrls = new Set<string>();
+  /**
+   * What each handoff in this run answered, by handle and name, so a later
+   * brief can carry it in full (`include_results_from`, TC.09). Rebuilt on
+   * replay from the memoized handoff steps.
+   */
+  const handoffAnswers = new Map<string, string[]>();
   /** Sites a person allowed for the rest of this run, rebuilt on replay from memoized answers. */
   const allowedSites = new Set<string>();
   /** A proactive check (M5.10): only tools that change nothing, listed and run. */
@@ -566,6 +575,13 @@ export async function runAgent(
       };
     });
     if (context.taintedByRecord) tainted = true;
+    // Answers from handoffs earlier in this chat (shortened in the record), so
+    // a run that continues can still pass them on (TC.10).
+    for (const entry of context.record?.ledger ?? []) {
+      if (entry.kind !== "handoff" || !entry.agent || !entry.answer) continue;
+      const kept = `(From earlier in this chat, shortened.) ${entry.answer}`;
+      handoffAnswers.set(entry.agent, [...(handoffAnswers.get(entry.agent) ?? []), kept]);
+    }
     const budget = contextBudget(context.window, options.maxContextTokens ?? 32_000);
 
     // Addresses the run was given (§10.3): in the conversation, and in what
@@ -992,6 +1008,7 @@ ${result.content}`,
           if (done.untrusted) tainted = true;
           learnUrls(done.content);
           keep([handoffEntry(h.args, done, ctx.runId)]);
+          rememberAnswer(h.args, done.content);
         }
       }
 
@@ -1048,7 +1065,8 @@ ${result.content}`,
       });
       if (last) {
         usage = addUsage(usage, last.usage, { model: 1 });
-        partial = last.text || null;
+        // A small model may write a tool call as text even with none offered.
+        partial = last.text && !TOOL_MARKUP.test(last.text) ? last.text : null;
       }
     }
 
@@ -1363,7 +1381,19 @@ ${result.content}`,
         untrusted: false,
       };
     }
-    const { agent, brief } = args as { agent: string; brief: string };
+    const {
+      agent,
+      brief: written,
+      include_results_from: include,
+    } = args as {
+      agent: string;
+      brief: string;
+      include_results_from?: string[];
+    };
+    // Earlier answers the brief asks for, in full (TC.09): live, a chief wrote
+    // "the findings are in the previous response" and the helper, which sees
+    // only its brief, searched the computer for them and then redid the work.
+    const brief = withEarlierResults(written, include ?? []);
     const started = await steps.run(`${toolCallId}-handoff`, async () => {
       try {
         const handoff = await team.handoff(ctx, {
@@ -1432,6 +1462,38 @@ ${result.content}`,
       if (untrusted && !taintedBefore) await deps.runs.update(ctx, ctx.runId, { tainted: true });
       return { content, untrusted };
     });
+  }
+
+  /** Keep what a handoff answered, under the handle it was asked by and its name. */
+  function rememberAnswer(args: unknown, content: string): void {
+    let parsed: { agent?: string; answer?: string } = {};
+    try {
+      parsed = JSON.parse(content) as typeof parsed;
+    } catch {
+      return; // A refusal ("Not done: …") has no answer.
+    }
+    if (!parsed.answer) return;
+    const asked = (args as { agent?: string } | null)?.agent;
+    // Every answer, in order: a researcher asked twice has found two things.
+    const keys = new Set(
+      [asked, parsed.agent].flatMap((k) => (k ? [k.trim().replace(/^@/, "").toLowerCase()] : [])),
+    );
+    for (const key of keys)
+      handoffAnswers.set(key, [...(handoffAnswers.get(key) ?? []), parsed.answer]);
+  }
+
+  /** A brief with the earlier answers it names added after it. */
+  function withEarlierResults(brief: string, include: readonly string[]): string {
+    if (include.length === 0) return brief;
+    const parts = include.map((name) => {
+      const key = name.trim().replace(/^@/, "").toLowerCase();
+      const answers = handoffAnswers.get(key);
+      const answer = answers?.join("\n\n---\n\n");
+      return answer
+        ? `### From ${name}\n${answer}`
+        : `### From ${name}\n(No answer from ${name} earlier in this task.)`;
+    });
+    return `${brief}\n\nResults from earlier in this task, as they were sent back:\n\n${parts.join("\n\n")}`;
   }
 
   async function finish(result: {

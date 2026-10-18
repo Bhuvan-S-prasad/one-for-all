@@ -212,6 +212,9 @@ export interface ChatLedgerEntry {
   readonly text: string;
   /** Quotes outside content (a tainted child's answer): shown wrapped, and taints the run that loads it. */
   readonly untrusted?: boolean;
+  /** For a handoff: the handle it was asked by, and its answer (shortened), for later briefs. */
+  readonly agent?: string;
+  readonly answer?: string;
   /** The run that did it. */
   readonly runId: string;
 }

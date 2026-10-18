@@ -41,6 +41,7 @@ import {
   messagesQuery,
   queryKeys,
   runArtifactsQuery,
+  runHandoffsQuery,
   runEventsQuery,
   runQuery,
   runSearchQuery,
@@ -386,6 +387,15 @@ export function useRetryRun() {
   return useMutation({
     mutationFn: (id: string) => api.retryRun(id),
     onSuccess: (turn) => rememberTurn(queryClient, turn),
+  });
+}
+
+/** Work a run handed to other agents (TC.10); fetched only when there is some. */
+export function useRunHandoffs(runId: string | undefined, options: { enabled?: boolean } = {}) {
+  const api = useApiClient();
+  return useQuery({
+    ...runHandoffsQuery(api, runId ?? ""),
+    enabled: !!runId && (options.enabled ?? true),
   });
 }
 

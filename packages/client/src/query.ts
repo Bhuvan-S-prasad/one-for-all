@@ -28,6 +28,7 @@ export const queryKeys = {
   run: (id: string) => ["runs", id] as const,
   runEvents: (id: string) => ["runs", id, "events"] as const,
   runArtifacts: (id: string) => ["runs", id, "artifacts"] as const,
+  runHandoffs: (id: string) => ["runs", id, "handoffs"] as const,
   approvals: (agentId?: string) => ["approvals", agentId ?? "all"] as const,
   approvalLists: ["approvals"] as const,
   llmSettings: ["settings", "llm"] as const,
@@ -160,6 +161,12 @@ export const runArtifactsQuery = (api: ApiClient, id: string) =>
     queryKey: queryKeys.runArtifacts(id),
     queryFn: async () => (await api.runArtifacts(id)).items,
     staleTime: Infinity,
+  });
+
+export const runHandoffsQuery = (api: ApiClient, id: string) =>
+  queryOptions({
+    queryKey: queryKeys.runHandoffs(id),
+    queryFn: async () => (await api.runHandoffs(id)).items,
   });
 
 export const approvalsQuery = (api: ApiClient, agentId?: string) =>

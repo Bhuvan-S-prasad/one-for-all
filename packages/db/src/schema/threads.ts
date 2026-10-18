@@ -84,7 +84,14 @@ export const threadMember = pgTable(
 /** An agent's working record in a chat, as JSON (ADR-0045; the shape is `ChatRecord` in core). */
 export interface ThreadStateJson {
   plan: { text: string; done: boolean }[] | null;
-  ledger: { kind: string; text: string; untrusted?: boolean; runId: string }[];
+  ledger: {
+    kind: string;
+    text: string;
+    untrusted?: boolean;
+    agent?: string;
+    answer?: string;
+    runId: string;
+  }[];
   notes: string | null;
   stopReason: string | null;
   tainted: boolean;

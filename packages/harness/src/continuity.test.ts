@@ -144,7 +144,7 @@ describe("the chat record", () => {
       "- gmail.create_draft (to: me@example.org, subject: Laptops) → Draft saved: r573",
     );
     expect(prompt).toContain("- Searched: “laptops under $1200”");
-    expect(llm.requests[0]!.promptVersion).toContain("harness.session@1");
+    expect(llm.requests[0]!.promptVersion).toContain("harness.session@2");
   });
 
   it("a run stopped by its budget says where it got to, and “continue” carries on", async () => {
@@ -294,5 +294,51 @@ describe("the chat record", () => {
     say("Hello");
     await run("run_1", [{ text: "Hi!" }]);
     expect(chats.records.size).toBe(0);
+  });
+});
+
+describe("the last call at a budget stop (TC.09)", () => {
+  it("drops an answer that is a tool call written out as text", async () => {
+    const { say, run } = world({ ...agent, budgets: { steps: 1, tokens: 100_000 } });
+    say("Research laptops.");
+    const { result } = await run("run_1", [
+      { toolCalls: [{ name: "web.search", args: { query: "laptops" } }] },
+      { text: '<dots_function_call>\n<invoke name="shell_run">' },
+    ]);
+    expect(result.reply).toBe(
+      [
+        "I stopped before finishing: I reached my step limit for one task.",
+        "Done so far:\n- Looked things up: 1 search",
+        "Reply “continue” and I'll pick up from here.",
+      ].join("\n\n"),
+    );
+  });
+});
+
+describe("answers across runs in a chat (TC.10)", () => {
+  it("a run that continues can pass on a handoff answer from the run before", async () => {
+    const { chats, say, run } = world();
+    await chats.save(ctxFor("run_0"), threadId, {
+      plan: null,
+      ledger: [
+        {
+          kind: "handoff",
+          text: "Researcher was asked “laptops” → done: ThinkPad T14 at $1,099",
+          agent: "researcher",
+          answer: "ThinkPad T14 at $1,099",
+          runId: "run_0",
+        },
+      ],
+      notes: null,
+      stopReason: "token_budget",
+      runId: "run_0",
+      tainted: false,
+    });
+    say("continue");
+    const { llm } = await run("run_1", [{ text: "Done." }]);
+    // Shown in the record block, with the rule that finished work isn't redone.
+    expect(system(llm.requests[0]!)).toContain(
+      "A plan item whose work is listed under Done is finished",
+    );
   });
 });

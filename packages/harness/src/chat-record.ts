@@ -104,6 +104,9 @@ export function handoffEntry(
     kind: "handoff",
     text: `${who} was asked “${flat(brief ?? "", 160)}” → ${status}${answer}`,
     ...(answer && result.untrusted ? { untrusted: true } : {}),
+    // So a later run in this chat can still pass it on (include_results_from).
+    ...(agent ? { agent: agent.trim().replace(/^@/, "").toLowerCase() } : {}),
+    ...(parsed.answer ? { answer: parsed.answer.slice(0, HANDOFF_ANSWER_CHARS) } : {}),
     runId,
   };
 }

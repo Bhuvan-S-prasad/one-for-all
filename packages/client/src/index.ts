@@ -25,6 +25,7 @@ export {
   useGroupThreads,
   useRetryRun,
   useRunArtifacts,
+  useRunHandoffs,
   useApiClient,
   useCreateAgent,
   useDecideApproval,

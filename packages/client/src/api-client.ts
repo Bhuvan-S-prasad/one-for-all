@@ -35,6 +35,8 @@ import {
   agentSchema,
   agentStatsListSchema,
   teamRosterSchema,
+  handoffListSchema,
+  type HandoffList,
   type TeamRoster,
   approvalListSchema,
   approvalSchema,
@@ -359,6 +361,9 @@ export function createApiClient(options: ApiClientOptions = {}) {
     /** Files and long output a run produced (M3.06). */
     runArtifacts: (id: string): Promise<ArtifactList> =>
       request("GET", `/api/runs/${encodeURIComponent(id)}/artifacts`, artifactListSchema),
+    /** Work a run handed to other agents (TC.10). */
+    runHandoffs: (id: string): Promise<HandoffList> =>
+      request("GET", `/api/runs/${encodeURIComponent(id)}/handoffs`, handoffListSchema),
     /** Where an artifact's content downloads from (same origin, with the session cookie). */
     artifactContentUrl: (id: string): string =>
       `${baseUrl}/api/artifacts/${encodeURIComponent(id)}/content`,

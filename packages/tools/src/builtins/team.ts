@@ -60,7 +60,7 @@ export function messageAgentTool(team: TeamDirectory | null) {
 }
 
 const DESCRIPTION =
-  "Hand a self-contained piece of work to another agent and get its result back. The other agent sees only your brief, never this conversation, so put in everything it needs: the goal, the facts and links to use, and what to send back. Several handoffs in one step run at the same time.";
+  "Hand a self-contained piece of work to another agent and get its result back. The other agent sees only your brief, never this conversation, so put in everything it needs: the goal, the facts and links to use, and what to send back. Several handoffs in one step run at the same time. To pass on what an earlier handoff in this task found, name that agent in include_results_from: its answer is added to the brief in full. Never write “see the previous response”: the other agent can't see it.";
 
 export function delegateTaskTool(team: TeamDirectory | null) {
   return defineTool({
@@ -74,6 +74,13 @@ export function delegateTaskTool(team: TeamDirectory | null) {
         .min(20, "Write a brief the other agent can act on alone")
         .max(4_000)
         .describe("The work, with everything the other agent needs to do it"),
+      include_results_from: z
+        .array(z.string().trim().min(1).max(80))
+        .max(5)
+        .optional()
+        .describe(
+          'Handles of agents whose answers earlier in this task to add to the brief in full, e.g. ["researcher"]',
+        ),
     }),
     // It starts work rather than changing anything outside; the child's own
     // calls each go through policy, and a tainted parent's child starts tainted.

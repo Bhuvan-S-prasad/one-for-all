@@ -105,6 +105,8 @@ describe("handoffEntry", () => {
       kind: "handoff",
       text: "Researcher was asked “Compare laptops” → done: Buy the T14.",
       untrusted: true,
+      agent: "researcher",
+      answer: "Buy the T14.",
       runId: "r",
     });
     expect(

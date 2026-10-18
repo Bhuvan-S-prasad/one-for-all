@@ -4,6 +4,7 @@ import {
   runSchema,
   sendMessageResponseSchema,
   threadListSchema,
+  handoffListSchema,
   teamRosterSchema,
   threadSchema,
   type MessageReceivedEvent,
@@ -242,6 +243,18 @@ describe.skipIf(!hasDb)("handing work to other agents (integration)", async () =
     expect(reply).toContain(
       '"agent":"Writer","status":"done","answer":"Our database just got faster!"',
     );
+
+    // The person sees each handoff under the reply (TC.10): brief, status, answer.
+    const handoffs = handoffListSchema.parse(
+      await (await send("GET", `/api/runs/${parent.runId}/handoffs`)).json(),
+    ).items;
+    expect(handoffs.map((h) => [h.agentName, h.status, h.reply])).toEqual(
+      expect.arrayContaining([
+        ["Researcher", "done", "Released on 2026-09-12."],
+        ["Writer", "done", "Our database just got faster!"],
+      ]),
+    );
+    expect(handoffs.every((h) => (h.brief ?? "").length > 0 && h.files.length === 0)).toBe(true);
   });
 
   it("keeps each handoff as its own thread and child run, visible in Activity", async () => {

@@ -1,4 +1,4 @@
-import { useRun, useRunArtifacts } from "@ofa/client";
+import { useAgents, useRun, useRunArtifacts, useRunHandoffs } from "@ofa/client";
 import type { Agent, Message, Run, RunEvent } from "@ofa/contracts";
 import { Link } from "@tanstack/react-router";
 import {
@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { FileCard } from "@/components/chat/file-card";
+import { Handoffs } from "@/components/chat/handoffs";
 import { Familiar } from "@/components/familiar";
 import { headingId, Markdown } from "@/components/markdown";
 import { duration, shortTime } from "@/lib/format";
@@ -391,12 +392,23 @@ export function Reply({
   const blocks = useMemo(() => parseMarkdown(message.content), [message.content]);
   const sources = useMemo(() => runSources(events.data ?? []), [events.data]);
   const doc = isDocument(message.content, blocks);
-  // Files the agent wrote in this run (M3.06), fetched only when there are some.
+  // Files the agent wrote or sent in this run (M3.06), fetched only when there are some.
   const wroteFiles = (events.data ?? []).some(
-    (e) => e.type === "tool.completed" && e.payload.tool === "files.write" && e.payload.artifactId,
+    (e) =>
+      e.type === "tool.completed" &&
+      (e.payload.tool === "files.write" || e.payload.tool === "files.send") &&
+      e.payload.artifactId,
   );
   const { data: artifacts } = useRunArtifacts(message.runId ?? undefined, { enabled: wroteFiles });
-  const files = (artifacts ?? []).filter((a) => a.kind === "file");
+  // Work it handed to other agents (TC.10), and the files they made: a file a
+  // teammate wrote reaches the person here, under this reply.
+  const handedOn = (events.data ?? []).some((e) => e.type === "delegation.started");
+  const { data: handoffs } = useRunHandoffs(message.runId ?? undefined, { enabled: handedOn });
+  const { data: agents } = useAgents();
+  const files = [
+    ...(artifacts ?? []).filter((a) => a.kind === "file"),
+    ...(handoffs ?? []).flatMap((h) => h.files),
+  ];
 
   return (
     <article
@@ -443,6 +455,8 @@ export function Reply({
           )}
         </div>
       )}
+
+      {handoffs && handoffs.length > 0 && <Handoffs handoffs={handoffs} agents={agents ?? []} />}
 
       {files.length > 0 && (
         <div className="flex flex-col gap-2 sm:max-w-[88%]">
