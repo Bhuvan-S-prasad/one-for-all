@@ -193,6 +193,28 @@ describe("the chat record", () => {
     expect(prompt).toContain("- gmail.create_draft (subject: Laptops) → Draft saved: r573");
   });
 
+  it("a run out of budget answers with what it has, in one last call without tools", async () => {
+    const { say, run } = world({ ...agent, budgets: { steps: 2, tokens: 100_000 } });
+    say("Research laptops.");
+    const { result, llm } = await run("run_1", [
+      { toolCalls: [{ name: "web.search", args: { query: "laptops" } }] },
+      { toolCalls: [{ name: "web.search", args: { query: "laptops under $1200" } }] },
+      { text: "So far: the ThinkPad T14 at $1,099 looks best; I didn't compare battery life." },
+    ]);
+    expect(result.stopReason).toBe("step_budget");
+    const last = llm.requests.at(-1)!;
+    expect(last.tools).toEqual([]);
+    expect(last.promptVersion).toContain("harness.final@1");
+    expect(result.reply).toBe(
+      [
+        "So far: the ThinkPad T14 at $1,099 looks best; I didn't compare battery life.",
+        "I stopped before finishing: I reached my step limit for one task.",
+        "Reply “continue” and I'll pick up from here.",
+      ].join("\n\n"),
+    );
+    expect(result.usage.modelCalls).toBe(3);
+  });
+
   it("gives the same search back instead of running it twice in a run", async () => {
     const { runtime, tools, say, run } = world();
     say("Find laptops.");

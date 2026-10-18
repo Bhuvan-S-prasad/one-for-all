@@ -100,6 +100,7 @@ function setup(script: ScriptedReply[], options: { profile?: AgentProfile; leads
   const tools = createFakeToolExecutor([
     { descriptor: descriptor("web.search"), run: () => okOutcome("[results]", true) },
     { descriptor: descriptor("todo.write"), run: () => okOutcome("Plan saved") },
+    { descriptor: descriptor("message_agent"), run: () => okOutcome("Sent.") },
     {
       descriptor: descriptor(
         "delegate_task",
@@ -160,7 +161,7 @@ describe("a coordinator (ADR-0044)", () => {
     expect(request.tools?.find((t) => t.name === "delegate_task")?.description).toBe(
       "Hand a piece of work to another agent.\nYour team, with what each one can do, is in your instructions.",
     );
-    expect(request.promptVersion).toContain("harness.team@1");
+    expect(request.promptVersion).toContain("harness.team@2");
   });
 
   it("is refused a teammate's tool if it calls it anyway, and nothing runs", async () => {
@@ -197,5 +198,8 @@ describe("a coordinator (ADR-0044)", () => {
     });
     await run();
     expect(llm.requests[0]!.messages[0]?.content).toContain("You coordinate a team.");
+    // A leader routes messages in its group (ADR-0033); in a direct chat a
+    // message would answer after it replied, so it isn't offered there.
+    expect(llm.requests[0]!.tools?.map((t) => t.name)).toContain("message_agent");
   });
 });

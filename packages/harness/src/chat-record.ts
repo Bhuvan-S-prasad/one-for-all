@@ -218,6 +218,8 @@ export function stopReply(
   note: string,
   done: readonly ChatLedgerEntry[],
   plan: readonly ChatPlanItem[] | null,
+  /** What it wrote in its last call, without tools, when it had something (TC.09). */
+  answer: string | null = null,
 ): string {
   const work = done
     .filter((e) => e.kind === "action" || e.kind === "handoff")
@@ -241,8 +243,10 @@ export function stopReply(
     .slice(0, 6)
     .map((t) => `- ${t.text}`);
   return [
+    answer ?? "",
     note,
-    work.length ? `Done so far:\n${work.join("\n")}` : "",
+    // The answer says what it found; without one, the record does.
+    !answer && work.length ? `Done so far:\n${work.join("\n")}` : "",
     left.length ? `Still to do:\n${left.join("\n")}` : "",
     "Reply “continue” and I'll pick up from here.",
   ]

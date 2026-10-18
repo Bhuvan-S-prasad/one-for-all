@@ -24,7 +24,8 @@ The roster is already live: `TeamDirectory.members` reads the active agents on e
 - **A coordinator role.** `spec.role` is `specialist` (the default) or `coordinator`. A group's leader acts as one in that group. Coordinators get:
   - **a team block in the system prompt** (`harness.team`, versioned) instead of a list hidden in a tool description, with the coordination rules: plan first and give each item an owner, start independent handoffs in the same step, do outbound work last with the final results, check what comes back before answering;
   - **delegate first, in code:** a coordinator's tool list hides each of its own tools that an active teammate it can hand work to also has. With a Researcher on the team, the coordinator no longer sees `web.search`. A capability no teammate has stays with the coordinator, so a small team still works;
-  - **owners in the plan:** `todo.write` items may name an owner (`[researcher] compare prices`).
+  - **owners in the plan:** `todo.write` items may name an owner (`[researcher] compare prices`);
+  - **no `message_agent` outside a group it leads:** a message wakes an agent that answers later, after the coordinator has replied. In the live check (TC.09) a chief "continued" a stopped handoff by messaging and ended its turn waiting. It hands stopped work out again with `delegate_task`, with what was found and what is left. A group's leader keeps it to route messages (ADR-0033).
 - **Policy is unchanged.** Hiding is a listing rule, like proactive checks' read-only list (M5.10). A hidden tool called anyway is refused as not available, and every handoff still goes through grant, policy and taint as before (ADR-0032).
 
 ## Alternatives considered

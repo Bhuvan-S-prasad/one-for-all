@@ -54,9 +54,11 @@ import { modelCallEvents, runEvent } from "./events";
 import { MiddlewareChain, type HarnessMiddleware, type RunHookContext } from "./middleware";
 import {
   AGENT_MESSAGE,
+  FINAL_ANSWER,
   HANDOFF_BRIEF,
   NOTHING_TO_REPORT,
   PROACTIVE_CHECK,
+  promptRef,
   ROUTINE_RUN,
   SCHEDULED_TASK,
 } from "./prompts";
@@ -211,23 +213,33 @@ interface CoordinatorTeam {
   readonly roster: string;
   /** Tool name → handles of the teammates that have it. */
   readonly covered: Record<string, string[]>;
+  /** It leads a group chat, where it routes messages with `message_agent` (ADR-0033). */
+  readonly group: boolean;
 }
+
+/** Messages wake an agent that answers later (M5.03). */
+const MESSAGE_AGENT = "message_agent";
 
 /**
  * A coordinator's tool list (ADR-0044): without the tools a teammate has, and
  * with the roster moved out of `delegate_task` into its instructions.
  */
 function forCoordinator(tools: readonly ToolDescriptor[], team: CoordinatorTeam): ToolDescriptor[] {
-  return tools
-    .filter((t) => !team.covered[t.name])
-    .map((t) =>
+  return (
+    tools
+      .filter((t) => !team.covered[t.name])
+      // Outside a group, a message answers later, after the coordinator has
+      // replied: it handed work on with it and ended its turn "waiting" (TC.09).
+      .filter((t) => team.group || t.name !== MESSAGE_AGENT)
+      .map((t) =>
       t.name === DELEGATE_TASK
         ? {
             ...t,
             description: `${t.description.split(`\n${ROSTER_HEADING}`)[0]}\nYour team, with what each one can do, is in your instructions.`,
           }
         : t,
-    );
+      )
+  );
 }
 
 /** The search a `web.search` call asked for, written the same way each time. */
@@ -512,11 +524,11 @@ export async function runAgent(
       // level, one hop), so it works as itself.
       let team: CoordinatorTeam | null = null;
       if (deps.team && !start.proactive && input.trigger !== "delegation") {
-        const leads =
-          agent.role === "coordinator" ||
-          (!!input.threadId &&
-            !!deps.threads.coordinatorOf &&
-            (await deps.threads.coordinatorOf(ctx, input.threadId)) === ctx.agentId);
+        const leadsGroup =
+          !!input.threadId &&
+          !!deps.threads.coordinatorOf &&
+          (await deps.threads.coordinatorOf(ctx, input.threadId)) === ctx.agentId;
+        const leads = agent.role === "coordinator" || leadsGroup;
         const members = leads ? await deps.team.members(ctx) : [];
         if (members.length > 0) {
           const covered: Record<string, string[]> = {};
@@ -525,7 +537,11 @@ export async function runAgent(
               for (const tool of card.tools) (covered[tool] ??= []).push(member.slug);
             }
           }
-          team = { roster: rosterText(rankByRequest(members, request)), covered };
+          team = {
+            roster: rosterText(rankByRequest(members, request)),
+            covered,
+            group: leadsGroup,
+          };
         }
       }
       const taintedByRecord = !start.tainted && quotesOutside(record);
@@ -988,13 +1004,66 @@ ${result.content}`,
     }
     await saveRecord("record-end", stopReason);
 
+    // A run out of budget still answers with what it has (ADR-0045, TC.09):
+    // one last call, without tools. A handoff's answer then carries findings
+    // back instead of only "I stopped". A failed call just leaves the note.
+    let partial: string | null = null;
+    if ((stopReason === "token_budget" || stopReason === "step_budget") && !proactive) {
+      const last = await steps.run("wrap-up", async () => {
+        const assembled = assembleContext(
+          {
+            today: start.today,
+            agent,
+            tools: [],
+            memories: context.memories,
+            episodes: context.episodes,
+            skill: context.skill,
+            todos,
+            history: context.history,
+            summary,
+            turns,
+            record: context.record,
+            planCarried,
+            team: context.team?.roster ?? null,
+            wrapUp: true,
+          },
+          budget,
+        );
+        const request: LLMRequest = {
+          tier: agent.modelTier,
+          messages: [...assembled.messages, { role: "user", content: FINAL_ANSWER.render({}) }],
+          tools: [],
+          maxOutputTokens: assembled.maxOutputTokens,
+          temperature: 0.3,
+          promptVersion: `${assembled.promptVersion}+${promptRef(FINAL_ANSWER)}`,
+        };
+        try {
+          const call = chain.model(hook as RunHookContext, (r) => deps.llm.generate(r, ctx));
+          const response = await call(request);
+          await log(modelCallEvents("wrap-up", agent.modelTier, response, request.promptVersion));
+          return { text: response.text.trim(), usage: response.usage };
+        } catch {
+          return null;
+        }
+      });
+      if (last) {
+        usage = addUsage(usage, last.usage, { model: 1 });
+        partial = last.text || null;
+      }
+    }
+
     // ── Reply ────────────────────────────────────────────────────────────────
-    // Stopped early: what it did and what is left, from the record (ADR-0045).
+    // Stopped early: what it had, what is left and how to go on (ADR-0045).
     const plan = todos ?? context.record?.plan ?? null;
     const replyText =
       stopReason === "final_answer"
         ? finalText || "I don't have anything to add."
-        : stopReply(STOP_NOTES[stopReason] ?? "I stopped before finishing.", thisRun, plan);
+        : stopReply(
+            STOP_NOTES[stopReason] ?? "I stopped before finishing.",
+            thisRun,
+            plan,
+            partial,
+          );
     // A check with nothing to report stays quiet (M5.10): no message, so the
     // person hears from it only when something needs them.
     const quiet =

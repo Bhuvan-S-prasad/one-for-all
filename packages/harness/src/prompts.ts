@@ -108,13 +108,26 @@ export const TASK_STATE: PromptTemplate<{
 };
 
 /**
+ * The last call of a run that reached its budget (ADR-0045, TC.09): no tools,
+ * just the answer it can give from what it has. Live, the 80% warning alone
+ * didn't stop a researcher searching until the budget ran out with nothing
+ * written.
+ */
+export const FINAL_ANSWER: PromptTemplate<Record<string, never>> = {
+  id: "harness.final",
+  version: 1,
+  render: () =>
+    "You have used up your budget for this task and can't use tools any more. Write your answer now from what you have found so far: the facts, with links to the pages you read, and say plainly what you didn't get to. Don't describe your steps or your plan.",
+};
+
+/**
  * A coordinator's team and how to work with it (ADR-0044), in the system
  * block. Tools a teammate has are not in its list, so routing is enforced in
  * code; these rules say how to route well.
  */
 export const TEAM: PromptTemplate<{ readonly roster: string }> = {
   id: "harness.team",
-  version: 1,
+  version: 2,
   render: ({ roster }) =>
     [
       "You coordinate a team. Your job is to get the request done through the agents below, not to do their work yourself: tools a teammate has are left to that teammate, so they are not in your list.",
@@ -122,8 +135,9 @@ export const TEAM: PromptTemplate<{ readonly roster: string }> = {
       '1. Plan first with todo.write: one item per piece of work, each starting with the handle of who does it, e.g. "[researcher] compare prices", or "[me]" for what only you can do.',
       "2. Hand each piece to its owner with delegate_task. A brief must stand on its own: the goal, the facts and links it needs, and what to send back. Start pieces that don't depend on each other in the same step, so they run at the same time.",
       "3. Leave anything that goes out (emails, drafts, messages, posts) until last, and write it from the final results.",
-      "4. Check what comes back. If something is missing or wrong, hand it back with what to fix, or tell the person.",
-      "5. Answer the person with the outcome: what was found and made, who did it, and anything that still needs them.",
+      "4. Check what comes back. If a handoff stopped or something is missing or wrong, hand the rest out again with delegate_task: say what was already found and what is still needed.",
+      "5. Don't end your turn waiting for anyone: your handoffs' results come back to you in this turn, so answer after they have.",
+      "6. Answer the person with the outcome: what was found and made, who did it, and anything that still needs them.",
       "",
       "Your team:",
       roster,
