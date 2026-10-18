@@ -46,6 +46,7 @@ The single place to see what is done, what is in progress and what comes next. A
 | [M5 The team](#m5-the-team) | Agents delegate to each other; routines run alone | ✅ Done | 13 / 13 |
 | [Desktop](#desktop) | Watch an agent work on its own desktop; it makes Word and Excel files | ✅ Done | 14 / 14 |
 | [Teams and continuity](#teams-and-continuity) | "Continue" continues; a coordinator routes by capability | ✅ Done | 11 / 11 |
+| [Site and docs](#site-and-docs) | A public landing page and docs for what is built | ✅ Done | 7 / 7 |
 | [M6 Everywhere](#m6-everywhere) | Approve from the phone; chat on Telegram and Slack | ⬜ Not started | 0 / 8 |
 | [M7 Hardening](#m7-hardening) | Evals gate CI; backups; E2B and cloud adapters | ⬜ Not started | 0 / 11 |
 
@@ -302,6 +303,20 @@ Stays where it is: the approval card (M4.09), the file card (M3.06) and the comp
 
 ---
 
+## Site and docs
+
+**Goal:** a public landing page that shows what One-for-All is and sends people to the repository, and docs for everything built so far, hosted on Vercel apart from the app.
+**Done when:** `apps/site` builds to a static site with the landing page and the docs, passes typecheck, lint and the design checks, and holds nothing private.
+**ADRs:** 0046
+
+- [x] SD.01 ADR-0046 and architecture: `apps/site` as its own static app, same stack and boundary as the web app (R3), decision records read at build time → ARCHITECTURE.md §16 row and §17 layout and R3; ADR index; `docs/guides/site-on-vercel.md`
+- [x] SD.02 Scaffold `apps/site`: Vite, React, TanStack Router (code routes), Tailwind with the shared tokens, bundled fonts, Lenis and GSAP ScrollTrigger, `vercel.json` (SPA rewrite) → its dev script is `dev:site`, so `pnpm dev` doesn't start it; the docs are a lazy chunk
+- [x] SD.03 Landing page: "One for ▢ all." with a pinned reel of the team at work (familiars from `@ofa/client`, interface fragments with the app's own labels), the team in one sentence, a four-stop slider (ask, hand off, approve, continue), a live routing demo running `rankByRequest` and `rosterText` from `@ofa/core`, six feature rows, what it is built on, three commands with the first sign-in explained, open questions, an inverted close and a lime footer with the repository → art direction from the design-taste skill ("the sentence is the layout"); its lint and browser inspector pass with no failures at 1440, 768 and 390 px (warnings left: three typefaces with mono only in code, no photographs or video, by choice)
+- [x] SD.04 Docs engine: the safe Markdown parser copied from the web app with relative links, `flow` and `layers` diagram blocks, a sidebar, "On this page", before/next links, decision records from `docs/adr`, run events from `RUN_EVENT_TYPES`
+- [x] SD.05 Docs content: 28 pages in five sections (Start, Using it, How it works, Decisions, Reference), only what is built; the self-host first sign-in and the dev seed's sign-in written out; facts checked against the code (config schema, durable functions, tools, prompt versions, providers)
+- [x] SD.06 Checks: typecheck, lint, build; no personal data in the site (the repository address is the only link to its owner)
+- [x] SD.07 Landing page redone around motion (the first version read as too plain) → a preloader with a count and a lifting curtain; a hatchery hero where the team sits on the letters of "One for all.", every familiar's eyes follow the pointer, and a click hatches a new one that drops and bounces; a manifesto lit word by word with the scroll; "a day with your team" pinned and scrolled sideways through six colour scenes with a screen-sized clock (07:30 routine, 09:12 ask, 09:13 plan, 09:14 handoff lines drawing, 09:31 the lime "needs you", 23:00 asleep); taint played by the scroll (a page with a hidden order, the run turning red, the send held); the routing demo reordering with Flip; a deck of colour cards that stack; two marquees that speed up and lean with the scroll; a terminal that types the install; a lime finale with the team climbing over the name and a spinning seal to the repository. A custom cursor and magnetic buttons on fine pointers; everything off under reduced motion, and phones get stacked scenes. GSAP's SplitText, ScrollTrigger, DrawSVG, ScrambleText, Flip and CustomEase with Lenis
+
 ## M6 Everywhere
 
 **Goal:** reach agents from the phone and chat apps.
@@ -371,6 +386,12 @@ Newest first. Keep entries short.
 - **Checks:** unit tests in all 19 packages (harness 80, tools 63), DB integration 37, API integration 77, typecheck, lint (no errors), format. Migration 0017 applied to the dev database. Not run: sandbox, vault, memory and events integration (untouched), evals, and a live run.
 - **Next:** TC.06 coordinator role (role field, team block, hiding covered tools, plan owners), then TC.07–TC.09.
 - **Open:** the default token budget (still 120k); the roster isn't ranked by the request until TC.06.
+
+### 2026-10-18 (session 25, site)
+- **Done:** Site and docs (SD.01–SD.06): `apps/site`, a static Vite app with the landing page and 28 docs pages, ADR-0046, a Vercel guide. Deploy it with Root Directory `apps/site` (see `docs/guides/site-on-vercel.md`).
+- **Checks:** site typecheck, lint, build; design lint 0 findings; browser inspector 0 failures on the landing page.
+- **Open:** the repository's LICENSE still says all rights reserved, while the site invites people to clone and run it: choose a license before publishing the site. The docs need a page update with each new milestone.
+- **Next:** M6.01 device pairing.
 
 ### 2026-10-18 (session 25, later)
 - **Done:** TC.06–TC.11, **Teams and continuity is done** (11 of 11). The coordinator role, the editor's roster preview, evals, and the live laptop task on the dev stack (six runs: each found a fault, see TC.09). Handoffs pass earlier answers by name (`include_results_from`), a child with missing input says so, helpers' work and files show in the chat as cards, and the step trail is a quiet timeline (TC.11).

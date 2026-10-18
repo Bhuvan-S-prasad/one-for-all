@@ -120,3 +120,6 @@ CLAUDE.local.md
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Design-check screenshots and reports (local only)
+.taste-skill/
