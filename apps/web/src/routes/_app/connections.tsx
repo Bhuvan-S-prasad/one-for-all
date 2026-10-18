@@ -14,6 +14,7 @@ import { KeyRound, Lock, Plug, RefreshCw, ServerCog, Wrench } from "lucide-react
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { AppIcon } from "@/components/app-icon";
 import { SecretInput } from "@/components/secret-input";
+import { Select } from "@/components/ui/select";
 import { ErrorAlert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -617,15 +618,14 @@ function CustomServerForm({ onError }: { onError: (message: string) => void }) {
         </div>
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="custom-auth">Sign-in</Label>
-          <select
+          <Select
             id="custom-auth"
             value={auth}
             onChange={(e) => setAuth(e.target.value as typeof auth)}
-            className="h-13 rounded-md border border-input bg-field px-4 text-base outline-none focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring"
           >
             <option value="oauth">Each person signs in (OAuth)</option>
             <option value="none">No sign-in</option>
-          </select>
+          </Select>
         </div>
       </div>
       <label className="flex items-start gap-2.5 text-[13.5px]">

@@ -13,6 +13,7 @@ import { LayoutGrid, List, Play, Plus, RotateCcw, Search, Square } from "lucide-
 import { ImportAgentButton } from "@/components/agent-file";
 import { ComingSoon } from "@/components/coming-soon";
 import { Familiar } from "@/components/familiar";
+import { Select } from "@/components/ui/select";
 import { ErrorAlert } from "@/components/ui/alert";
 import { HOUSEHOLD } from "@/lib/familiars";
 import { BUSY_MOODS, shouldAnimate, TIER_INFO, useAgentMoods } from "@/lib/agents";
@@ -211,7 +212,8 @@ function AgentsPage() {
         <div className="ml-auto flex items-center gap-2">
           <label className="flex items-center gap-2 text-[13px] text-muted-foreground">
             <span className="hidden sm:inline">Sort</span>
-            <select
+            <Select
+              variant="pill"
               value={sort}
               onChange={(e) =>
                 setSearch({
@@ -221,14 +223,14 @@ function AgentsPage() {
                       : (e.target.value as Sort as AgentsSearch["sort"]),
                 })
               }
-              className="h-10 rounded-full border border-input bg-card px-3 text-[13px] font-semibold text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="px-3 text-[13px] font-semibold"
             >
               {Object.entries(SORTS).map(([value, label]) => (
                 <option key={value} value={value}>
                   {label}
                 </option>
               ))}
-            </select>
+            </Select>
           </label>
           <div role="group" aria-label="View" className="flex gap-1 rounded-full border p-1">
             {[

@@ -13,8 +13,3 @@ export function Textarea({ className, ...props }: ComponentProps<"textarea">) {
     />
   );
 }
-
-/** A native select, styled like `Input`. */
-export function Select({ className, ...props }: ComponentProps<"select">) {
-  return <select className={cn(FIELD, "h-13 appearance-auto pr-3", className)} {...props} />;
-}

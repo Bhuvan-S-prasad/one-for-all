@@ -9,6 +9,7 @@ import {
 } from "@ofa/client";
 import type { PolicyRuleItem } from "@ofa/contracts";
 import { useState, type FormEvent } from "react";
+import { Select } from "@/components/ui/select";
 import { ErrorAlert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardTitle } from "@/components/ui/card";
@@ -22,9 +23,6 @@ import { cn } from "@/lib/utils";
 // person even where an agent may use it freely; "allow without asking" lets
 // it run where it would otherwise ask. Owners and admins set the workspace's
 // rules; anyone can add rules for their own runs, which only ask first.
-
-const selectClass =
-  "h-13 rounded-md border border-input bg-field px-4 text-base outline-none focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring";
 
 /** "*", "notion.*", "gmail.send_draft" in words. */
 function toolWords(tool: string): string {
@@ -197,43 +195,36 @@ export function RulesCard({ canEditWorkspace }: { canEditWorkspace: boolean }) {
         </div>
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="rule-effect">Then</Label>
-          <select
+          <Select
             id="rule-effect"
             value={scope === "personal" ? "ask_first" : effect}
             onChange={(e) => setEffect(e.target.value as typeof effect)}
-            className={selectClass}
           >
             <option value="ask_first">Ask first</option>
             {scope === "workspace" && <option value="allow_auto">Allow without asking</option>}
-          </select>
+          </Select>
         </div>
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="rule-agent">For</Label>
-          <select
-            id="rule-agent"
-            value={agentId}
-            onChange={(e) => setAgentId(e.target.value)}
-            className={selectClass}
-          >
+          <Select id="rule-agent" value={agentId} onChange={(e) => setAgentId(e.target.value)}>
             <option value="">All agents</option>
             {(agents ?? []).map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name}
               </option>
             ))}
-          </select>
+          </Select>
         </div>
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="rule-scope">In</Label>
-          <select
+          <Select
             id="rule-scope"
             value={scope}
             onChange={(e) => setScope(e.target.value as typeof scope)}
-            className={selectClass}
           >
             {canEditWorkspace && <option value="workspace">Everyone’s runs</option>}
             <option value="personal">Only my runs (can only ask first)</option>
-          </select>
+          </Select>
         </div>
         <div className="flex flex-col gap-1.5 sm:col-span-2">
           <Label htmlFor="rule-why">Why (optional)</Label>

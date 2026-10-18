@@ -18,6 +18,7 @@ import { ApprovalCard } from "@/components/approval-card";
 import { WorkingRing } from "@/components/chat/live-run";
 import { Familiar } from "@/components/familiar";
 import { FactRow, useForgetWithUndo } from "@/components/memory-review";
+import { Select } from "@/components/ui/select";
 import { Card, CardTitle } from "@/components/ui/card";
 import { parseMention, starters, useAgentMoods } from "@/lib/agents";
 import { count, duration, firstName, partOfDay, shortTime, timeAgo } from "@/lib/format";
@@ -369,13 +370,14 @@ function AskBox({ agents }: { agents: readonly Agent[] }) {
           <label className="flex items-center gap-2 text-sm">
             <span className="sr-only">Agent</span>
             <Familiar look={agent.spec.avatar} size={26} ring="var(--card)" />
-            <select
+            <Select
+              variant="pill"
               value={agent.id}
               onChange={(e) => {
                 setAgentId(e.target.value);
                 if (mention) setText(mention.rest);
               }}
-              className="h-9 max-w-[160px] rounded-full border border-input bg-card px-3 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="h-9 max-w-[160px] px-3 text-sm font-semibold"
             >
               {agents.map((a) => (
                 <option key={a.id} value={a.id}>
@@ -383,7 +385,7 @@ function AskBox({ agents }: { agents: readonly Agent[] }) {
                   {a.status !== "active" ? " (paused)" : ""}
                 </option>
               ))}
-            </select>
+            </Select>
           </label>
         </div>
         <div className="flex items-end gap-2 rounded-[22px] border border-input bg-background p-1.5 pl-4 focus-within:border-ring/60">

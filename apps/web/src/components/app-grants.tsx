@@ -5,6 +5,7 @@ import { ChevronDown } from "lucide-react";
 import { useState } from "react";
 import { AppIcon } from "@/components/app-icon";
 import { cn } from "@/lib/utils";
+import { Select } from "@/components/ui/select";
 
 // Which connected apps an agent may use, and how (M4.09). A whole app
 // (`notion.*`) either runs reads by itself and asks before changes, or asks
@@ -200,14 +201,14 @@ function ToolList({
                 {tool.description}
               </span>
             </div>
-            <select
+            <Select
               id={id}
               value={value}
               onChange={(e) => {
                 const next = e.target.value as ToolMode;
                 onChange(withGrant(grants, tool.name, next === "app" ? null : next));
               }}
-              className="h-9 rounded-md border border-input bg-field px-2.5 text-[13px] outline-none focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring"
+              className="h-9 w-auto px-2.5 text-[13px]"
             >
               {TOOL_MODES.map((option) => (
                 <option
@@ -220,7 +221,7 @@ function ToolList({
                   {option.value === "auto" && tool.destructive ? " (always asks)" : ""}
                 </option>
               ))}
-            </select>
+            </Select>
           </li>
         );
       })}

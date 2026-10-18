@@ -5,6 +5,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { AgentEditor, draftGrants, toRequest } from "@/components/agent-editor";
 import { ExportAgentCard } from "@/components/agent-file";
 import { usesBrowser } from "@/components/computer/computer-panel";
+import { Select } from "@/components/ui/select";
 import { ErrorAlert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardTitle } from "@/components/ui/card";
@@ -148,18 +149,13 @@ function ShareLoginCard({ agent }: { agent: Agent }) {
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="share-to">With</Label>
-            <select
-              id="share-to"
-              value={target?.id ?? ""}
-              onChange={(e) => setTo(e.target.value)}
-              className="h-13 rounded-md border border-input bg-field px-4 text-base outline-none focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring"
-            >
+            <Select id="share-to" value={target?.id ?? ""} onChange={(e) => setTo(e.target.value)}>
               {others.map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.name}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
           <Button type="submit" disabled={share.isPending || !site.trim()}>
             Share login

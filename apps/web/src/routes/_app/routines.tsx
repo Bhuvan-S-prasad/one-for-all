@@ -20,7 +20,8 @@ import { ErrorAlert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, Textarea } from "@/components/ui/textarea";
+import { Select } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { HOUSEHOLD } from "@/lib/familiars";
 import { timeAgo } from "@/lib/format";
 import {

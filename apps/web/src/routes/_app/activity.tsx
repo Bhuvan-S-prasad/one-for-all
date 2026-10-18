@@ -16,6 +16,7 @@ import {
 import { Fragment, useEffect, useRef, useState } from "react";
 import { ComingSoon } from "@/components/coming-soon";
 import { Familiar } from "@/components/familiar";
+import { Select } from "@/components/ui/select";
 import { ErrorAlert } from "@/components/ui/alert";
 import { shouldAnimate } from "@/lib/agents";
 import { HOUSEHOLD } from "@/lib/familiars";
@@ -255,12 +256,12 @@ function Filters({
           </button>
         ))}
       </div>
-      <label className="relative flex h-10 items-center">
+      <label className="flex h-10 items-center">
         <span className="sr-only">Agent</span>
-        <select
+        <Select
+          variant="pill"
           value={search.agent ?? ""}
           onChange={(e) => onChange({ agent: e.target.value || undefined, run: undefined })}
-          className="h-10 appearance-none rounded-full border border-input bg-card pr-9 pl-4 text-[13.5px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <option value="">All agents</option>
           {agents.map((a) => (
@@ -268,11 +269,7 @@ function Filters({
               {a.name}
             </option>
           ))}
-        </select>
-        <ChevronDown
-          className="pointer-events-none absolute right-3 size-4 text-muted-foreground"
-          aria-hidden
-        />
+        </Select>
       </label>
     </header>
   );
