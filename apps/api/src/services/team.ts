@@ -3,10 +3,13 @@ import {
   AppError,
   asId,
   findMember,
+  type AgentCapability,
   type AgentId,
   type MessageId,
+  type RunContext,
   type RunId,
   type TeamDirectory,
+  type TeamMember,
   type ThreadId,
 } from "@ofa/core";
 import {
@@ -47,22 +50,40 @@ export interface TeamOptions {
   readonly wake?: (event: MessageReceivedEvent) => Promise<void>;
   /** Tell open clients a message was posted. */
   readonly announce?: (workspaceId: string, threadId: string, messageId: string) => Promise<void>;
+  /** What each agent can do, from its grants (the tool executor's, ADR-0044). */
+  readonly capabilities?: (
+    ctx: RunContext,
+    agentIds: readonly AgentId[],
+  ) => Promise<ReadonlyMap<string, readonly AgentCapability[]>>;
 }
 
 export function createTeamDirectory(db: Database, options: TeamOptions = {}): TeamDirectory {
+  /** Each member with its capability card (ADR-0044), worked out in one pass. */
+  async function withCards(ctx: RunContext, members: TeamMember[]): Promise<TeamMember[]> {
+    if (!options.capabilities || members.length === 0) return members;
+    const cards = await options.capabilities(
+      ctx,
+      members.map((m) => m.id),
+    );
+    return members.map((m) => ({ ...m, capabilities: cards.get(m.id) ?? [] }));
+  }
+
   const team: TeamDirectory = {
     async members(ctx) {
       // One level deep: a run that is itself a handoff hands nothing on.
       const current = await getRun(db, ctx, ctx.runId);
       if (current?.parentRunId) return [];
-      return (await listAgents(db, ctx))
-        .filter((a) => a.status === "active" && a.id !== ctx.agentId)
-        .map((a) => ({
-          id: asId<AgentId>(a.id),
-          slug: a.slug,
-          name: a.name,
-          job: agentSpecSchema.safeParse(a.spec).data?.job ?? "General",
-        }));
+      return withCards(
+        ctx,
+        (await listAgents(db, ctx))
+          .filter((a) => a.status === "active" && a.id !== ctx.agentId)
+          .map((a) => ({
+            id: asId<AgentId>(a.id),
+            slug: a.slug,
+            name: a.name,
+            job: agentSpecSchema.safeParse(a.spec).data?.job ?? "General",
+          })),
+      );
     },
 
     async handoff(ctx, input) {
@@ -108,7 +129,8 @@ export function createTeamDirectory(db: Database, options: TeamOptions = {}): Te
       const inThread = new Set(
         thread.members.flatMap((m) => (m.type === "agent" ? [m.agentId] : [])),
       );
-      return (
+      return withCards(
+        ctx,
         (await listAgents(db, ctx))
           .filter((a) => a.status === "active" && a.id !== ctx.agentId)
           // In a group, its members; in a direct chat, any agent of the workspace.
@@ -118,7 +140,7 @@ export function createTeamDirectory(db: Database, options: TeamOptions = {}): Te
             slug: a.slug,
             name: a.name,
             job: agentSpecSchema.safeParse(a.spec).data?.job ?? "General",
-          }))
+          })),
       );
     },
 

@@ -2,6 +2,7 @@ import type { RunEvent } from "@ofa/contracts";
 import { describe, expect, it } from "vitest";
 import { count, timeAgo } from "./format";
 import {
+  groupSteps,
   runPhase,
   runPlan,
   runSources,
@@ -47,8 +48,22 @@ describe("runSteps", () => {
       }),
     ]);
     expect(steps).toEqual([
-      { id: "t0", label: "Searched the web", detail: "pgvector", state: "done" },
-      { id: "t1", label: "Reading a page", detail: "github.com", state: "active" },
+      {
+        id: "t0",
+        tool: "web.search",
+        label: "Searched the web",
+        detail: "pgvector",
+        state: "done",
+        durationMs: 9,
+      },
+      {
+        id: "t1",
+        tool: "web.read_url",
+        label: "Reading a page",
+        detail: "github.com",
+        state: "active",
+        durationMs: null,
+      },
     ]);
   });
 
@@ -91,7 +106,14 @@ describe("runSteps", () => {
     ];
     const waiting = [...held("0")];
     expect(runSteps(waiting)).toEqual([
-      { id: "t0", label: "Waiting for your answer", detail: "Clicking", state: "active" },
+      {
+        id: "t0",
+        tool: null,
+        label: "Waiting for your answer",
+        detail: "Clicking",
+        state: "active",
+        durationMs: null,
+      },
     ]);
     expect(runPhase("waiting", waiting)).toMatchObject({
       label: "Waiting for you",
@@ -118,6 +140,67 @@ describe("runSteps", () => {
       ["You said no", "blocked"],
     ]);
     expect(runSummary(answered).blocked).toBe(1);
+  });
+});
+
+describe("the trail", () => {
+  const call = (id: string, tool: string, args: unknown) =>
+    ev("tool.called", { toolCallId: id, tool, args, idempotencyKey: id });
+  const done = (id: string, tool: string, durationMs = 5) =>
+    ev("tool.completed", { toolCallId: id, tool, durationMs, untrusted: false, preview: "" });
+  const failed = (id: string, tool: string, message: string) =>
+    ev("tool.failed", { toolCallId: id, tool, durationMs: 1, code: "invalid", message });
+  const names = new Map([["researcher", "Researcher"]]);
+
+  it("says who was asked what, and failures in plain words", () => {
+    const steps = runSteps(
+      [
+        call("d0", "delegate_task", { agent: "@Researcher", brief: "Compare  three\nlaptops" }),
+        done("d0", "delegate_task"),
+        call("d1", "delegate_task", { agent: "operator", brief: "x".repeat(5_000) }),
+        failed("d1", "delegate_task", "brief: Too big: expected string to have <=4000 characters"),
+        call("u0", "operator", {}),
+        failed("u0", "operator", "Unknown tool: operator"),
+      ],
+      names,
+    );
+    expect(steps.map((s) => [s.label, s.detail])).toEqual([
+      ["Asked Researcher", "Compare three laptops"],
+      ["Couldn't ask Operator", "The brief was too long (the limit is 4,000 characters)"],
+      ["Reached for a tool it doesn't have", "“operator” isn't one of its tools"],
+    ]);
+  });
+
+  it("folds lookups in a row into one line with their targets", () => {
+    const rows = groupSteps(
+      runSteps([
+        call("s0", "web.search", { query: "a" }),
+        done("s0", "web.search", 1_000),
+        call("s1", "web.search", { query: "b" }),
+        done("s1", "web.search", 2_000),
+        call("p0", "todo.write", { items: [{ text: "x", done: true }, { text: "y" }] }),
+        done("p0", "todo.write"),
+        call("s2", "web.search", { query: "c" }),
+        done("s2", "web.search"),
+      ]),
+    );
+    expect(rows.map((r) => [r.label, r.count, r.details])).toEqual([
+      ["Searched the web", 2, ["a", "b"]],
+      ["Updated the plan", 1, ["1 of 2 done"]],
+      ["Searched the web", 1, ["c"]],
+    ]);
+    expect(rows[0]?.durationMs).toBe(3_000);
+  });
+
+  it("counts teammates asked, and failures apart from pages", () => {
+    const summary = runSummary([
+      call("d0", "delegate_task", { agent: "researcher" }),
+      call("d1", "delegate_task", { agent: "researcher" }),
+      call("d2", "delegate_task", { agent: "operator" }),
+      call("u0", "operator", {}),
+      failed("u0", "operator", "Unknown tool: operator"),
+    ]);
+    expect(summaryLine(summary)).toBe("asked 2 agents · 1 step didn't work");
   });
 });
 

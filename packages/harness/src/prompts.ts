@@ -82,10 +82,12 @@ export const TASK_STATE: PromptTemplate<{
   readonly task: string;
   readonly plan: string;
   readonly notes: string;
+  /** Most of the run's token or step budget is spent (ADR-0045). */
+  readonly wrapUp?: boolean;
 }> = {
   id: "harness.task",
-  version: 1,
-  render: ({ task, plan, notes }) =>
+  version: 2,
+  render: ({ task, plan, notes, wrapUp }) =>
     [
       task ? `The request you are working on:\n${task}` : "",
       plan,
@@ -97,6 +99,73 @@ export const TASK_STATE: PromptTemplate<{
             "Carry on from these notes. When you have what you need, write the finished answer for the person. Do not send the notes themselves.",
           ].join("\n")
         : "",
+      wrapUp
+        ? "You have used most of your budget for this task. Finish the item you are on, then write your answer now with what you have. Keep your plan up to date: what is left is kept, and the person can ask you to continue."
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+};
+
+/**
+ * The last call of a run that reached its budget (ADR-0045, TC.09): no tools,
+ * just the answer it can give from what it has. Live, the 80% warning alone
+ * didn't stop a researcher searching until the budget ran out with nothing
+ * written.
+ */
+export const FINAL_ANSWER: PromptTemplate<Record<string, never>> = {
+  id: "harness.final",
+  version: 1,
+  render: () =>
+    "You have used up your budget for this task and can't use tools any more. Write your answer now from what you have found so far: the facts, with links to the pages you read, and say plainly what you didn't get to. Don't describe your steps or your plan.",
+};
+
+/**
+ * A coordinator's team and how to work with it (ADR-0044), in the system
+ * block. Tools a teammate has are not in its list, so routing is enforced in
+ * code; these rules say how to route well.
+ */
+export const TEAM: PromptTemplate<{ readonly roster: string }> = {
+  id: "harness.team",
+  version: 5,
+  render: ({ roster }) =>
+    [
+      "You coordinate a team. Your job is to get the request done through the agents below, not to do their work yourself: tools a teammate has are left to that teammate, so they are not in your list.",
+      "How to work:",
+      '1. Plan first with todo.write: one item per piece of work, each starting with the handle of who does it, e.g. "[researcher] compare prices", or "[me]" for what only you can do.',
+      '2. Hand each piece to its owner with delegate_task. A brief must stand on its own: the goal, the facts and links it needs, and what to send back. A teammate sees only its brief, so to pass on what another teammate found, name that teammate in include_results_from; never write "see the previous response". Start pieces that don\'t depend on each other in the same step, so they run at the same time.',
+      "3. Leave anything that goes out (emails, drafts, messages, posts) until last, and write it from the final results. Files a teammate writes or sends reach the person under your answer by themselves: don't ask for their contents back to pass them on.",
+      "A brief is instructions, not data: it holds up to 4,000 characters, so never paste findings or long text into it, and don't split a file into parts. Name the teammate in include_results_from (also one from earlier in this chat) and say what the file or message should contain: the teammate writes it from those results in one go.",
+      "4. Check what comes back. If a handoff stopped or something is missing or wrong, hand the rest out again with delegate_task: say what was already found and what is still needed.",
+      "5. Don't end your turn waiting for anyone: your handoffs' results come back to you in this turn, so answer after they have.",
+      "6. Answer the person with the outcome: what was found and made, who did it, and anything that still needs them.",
+      "",
+      "Your team:",
+      roster,
+    ].join("\n"),
+};
+
+/**
+ * What this agent already did in this chat (ADR-0045), from its record, in
+ * the system block. Written by the harness, not the model; a quote from
+ * outside content stays wrapped as such.
+ */
+export const CHAT_RECORD: PromptTemplate<{
+  readonly ended: string;
+  readonly plan: string;
+  readonly done: string;
+  readonly notes: string;
+}> = {
+  id: "harness.session",
+  version: 2,
+  render: ({ ended, plan, done, notes }) =>
+    [
+      "Earlier in this chat you already did this work (your own record, kept by the system; the person may not have seen all of it).",
+      ended,
+      plan ? `Your plan then:\n${plan}` : "",
+      done ? `Done:\n${done}` : "",
+      notes ? `Your notes then:\n${notes}` : "",
+      "Don't redo work listed here: reuse what it found and made. A plan item whose work is listed under Done is finished, even if it isn't ticked: tick it, don't do it again. If the person asks you to continue, carry on with what is still open. If they ask for something new, start fresh, using anything here that helps.",
     ]
       .filter(Boolean)
       .join("\n\n"),
@@ -108,10 +177,11 @@ export const TASK_STATE: PromptTemplate<{
  */
 export const HANDOFF_BRIEF: PromptTemplate<{ readonly brief: string }> = {
   id: "harness.handoff",
-  version: 1,
+  version: 2,
   render: ({ brief }) =>
     [
       "Another agent in this workspace handed you this task. Do it with your own tools, then reply with the result. Your reply goes back to that agent, not to the person, so make it complete and self-contained.",
+      "If the task depends on something you weren't given (findings, a file, an earlier answer), don't look for it or redo the work to recreate it: reply at once saying exactly what is missing, so the other agent can send it.",
       "",
       "The task:",
       brief,

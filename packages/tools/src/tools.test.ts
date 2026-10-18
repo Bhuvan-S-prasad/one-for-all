@@ -1,5 +1,6 @@
 import {
   asId,
+  rosterText,
   type AgentId,
   type AgentProfile,
   type MemoryRecord,
@@ -135,6 +136,111 @@ const request = (name: string, args: unknown, key = "r:tool-0-0", tainted = fals
   toolCallId: "tool-0-0",
   idempotencyKey: key,
   tainted,
+});
+
+describe("capability cards (ADR-0044)", () => {
+  const tool = (name: string, readOnly = false) =>
+    defineTool({
+      name,
+      description: name,
+      input: z.object({}),
+      annotations: { readOnly },
+      async run() {
+        return { content: "ok", untrusted: false };
+      },
+    });
+
+  it("says what each agent can do, by area, from its grants and connected apps", async () => {
+    const researcher: AgentProfile = {
+      ...agentWith([
+        { tool: "web.search", mode: "auto" },
+        { tool: "web.read_url", mode: "auto" },
+        { tool: "todo.write", mode: "auto" },
+        { tool: "delegate_task", mode: "auto" },
+      ]),
+      id: asId<AgentId>("res"),
+    };
+    const inbox: AgentProfile = {
+      ...agentWith([
+        { tool: "gmail.*", mode: "auto" },
+        { tool: "gmail.create_draft", mode: "approve" },
+        { tool: "gmail.delete_message", mode: "blocked" },
+        { tool: "files.send", mode: "auto" },
+        { tool: "files.list", mode: "auto" },
+      ]),
+      id: asId<AgentId>("inbox"),
+    };
+    const profiles = new Map([
+      ["res", researcher],
+      ["inbox", inbox],
+    ]);
+    const agents = { get: async (_c: unknown, id: string) => profiles.get(id) ?? null };
+    const e = createToolExecutor({
+      registry: createToolRegistry([
+        tool("web.search", true),
+        tool("web.read_url", true),
+        tool("todo.write"),
+        tool("delegate_task"),
+        tool("files.send"),
+        tool("files.list", true),
+      ] as unknown as ToolDefinition<never>[]),
+      policy: createPolicyEngine({ agents }),
+      calls: memoryCalls(),
+      agents,
+      toolkits: {
+        toolkits: async () => [
+          {
+            app: "gmail",
+            name: "Gmail",
+            description: "Mail",
+            tools: [
+              tool("gmail.search_messages", true),
+              tool("gmail.create_draft"),
+              tool("gmail.delete_message"),
+            ] as unknown as ToolDefinition<unknown>[],
+          },
+        ],
+      },
+    });
+    const cards = await e.capabilities!(ctx, [asId("res"), asId("inbox"), asId("gone")]);
+    expect(cards.get("res")).toEqual([
+      { area: "web", abilities: ["search", "read pages"], tools: ["web.search", "web.read_url"] },
+    ]);
+    expect(cards.get("inbox")).toEqual([
+      // files.list folds into its area: on its own it says nothing new.
+      {
+        area: "files",
+        abilities: ["send files to the person"],
+        tools: ["files.send", "files.list"],
+      },
+      {
+        area: "Gmail",
+        abilities: ["search messages", "create draft (asks first)"],
+        tools: ["gmail.search_messages", "gmail.create_draft"],
+      },
+    ]);
+    expect(cards.has("gone")).toBe(false);
+  });
+
+  it("keeps a long roster short: cards until the budget, then one line each", () => {
+    const member = (n: number) => ({
+      id: asId<AgentId>(`a${n}`),
+      slug: `agent${n}`,
+      name: `Agent ${n}`,
+      job: "Helps",
+      capabilities: [{ area: "web", abilities: ["search", "read pages"], tools: ["web.search"] }],
+    });
+    const text = rosterText([member(1), member(2), member(3)], 120);
+    expect(text).toBe(
+      [
+        "- agent1 (Agent 1): Helps",
+        "  can: web: search, read pages",
+        "- agent2 (Agent 2): Helps",
+        "  can: web: search, read pages",
+        "- agent3 (Agent 3): Helps",
+      ].join("\n"),
+    );
+  });
 });
 
 describe("tool executor", () => {
@@ -321,10 +427,31 @@ describe("delegate_task (M5.01)", () => {
     const [tool] = await withTeam([researcher], "auto").listTools(ctx);
     expect(tool?.name).toBe("delegate_task");
     expect(tool?.description).toContain(
-      "Agents you can hand work to:\n- researcher: Researcher, Research",
+      "Agents you can hand work to (pick each by what it can do):\n- researcher (Researcher): Research",
     );
     // A run that was itself handed work gets no members: one level deep.
     expect(await withTeam([], "auto").listTools(ctx)).toEqual([]);
+  });
+
+  it("shows what each agent can do, from its grants (ADR-0044)", async () => {
+    const [tool] = await withTeam(
+      [
+        {
+          ...researcher,
+          capabilities: [{ area: "web", abilities: ["search", "read pages"], tools: [] }],
+        },
+        { id: asId<AgentId>("idle"), slug: "idle", name: "Idle", job: "Waits", capabilities: [] },
+      ],
+      "auto",
+    ).listTools(ctx);
+    expect(tool?.description).toContain(
+      [
+        "- researcher (Researcher): Research",
+        "  can: web: search, read pages",
+        "- idle (Idle): Waits",
+        "  can: no tools; answers from what it knows",
+      ].join("\n"),
+    );
   });
 
   it("checks the agent it names, and lets a person reword a held brief", async () => {
@@ -382,7 +509,7 @@ describe("message_agent (M5.03)", () => {
     });
     const [tool] = await run.listTools(ctx);
     expect(tool?.description).toContain(
-      "Agents you can message here:\n- researcher: Researcher, Research",
+      "Agents you can message here:\n- researcher (Researcher): Research",
     );
     const args = { agent: "researcher", message: "Please check the pgvector release notes." };
     expect(await run.execute(request("message_agent", args), ctx)).toMatchObject({

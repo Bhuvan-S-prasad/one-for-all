@@ -189,6 +189,16 @@ export function timeline(events: readonly RunEvent[]): Timeline {
           });
         }
         break;
+      case "tool.reused":
+        closeReads();
+        items.push({
+          id: e.id,
+          title: "Searched the same thing again",
+          detail: "Used the earlier result",
+          state: "info",
+          at: e.createdAt,
+        });
+        break;
       case "run.tainted":
         closeReads();
         items.push({

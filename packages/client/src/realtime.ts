@@ -42,6 +42,10 @@ export function applyRealtime(queryClient: QueryClient, message: RealtimeMessage
       if (event.type === "tool.completed" && event.payload.artifactId) {
         void queryClient.invalidateQueries({ queryKey: queryKeys.runArtifacts(event.runId) });
       }
+      // A handoff started or came back (TC.10).
+      if (event.type === "delegation.started" || event.type === "delegation.finished") {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.runHandoffs(event.runId) });
+      }
       // A request for a person, or its answer: the approval lists change.
       if (event.type === "approval.requested" || event.type === "approval.decided") {
         void queryClient.invalidateQueries({ queryKey: queryKeys.approvalLists });

@@ -29,6 +29,15 @@ export interface Transcript {
   readonly sent: readonly SentFile[];
   /** Work handed to teammates (M5.13), one entry per handoff, in order. */
   readonly children: readonly ChildTranscript[];
+  /**
+   * For a case that continues (`continueWith`): the first run, which the rest
+   * of the transcript follows. Null otherwise.
+   */
+  readonly before: {
+    readonly reply: string | null;
+    readonly stopReason: string | null;
+    readonly toolCalls: readonly { readonly name: string; readonly args: unknown }[];
+  } | null;
   readonly durationMs: number;
 }
 
@@ -95,4 +104,13 @@ export interface EvalCase {
    * on the same harness, tools and policy, from the brief only.
    */
   readonly team?: readonly Omit<AgentProfile, "id">[];
+  /**
+   * The person writes again in the same chat once the first run ends
+   * (ADR-0045), e.g. "continue", maybe after changing the agent (a larger
+   * budget). The transcript is the second run's; the first is in `before`.
+   */
+  readonly continueWith?: {
+    readonly prompt: string;
+    readonly agent?: Partial<Omit<AgentProfile, "id">>;
+  };
 }

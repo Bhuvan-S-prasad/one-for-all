@@ -162,6 +162,8 @@ export interface AgentProfile {
   readonly description: string;
   readonly status: "active" | "paused" | "archived";
   readonly job: string;
+  /** A coordinator plans and hands work to its team (ADR-0044). Absent means specialist. */
+  readonly role?: "specialist" | "coordinator";
   readonly modelTier: ModelTier;
   readonly autonomy: string;
   readonly voice: string;
@@ -187,6 +189,8 @@ export interface ConversationMessage {
 }
 
 export interface ThreadStore {
+  /** A group thread's coordinator, who acts as one there (ADR-0044); null elsewhere. */
+  coordinatorOf?(ctx: TenantContext, threadId: ThreadId): Promise<AgentId | null>;
   /** The latest `limit` messages, oldest first. */
   recentMessages(
     ctx: TenantContext,
@@ -197,6 +201,52 @@ export interface ThreadStore {
     ctx: RunContext,
     input: { readonly threadId: ThreadId; readonly content: string },
   ): Promise<MessageId>;
+}
+
+// ── The chat record (ADR-0045) ───────────────────────────────────────────────
+
+/** One thing an agent did in a chat, in the harness's words (ADR-0045). */
+export interface ChatLedgerEntry {
+  /** `action` changed something; `handoff` went to another agent; `search` and `read` looked. */
+  readonly kind: "action" | "handoff" | "search" | "read";
+  readonly text: string;
+  /** Quotes outside content (a tainted child's answer): shown wrapped, and taints the run that loads it. */
+  readonly untrusted?: boolean;
+  /** For a handoff: the handle it was asked by, and its answer (shortened), for later briefs. */
+  readonly agent?: string;
+  readonly answer?: string;
+  /** The run that did it. */
+  readonly runId: string;
+}
+
+export interface ChatPlanItem {
+  readonly text: string;
+  readonly done: boolean;
+}
+
+/**
+ * An agent's working record in one chat: what the next run there needs to
+ * carry on instead of starting over. Rewritten as each run goes.
+ */
+export interface ChatRecord {
+  /** The latest plan (`todo.write`), or none. */
+  readonly plan: readonly ChatPlanItem[] | null;
+  /** What was done, oldest first; the latest entries only. */
+  readonly ledger: readonly ChatLedgerEntry[];
+  /** Notes from compacted steps, if a run had any. */
+  readonly notes: string | null;
+  /** How the run that last wrote it ended; null while it runs, or if it never got to say (failed, stopped). */
+  readonly stopReason: string | null;
+  /** The run that last wrote it. */
+  readonly runId: string;
+  /** A run that wrote it had read outside content: its addresses don't count as given (ADR-0027). */
+  readonly tainted: boolean;
+}
+
+/** One record per chat and agent; `ctx.agentId` picks the agent. */
+export interface ChatRecordStore {
+  get(ctx: RunContext, threadId: ThreadId): Promise<ChatRecord | null>;
+  save(ctx: RunContext, threadId: ThreadId, record: ChatRecord): Promise<void>;
 }
 
 // ── Tool execution ───────────────────────────────────────────────────────────
@@ -274,8 +324,29 @@ export function toolkitToolName(app: string, tool: string): string {
   return `${app}.${name}`;
 }
 
+/**
+ * What an agent can do in one area (an app, or a group of built-in tools),
+ * in plain words, from its grants (ADR-0044): `web: search, read pages`.
+ */
+export interface AgentCapability {
+  readonly area: string;
+  /** What it can do there; `(asks first)` where its grant asks a person. */
+  readonly abilities: readonly string[];
+  /** The tools behind it, so a coordinator can be kept off what a teammate covers. */
+  readonly tools: readonly string[];
+}
+
 /** Lists the tools an agent may use and runs them through policy (hard rule 5). */
 export interface ToolExecutor {
+  /**
+   * What each of these agents may use, by area (ADR-0044), from the same
+   * grants and connected apps that decide their tool lists. Platform tools
+   * every agent has (plan, memory, handoffs) are left out.
+   */
+  capabilities?(
+    ctx: RunContext,
+    agentIds: readonly AgentId[],
+  ): Promise<ReadonlyMap<string, readonly AgentCapability[]>>;
   /**
    * The tools the model sees. Apps with many tools stay behind `load_toolkit`
    * until the run loads them: `toolkits` holds whole apps by slug (`notes`)

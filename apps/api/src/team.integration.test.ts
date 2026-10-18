@@ -4,6 +4,8 @@ import {
   runSchema,
   sendMessageResponseSchema,
   threadListSchema,
+  handoffListSchema,
+  teamRosterSchema,
   threadSchema,
   type MessageReceivedEvent,
 } from "@ofa/contracts";
@@ -214,8 +216,13 @@ describe.skipIf(!hasDb)("handing work to other agents (integration)", async () =
     // The coordinator saw the roster (not itself); a handed-over run saw no delegate_task.
     const coordinatorTools = llm.requests[0]?.tools ?? [];
     const delegate = coordinatorTools.find((t) => t.name === "delegate_task");
-    expect(delegate?.description).toContain("- researcher: Researcher, Researcher");
-    expect(delegate?.description).toContain("- writer: Writer, Writer");
+    // Each with a capability card from its grants (ADR-0044): neither has work tools here.
+    expect(delegate?.description).toContain(
+      "- researcher (Researcher): Researcher\n  can: no tools; answers from what it knows",
+    );
+    expect(delegate?.description).toContain(
+      "- writer (Writer): Writer\n  can: no tools; answers from what it knows",
+    );
     expect(delegate?.description).not.toContain("coordinator");
     const researcherCall = llm.requests.find((r) =>
       r.messages[0]?.content.includes("Your name is Researcher"),
@@ -236,6 +243,18 @@ describe.skipIf(!hasDb)("handing work to other agents (integration)", async () =
     expect(reply).toContain(
       '"agent":"Writer","status":"done","answer":"Our database just got faster!"',
     );
+
+    // The person sees each handoff under the reply (TC.10): brief, status, answer.
+    const handoffs = handoffListSchema.parse(
+      await (await send("GET", `/api/runs/${parent.runId}/handoffs`)).json(),
+    ).items;
+    expect(handoffs.map((h) => [h.agentName, h.status, h.reply])).toEqual(
+      expect.arrayContaining([
+        ["Researcher", "done", "Released on 2026-09-12."],
+        ["Writer", "done", "Our database just got faster!"],
+      ]),
+    );
+    expect(handoffs.every((h) => (h.brief ?? "").length > 0 && h.files.length === 0)).toBe(true);
   });
 
   it("keeps each handoff as its own thread and child run, visible in Activity", async () => {
@@ -385,8 +404,8 @@ describe.skipIf(!hasDb)("handing work to other agents (integration)", async () =
     const leadCall = llm.requests.find((r) => r.messages[0]?.content.includes("Your name is Lead"));
     const messageTool = leadCall?.tools?.find((t) => t.name === "message_agent");
     // In a group, only its members can be messaged.
-    expect(messageTool?.description).toContain("- researcher: Researcher, Researcher");
-    expect(messageTool?.description).not.toContain("coordinator:");
+    expect(messageTool?.description).toContain("- researcher (Researcher): Researcher");
+    expect(messageTool?.description).not.toContain("coordinator (");
 
     // The message woke the researcher: a run of its own in the group, started by the lead's.
     const woken = started.at(-1)!;
@@ -456,5 +475,27 @@ describe.skipIf(!hasDb)("handing work to other agents (integration)", async () =
         content: "Anything at all.",
       }),
     ).rejects.toThrow(/can't be woken/);
+  });
+
+  it("lists the team with what each agent can do, from its grants (ADR-0044)", async () => {
+    await hatch("Searcher", [
+      { tool: "web.search", mode: "auto" },
+      { tool: "web.read_url", mode: "approve" },
+      { tool: "todo.write", mode: "auto" },
+    ]);
+    const res = await send("GET", "/api/agents/team");
+    expect(res.status).toBe(200);
+    const roster = teamRosterSchema.parse(await res.json());
+    const bySlug = new Map(roster.items.map((m) => [m.slug, m]));
+    expect(bySlug.get("searcher")?.capabilities).toEqual([
+      {
+        area: "web",
+        abilities: ["search", "read pages (asks first)"],
+        tools: ["web.search", "web.read_url"],
+      },
+    ]);
+    // Platform tools (plan, handoffs) aren't capabilities.
+    expect(bySlug.get("coordinator")?.capabilities).toEqual([]);
+    expect(bySlug.get("writer")).toMatchObject({ name: "Writer", job: "Writer", capabilities: [] });
   });
 });

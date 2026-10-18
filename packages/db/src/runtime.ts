@@ -5,6 +5,8 @@ import {
   type AgentDirectory,
   type AgentId,
   type AgentProfile,
+  type ChatLedgerEntry,
+  type ChatRecordStore,
   type ConversationMessage,
   type MessageId,
   type RunId,
@@ -17,7 +19,16 @@ import {
 import type { BusPayload } from "@ofa/events";
 import { and, asc, desc, eq, gt, inArray, notInArray, sql } from "drizzle-orm";
 import type { Database } from "./client";
-import { agent, agentGrant, message, run, runEvent, toolCall } from "./schema/index";
+import {
+  agent,
+  agentGrant,
+  message,
+  run,
+  runEvent,
+  thread,
+  threadState,
+  toolCall,
+} from "./schema/index";
 import { withTenant } from "./tenant";
 
 // Postgres implementations of the runtime ports in `@ofa/core` (§6). After
@@ -237,6 +248,7 @@ function toProfile(
     description: row.description,
     status: row.status,
     job: spec.job,
+    role: spec.role,
     modelTier: spec.modelTier,
     autonomy: spec.autonomy,
     voice: spec.voice,
@@ -266,6 +278,17 @@ export function createAgentDirectory(db: Database): AgentDirectory {
 export function createThreadStore(db: Database, options: RuntimeStoreOptions = {}): ThreadStore {
   const announce = announcer(options);
   return {
+    async coordinatorOf(ctx, threadId) {
+      const [row] = await withTenant(db, ctx, (tx) =>
+        tx
+          .select({ kind: thread.kind, coordinator: thread.coordinatorAgentId })
+          .from(thread)
+          .where(eq(thread.id, threadId))
+          .limit(1),
+      );
+      return row?.kind === "group" && row.coordinator ? asId<AgentId>(row.coordinator) : null;
+    },
+
     async recentMessages(ctx: TenantContext, threadId, limit) {
       const rows = await withTenant(db, ctx, (tx) =>
         tx
@@ -376,6 +399,56 @@ export function createToolCallStore(db: Database): ToolCallStore {
           .update(toolCall)
           .set({ status: "failed", error, completedAt: new Date() })
           .where(eq(toolCall.idempotencyKey, idempotencyKey)),
+      );
+    },
+  };
+}
+
+/** Each agent's working record per chat (ADR-0045), one row per thread and agent. */
+export function createChatRecordStore(db: Database): ChatRecordStore {
+  return {
+    async get(ctx, threadId) {
+      const [row] = await withTenant(db, ctx, (tx) =>
+        tx
+          .select()
+          .from(threadState)
+          .where(and(eq(threadState.threadId, threadId), eq(threadState.agentId, ctx.agentId)))
+          .limit(1),
+      );
+      if (!row) return null;
+      const state = row.state;
+      return {
+        plan: state.plan,
+        ledger: state.ledger as ChatLedgerEntry[],
+        notes: state.notes,
+        stopReason: state.stopReason,
+        runId: row.runId,
+        tainted: state.tainted,
+      };
+    },
+
+    async save(ctx, threadId, record) {
+      const state = {
+        plan: record.plan ? [...record.plan] : null,
+        ledger: [...record.ledger],
+        notes: record.notes,
+        stopReason: record.stopReason,
+        tainted: record.tainted,
+      };
+      await withTenant(db, ctx, (tx) =>
+        tx
+          .insert(threadState)
+          .values({
+            workspaceId: ctx.workspaceId,
+            threadId,
+            agentId: ctx.agentId,
+            state,
+            runId: record.runId,
+          })
+          .onConflictDoUpdate({
+            target: [threadState.threadId, threadState.agentId],
+            set: { state, runId: record.runId, updatedAt: new Date() },
+          }),
       );
     },
   };

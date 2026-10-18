@@ -22,6 +22,14 @@ export const agentAutonomySchema = z.enum(AGENT_AUTONOMY);
 export const AGENT_VOICES = ["calm", "cheerful", "brief", "formal"] as const;
 export const agentVoiceSchema = z.enum(AGENT_VOICES);
 
+/**
+ * A coordinator (a chief of staff) plans and hands work to its team; its own
+ * tools that a teammate also has are hidden from it (ADR-0044).
+ */
+export const AGENT_ROLES = ["specialist", "coordinator"] as const;
+export const agentRoleSchema = z.enum(AGENT_ROLES);
+export type AgentRole = z.infer<typeof agentRoleSchema>;
+
 export const AGENT_STATUSES = ["active", "paused", "archived"] as const;
 export const agentStatusSchema = z.enum(AGENT_STATUSES);
 export type AgentStatus = z.infer<typeof agentStatusSchema>;
@@ -59,6 +67,8 @@ export const agentSpecSchema = z.object({
   /** One clear job, shown under the name: "Sales outbound". */
   job: z.string().trim().min(1).max(80),
   modelTier: modelTierSchema.default("standard"),
+  /** Specialist does its job; coordinator routes work to the team (ADR-0044). */
+  role: agentRoleSchema.default("specialist"),
   autonomy: agentAutonomySchema.default("act-with-approval"),
   voice: agentVoiceSchema.default("calm"),
   /** The agent's familiar. */
@@ -143,3 +153,26 @@ export const updateAgentRequestSchema = z
   .partial()
   .refine((body) => Object.keys(body).length > 0, "Change at least one field");
 export type UpdateAgentRequest = z.infer<typeof updateAgentRequestSchema>;
+
+/** What an agent can do in one area, from its grants (ADR-0044). */
+export const agentCapabilitySchema = z.object({
+  area: z.string().max(100),
+  abilities: z.array(z.string().max(200)).max(50),
+  /** The tools behind it, so a coordinator's covered tools can be shown. */
+  tools: z.array(z.string().max(100)).max(200),
+});
+export type AgentCapabilityCard = z.infer<typeof agentCapabilitySchema>;
+
+/** The workspace's active agents as a coordinator sees them (TC.07). */
+export const teamRosterSchema = z.object({
+  items: z.array(
+    z.object({
+      id: idSchema,
+      slug: agentSlugSchema,
+      name: z.string(),
+      job: z.string(),
+      capabilities: z.array(agentCapabilitySchema),
+    }),
+  ),
+});
+export type TeamRoster = z.infer<typeof teamRosterSchema>;

@@ -34,6 +34,10 @@ import {
   agentListResponseSchema,
   agentSchema,
   agentStatsListSchema,
+  teamRosterSchema,
+  handoffListSchema,
+  type HandoffList,
+  type TeamRoster,
   approvalListSchema,
   approvalSchema,
   appToolListSchema,
@@ -299,6 +303,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request("POST", "/api/agents/import", importAgentResponseSchema, file),
     agentStats: (): Promise<AgentStatsList> =>
       request("GET", "/api/agents/stats", agentStatsListSchema),
+    /** The active agents with what each can do, as a coordinator sees them (ADR-0044). */
+    teamRoster: (): Promise<TeamRoster> => request("GET", "/api/agents/team", teamRosterSchema),
 
     // ── Threads ────────────────────────────────────────────────────────────
     /** The person's group chats, most recent first (M5.04). */
@@ -355,6 +361,9 @@ export function createApiClient(options: ApiClientOptions = {}) {
     /** Files and long output a run produced (M3.06). */
     runArtifacts: (id: string): Promise<ArtifactList> =>
       request("GET", `/api/runs/${encodeURIComponent(id)}/artifacts`, artifactListSchema),
+    /** Work a run handed to other agents (TC.10). */
+    runHandoffs: (id: string): Promise<HandoffList> =>
+      request("GET", `/api/runs/${encodeURIComponent(id)}/handoffs`, handoffListSchema),
     /** Where an artifact's content downloads from (same origin, with the session cookie). */
     artifactContentUrl: (id: string): string =>
       `${baseUrl}/api/artifacts/${encodeURIComponent(id)}/content`,

@@ -39,6 +39,7 @@ function EditAgentPage() {
     <div className="flex flex-col gap-4">
       <AgentEditor
         mode="edit"
+        agentId={agent.id}
         initial={{
           name: agent.name,
           voice: agent.spec.voice,
@@ -46,6 +47,7 @@ function EditAgentPage() {
           job: agent.spec.job,
           description: agent.description,
           tier: agent.spec.modelTier,
+          role: agent.spec.role,
           ...draftGrants(agent.grants),
         }}
         saving={update.isPending}

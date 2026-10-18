@@ -20,4 +20,6 @@ Needs `LLM_API_KEY` in the root `.env` and uses real quota (a few model calls pe
 | `fixtures/` | Recorded web pages and search results, a fixture website and a mailbox app; made-up facts, so models must use the tools |
 | `graders/`  | Checks, the agent world, the computer for desktop cases, the pass^k runner and the CLI                                                                  |
 
+A case with `continueWith` runs twice in the same chat: the person writes again (say "continue", maybe after raising the budget) once the first run ends, and the checks grade the second run, with the first in `before` (ADR-0045). Teammates come with capability cards from their grants, as in the app (ADR-0044).
+
 **Adding a case:** write an `EvalCase` (agent, prompt, fixtures, checks) in `suites/` or `redteam/`, add it to `ALL_CASES` in `graders/cli.ts`, and add a scripted-model test in `graders/runner.test.ts` (`graders/desk.test.ts` for cases with a computer) showing one passing and one failing transcript.

@@ -39,3 +39,12 @@
 - **Positive:** a coordinator can split work across specialists and get both answers in the time of the slower one; each child is a normal run with its own log, grants and approvals; injected instructions can't launder themselves through a handoff.
 - **Negative:** a specialist can't hand work on (a researcher can't ask a writer); a child of a tainted parent asks for approval more often.
 - **Follow-up:** group threads and `@mention` routing (M5.04) reuse the team directory; a per-chain budget if deeper delegation is ever needed.
+
+## Amendment (2026-10-18, TC.10)
+
+The live check of the laptop task (TC.09) found that a brief-only child works only if the delegating model copies results into the brief by hand. A chief wrote "the findings are in the previous delegate_task response" three times; the operator, which can't see that response, searched its computer for it and then redid the research until its budget ran out. Three changes keep the decision (a child sees only its brief) and make it hold up:
+
+- **Earlier answers travel by name.** `delegate_task` takes `include_results_from: ["researcher"]`; the harness adds those handoffs' answers from this run to the brief in full. The model names them instead of retyping them.
+- **A child says what is missing.** The brief's framing (`harness.handoff@2`) tells it to reply at once with what it wasn't given rather than look for it or recreate it.
+- **The person sees the handoffs.** Handoff threads still stay out of the chat list, but the reply that handed work on shows a card for each: who, the brief, how it ended, its steps, its answer, a link to its run in Activity (`GET /api/runs/:id/handoffs`). Files a child made appear under that reply, so a file the operator writes reaches the person through the chief.
+

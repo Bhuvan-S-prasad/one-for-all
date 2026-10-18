@@ -28,6 +28,7 @@ import {
   createPolicyRuleStore,
   createArtifactStore,
   createDatabase,
+  createChatRecordStore,
   createRunStore,
   createThreadStore,
   createToolCallStore,
@@ -364,6 +365,9 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
   const team = createTeamDirectory(db, {
     wake: (event) => dispatcher.messageReceived(event),
     announce: announceMessage,
+    // Capability cards from grants (ADR-0044); the executor is made below.
+    capabilities: (ctx, agentIds) =>
+      tools.capabilities ? tools.capabilities(ctx, agentIds) : Promise.resolve(new Map()),
   });
   // Work on the clock (M5.06–07): routines, and what agents set for later.
   const scheduler = createScheduler(db, {
@@ -450,6 +454,8 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     approvals,
     team,
     skills,
+    // Each agent's working record per chat (ADR-0045).
+    chats: createChatRecordStore(db),
     redact: (ctx, text) => vault.redact(ctx, text),
     middleware: [createTelemetryMiddleware(telemetry)],
   };

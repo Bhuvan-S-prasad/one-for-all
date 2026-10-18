@@ -1,3 +1,11 @@
+export {
+  addToLedger,
+  carriedPlan,
+  handoffEntry,
+  ledgerEntry,
+  recordLines,
+  stopReply,
+} from "./chat-record";
 export { compactTurns, transcriptOf, type CompactionResult } from "./compaction";
 export {
   consolidateMemory,
@@ -47,6 +55,7 @@ export { estimateMessages, estimateTokens, truncateToTokens } from "./tokens";
 export {
   createFakeToolExecutor,
   createMemoryApprovals,
+  createMemoryChatRecords,
   createMemoryRuntime,
   createMemoStepRunner,
   createScriptedLLM,

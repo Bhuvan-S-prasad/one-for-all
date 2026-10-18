@@ -1,8 +1,10 @@
-import type { LLMImage, LLMMessage, ToolDescriptor } from "@ofa/core";
+import type { ChatRecord, LLMImage, LLMMessage, ToolDescriptor } from "@ofa/core";
+import { recordLines } from "./chat-record";
 import {
   AGENT_IDENTITY,
   AGENT_MESSAGE,
   AGENT_VOICE,
+  CHAT_RECORD,
   HANDOFF_BRIEF,
   PLATFORM_RULES,
   PROACTIVE_CHECK,
@@ -12,6 +14,7 @@ import {
   SKILL_IN_USE,
   STEERING,
   TASK_STATE,
+  TEAM,
   promptRef,
 } from "./prompts";
 import { estimateMessages, estimateTokens, estimateTools, truncateToTokens } from "./tokens";
@@ -102,6 +105,14 @@ export interface ContextInput {
   /** Compacted summary of earlier steps in this run. */
   readonly summary: string | null;
   readonly turns: readonly Turn[];
+  /** What this agent already did in this chat (ADR-0045). */
+  readonly record?: ChatRecord | null;
+  /** The record's plan became this run's plan (`todos`), so it isn't shown twice. */
+  readonly planCarried?: boolean;
+  /** Most of the run's budget is spent: tell it to finish (ADR-0045). */
+  readonly wrapUp?: boolean;
+  /** A coordinator's team, as a roster with capability cards (ADR-0044). */
+  readonly team?: string | null;
 }
 
 /** Token budgets per block, from §7's example for a 32,000-token window. */
@@ -112,6 +123,10 @@ const BASE_BUDGET = {
   tools: 4_000,
   plan: 800,
   memory: 2_500,
+  /** The chat record (ADR-0045), taken from history. */
+  session: 1_500,
+  /** A coordinator's team (ADR-0044), taken from history. */
+  team: 1_000,
   history: 10_000,
   untrusted: 6_500,
   output: 6_000,
@@ -279,7 +294,19 @@ export function assembleContext(input: ContextInput, budget: ContextBudget): Ass
   const notes = input.summary
     ? truncateToTokens(input.summary, Math.floor(budget.history * 0.3))
     : "";
-  const taskBlock = TASK_STATE.render({ task, plan, notes });
+  const taskBlock = TASK_STATE.render({ task, plan, notes, wrapUp: input.wrapUp ?? false });
+  // What this agent already did in this chat (ADR-0045).
+  const kept = input.record;
+  const record =
+    kept && (kept.ledger.length > 0 || kept.plan?.length || kept.notes)
+      ? CHAT_RECORD.render(
+          recordLines(input.record, budget.session, { withPlan: !input.planCarried }),
+        )
+      : "";
+  blocks.session = record ? estimateTokens(record) : 0;
+  // A coordinator's team, right after who it is: it changes only with the team.
+  const team = input.team ? TEAM.render({ roster: truncateToTokens(input.team, budget.team) }) : "";
+  blocks.team = team ? estimateTokens(team) : 0;
   blocks.memory = estimateTokens(memory);
   blocks.skill = skill ? estimateTokens(skill) : 0;
   blocks.notes = notes ? estimateTokens(notes) : 0;
@@ -287,13 +314,15 @@ export function assembleContext(input: ContextInput, budget: ContextBudget): Ass
 
   const system: LLMMessage = {
     role: "system",
-    content: [platform, identity, memory, skill, taskBlock].filter(Boolean).join("\n\n"),
+    content: [platform, identity, team, memory, record, skill, taskBlock]
+      .filter(Boolean)
+      .join("\n\n"),
   };
 
   // Volatile: the thread (newest kept, oldest dropped), then this run's steps.
   const history: LLMMessage[] = [];
   let historyTokens = 0;
-  const historyBudget = budget.history - blocks.notes - borrowed;
+  const historyBudget = budget.history - blocks.notes - blocks.session - blocks.team - borrowed;
   for (let i = input.history.length - 1; i >= 0; i -= 1) {
     const raw = input.history[i];
     const message = raw ? historyMessage(raw, input.agent.id) : null;
@@ -326,6 +355,8 @@ export function assembleContext(input: ContextInput, budget: ContextBudget): Ass
       AGENT_IDENTITY,
       AGENT_VOICE,
       TASK_STATE,
+      ...(team ? [TEAM] : []),
+      ...(record ? [CHAT_RECORD] : []),
       ...(input.history.some((m) => m.handoff) ? [HANDOFF_BRIEF] : []),
       ...(input.history.some((m) => m.agentMessage) ? [AGENT_MESSAGE] : []),
       ...(input.history.some((m) => m.scheduled === "routine") ? [ROUTINE_RUN] : []),

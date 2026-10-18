@@ -210,7 +210,9 @@ Hooks are real middleware (onion pattern). Policy, logging, redaction and memory
 
 **Learning happens after the run** ([ADR-0024](../adr/0024-learning-after-the-run.md)). A run ends at the reply. If it answered, `agent-run` sends `agent/run.succeeded` and the `agent-learn` function extracts facts, one at a time per workspace. The agent is free for the next message as soon as it replies, however slow the fast-tier model is.
 
-**Stop conditions:** final answer · needs a human · step budget · token or cost budget · loop detected (same tool with same arguments repeated) · user said stop.
+**Stop conditions:** final answer · needs a human · step budget · token or cost budget · loop detected (same tool with same arguments repeated) · user said stop. From 80% of the token or step budget the task block tells the agent to finish the current item and answer; a run stopped by its budget makes one last call without tools to answer with what it has, then says what is left; a loop stop lists what was done from its chat record ([ADR-0045](../adr/0045-a-chat-keeps-its-working-state.md)).
+
+**The chat record** ([ADR-0045](../adr/0045-a-chat-keeps-its-working-state.md)): after each model step that changed it, the loop saves the agent's working record for its chat (`thread_state`: plan, a ledger of what was done, compaction notes, how the last run ended) in its own step, so a run that stops, fails or is cancelled keeps its progress, and the next run in that chat continues from it (§7).
 
 **Inngest rule:** code outside `step.run` re-executes on replay. All side effects live inside steps.
 
@@ -218,12 +220,13 @@ Hooks are real middleware (onion pattern). Policy, logging, redaction and memory
 
 | Mechanism | How it works |
 |---|---|
-| **Delegation** | `delegate_task(agent, brief)` starts a child run with `step.invoke` ([ADR-0032](../adr/0032-delegation-one-level-from-a-brief.md)). The child gets a fresh context (brief + relevant memory), never the parent's transcript, and returns a structured result (`agent`, `status`, `answer`). The brief and the child's reply live in a `handoff` thread, outside the person's chats. One level deep: a delegated run can't delegate. A child of a tainted run starts tainted, and a child that read outside content taints its parent. Stopping a run stops its children. |
+| **Delegation** | `delegate_task(agent, brief)` starts a child run with `step.invoke` ([ADR-0032](../adr/0032-delegation-one-level-from-a-brief.md)). The child gets a fresh context (brief + relevant memory), never the parent's transcript, and returns a structured result (`agent`, `status`, `answer`). The brief and the child's reply live in a `handoff` thread, outside the person's chats. One level deep: a delegated run can't delegate. A child of a tainted run starts tainted, and a child that read outside content taints its parent. Stopping a run stops its children. A brief can carry earlier handoffs' answers by name (`include_results_from`), a child with missing inputs says so instead of recreating them, and the person sees each handoff as a card under the reply, with the child's files there too (TC.10). |
 | **Fork-join** | Independent delegations run as concurrent steps; the parent resumes when all results are in. All handoffs from one model step start before any is awaited. |
 | **Group threads** | Two to six agents share a thread with the person ([ADR-0033](../adr/0033-group-threads-and-agent-messages.md)). Each message gets one responder: the member `@mentioned` first, otherwise the thread's coordinator (`thread.coordinator_agent_id`), which answers or passes it on with `message_agent` or `delegate_task`. Handoffs are visible. Agents' messages are labelled with their names in each other's context. |
 | **Async messages** | `message_agent` posts in the run's own thread and wakes the named agent with an event (`trigger: event`, the sending run as parent); the woken agent reads the message as its request and replies later in the same thread. In a group, only members can be messaged; in a direct chat, any other active agent. One hop: a run started by another agent can't message or delegate. Taint carries over as for handoffs. |
 | **Interrupts** | A direct user message outranks background work ([ADR-0034](../adr/0034-interrupts-steer-stop-preempt.md)). In a chat where the agent is already working, the message joins that run at its next step boundary (steering; its own queued run ends as `steered`). A message that is only "stop" or "stop now" stops every run in the chat through Inngest `cancelOn` and starts none. The agent's routine runs in other chats are set aside (`preempted`), and a person's message starts ahead of queued background runs. Completed actions are not undone. |
-| **Chief of staff** | An optional coordinator agent owns an outcome and routes work to specialists. |
+| **The roster** | Every list of agents a run can hand work to or message is read live and shows each agent's capability card, built from its grants and connected apps (`web: search, read pages`; `gmail: create draft (asks first)`), so a new agent, tool or app changes routing with no prompt edits ([ADR-0044](../adr/0044-team-roster-from-grants-coordinators-delegate.md)). |
+| **Coordinators** | An agent with `role: coordinator` (a chief of staff, or a group's leader in that group) owns an outcome and routes work to specialists. It gets the team in its system prompt with coordination rules (plan with an owner per item, independent handoffs together, outbound work last, check results), and its own tools that a teammate also has are hidden from it, so routing is enforced in code rather than asked for in a prompt (ADR-0044). Outside a group it leads it has no `message_agent`: it waits for results with `delegate_task`. |
 
 ---
 
@@ -240,6 +243,7 @@ Every prompt is assembled from typed blocks, each with a token budget derived fr
 | Stable prefix | Tool schemas | Granted tools, stable order, at most ~20 | 4,000 | More load on demand via `load_toolkit`; may borrow up to its size again from history (one app schema can be ~2,000 tokens) |
 | Per task | Task and plan | The latest request, the agent's todo list, and its notes from compacted steps | 800 | Restated each step, in the system block |
 | Per task | Retrieved memory | Top facts, the two closest earlier episodes, and the steps of a skill named with `/slug` | 2,500 | Small preload; `recall()` and `run_skill` for the rest |
+| Per task | Earlier in this chat | The agent's chat record: plan, what it already did (actions, handoffs and answers, searches, pages), notes, how the last run ended ([ADR-0045](../adr/0045-a-chat-keeps-its-working-state.md)) | 1,500 | Taken from history; oldest entries dropped first |
 | Volatile | History | Structured summary + recent turns verbatim | 10,000 | Compacted at 70% of the window |
 | Volatile | Untrusted content | Emails, pages, documents, tool output | 6,500 | Wrapped in `<untrusted source="…">`; sets taint |
 | Reserve | Output | Reply and tool calls | 6,000 | Never spent on input |
@@ -250,6 +254,7 @@ Every prompt is assembled from typed blocks, each with a token budget derived fr
 - **Structured compaction.** Older turns become sections: decisions made, facts learned, open items, artifacts produced. The result is the agent's private notes, placed in the task block, never a message in the conversation: a model once returned notes inserted as a user message as its answer. The notes count against the history budget.
 - **Read in chunks.** `web.read_url` returns 6,000 characters at a time and says how to read on (`from`), so a few long pages do not fill a small window.
 - **Scoped subagents.** Delegated work starts from a brief; parent transcripts never leak into a child's window.
+- **Work carries across runs.** A run's tool results and plan end with it, but its chat record does not: the next run in the chat sees what was done and the open plan, so "continue" continues instead of starting over (ADR-0045). The same `web.search` twice in one run returns the earlier result.
 - **Small tool lists.** Free models degrade with long tool lists, so grants filter tools and `load_toolkit(app, tools?)` adds more on demand: a small app whole, a large one a few named tools at a time.
 - **Provenance labels.** Untrusted content is always wrapped and labelled. Labels do not stop injection on their own; they drive taint tracking (§10.3).
 - **Versioned prompts.** Every template has a version, logged on each trace.
@@ -263,6 +268,7 @@ Four stores, one access mechanism, one scheduler, and the model itself.
 | Type | Holds | Implementation | Written by |
 |---|---|---|---|
 | Working | The current prompt | Context assembler | Harness, every step |
+| Chat record | Per chat and agent: plan, what was done, notes, how the last run ended | `thread_state` rows ([ADR-0045](../adr/0045-a-chat-keeps-its-working-state.md)) | Harness, after each step that changed it |
 | Semantic | Facts and preferences | `memory` rows; Postgres full-text search in M2, pgvector added later | `remember` tool, post-run extraction |
 | Episodic | What happened and how it ended | `run` + `episode` summary, one per run that replied ([ADR-0037](../adr/0037-episodes-scopes-and-nightly-consolidation.md)) | The run's end (`Asked: … — Answered: …`), replaced by the learning pass's summary |
 | Procedural | How to do a task | `skill` rows: instructions only, active or proposed ([ADR-0036](../adr/0036-skills-are-reviewed-instructions.md)); `/slug` in a request or `run_skill` applies one | People, `save_skill` (proposed after outside content), consolidation proposals |
@@ -541,7 +547,7 @@ Every table carries `workspace_id` and is protected by row-level security. Run t
 | Tenancy | `workspace`, `user`, `membership`, `device` |
 | Agents | `agent` (spec, autonomy, budgets), `agent_grant`, `skill`, `routine` (cron, time zone, its own chat, `next_run_at`) |
 | Connections | `connection` (one person's sign-in to a server; encrypted tokens), `mcp_server` (catalog entries and custom servers installed in the workspace; pinned URL and auth origin, encrypted OAuth client), `secret` (named, redacted) |
-| Conversations | `thread` (direct, group with a coordinator, handoff), `thread_member` (users and agents; a person's `last_read_at`), `message` |
+| Conversations | `thread` (direct, group with a coordinator, handoff), `thread_member` (users and agents; a person's `last_read_at`), `message`, `thread_state` (each agent's working record in a chat, ADR-0045) |
 | Execution | `run` (trigger, `parent_run_id`, `routine_id`, `proactive`), `run_event`, `tool_call` (idempotency), `approval`, `artifact` |
 | Memory | `memory` (typed, scoped, `verified` flag), `episode`, `schedule` (a task or reminder for later) |
 | Governance | `policy_rule` (ask-first or allow-auto, per tool pattern, workspace-wide or one person's; personal rules can only ask first), `audit_log` (append-only) |
@@ -597,6 +603,8 @@ Summary only. Full records (context, decision, alternatives, consequences) are i
 | [0041](../adr/0041-desktop-apps-accessibility-tree-first.md) | Computer | Desktop apps through the accessibility tree first; screenshots only when the model reads images | Screenshots cost a vision model, a call per click and much of a small context |
 | [0042](../adr/0042-python-packages-and-office-files.md) | Computer | pip and a venv per agent; openpyxl and python-docx in the image; `files.send` sends any file back | Word and Excel files need libraries, and a file made by a script must reach the person |
 | [0043](../adr/0043-opening-a-file-on-the-desktop-is-not-outbound.md) | Security | Opening a file on the desktop is not outbound; never in the browser | An approval card each time a researched report is shown, for an action that can't send anything |
+| [0044](../adr/0044-team-roster-from-grants-coordinators-delegate.md) | Runtime | Capability cards from grants in every roster; coordinators plan, delegate first and lose the tools a teammate covers | A chief of staff did the research itself; a prompt rule per agent was ignored and doesn't scale |
+| [0045](../adr/0045-a-chat-keeps-its-working-state.md) | Runtime | Each agent keeps a working record per chat (plan, ledger, notes), saved as the run goes and shown to the next run | "Continue" after a budget stop started over: nothing but chat text reached the next run |
 
 **Rejected along the way:** Next.js (mobile and WebSocket fit), Express (untyped), Neon (free-tier limits), Prisma (vector support), BullMQ (no durable waits), Inngest Cloud (execution caps), Composio (lock-in and pricing), E2B-only (finite credit), hosted-only (cost and data custody).
 
@@ -706,6 +714,7 @@ Each milestone is a thin vertical slice through every layer and ends with someth
 | **M4 Integrations and policy** ✅ | MCP client and OAuth, catalog, grants UI, the full policy engine and rules, approval draft cards (edit before sending); Gmail on Google's own API. |
 | **M5 The team** ✅ | Delegation and fork-join, agent messages and group threads, interrupts, routines and read-only checks, tasks and reminders for later, skills, episodes and nightly memory consolidation, agent files, the team screens, multi-agent evals. |
 | **Desktop** ✅ | A light desktop per agent watched over VNC, the agent's work shown on it, Python packages and office files, `files.send` and a Files tab, desktop apps through the accessibility tree with a screenshot fallback. |
+| **Teams and continuity** | A chat record per agent so work continues across runs; stop replies and a budget warning; capability cards in the roster; a coordinator role that delegates first; handoffs that pass results by name and show in the chat. Done (11 tasks). |
 | **M6 Everywhere** | Expo app with pairing and push, Telegram and Slack channels. |
 | **M7 Hardening** | Eval suites and red-team set in CI, backups, E2B adapter, cloud-mode adapters. |
 

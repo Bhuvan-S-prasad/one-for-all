@@ -1,6 +1,7 @@
 import {
   artifactUri,
   noopTelemetry,
+  type AgentCapability,
   type AgentDirectory,
   type AgentProfile,
   type ArtifactStore,
@@ -80,6 +81,67 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 function argsText(args: unknown): string {
   const text = JSON.stringify(args ?? {});
   return text.length > 400 ? `${text.slice(0, 399)}…` : text;
+}
+
+// Capability cards (ADR-0044): what an agent can do, in a few plain words per
+// area, for the team roster. Tools every agent has are left out.
+
+const NOT_A_CAPABILITY = new Set([
+  "artifacts.read",
+  "load_toolkit",
+  "todo.write",
+  "remember",
+  "recall",
+  "run_skill",
+  "save_skill",
+  "remind_me",
+  "schedule_task",
+  "delegate_task",
+  "message_agent",
+]);
+
+const AREAS: Record<string, string> = {
+  web: "web",
+  browser: "browser",
+  use_saved_login: "browser",
+  shell: "terminal",
+  files: "files",
+  desktop: "desktop apps",
+};
+
+/** Built-in tools in a word or two; null folds a tool into its area's others. */
+const ABILITIES: Record<string, string | null> = {
+  "web.search": "search",
+  "web.read_url": "read pages",
+  "browser.open": "open websites",
+  "browser.click": "click",
+  "browser.type": "fill in forms",
+  "browser.snapshot": null,
+  "browser.press": null,
+  "browser.back": null,
+  use_saved_login: "sign in with saved logins",
+  "shell.run": "run commands and Python",
+  "files.read": "read",
+  "files.write": "write",
+  "files.list": null,
+  "files.send": "send files to the person",
+  "desktop.open": "open files in apps (Word, Excel, text)",
+  "desktop.click": "click",
+  "desktop.type": "type",
+  "desktop.snapshot": null,
+  "desktop.press": null,
+  "desktop.screenshot": null,
+  "desktop.click_at": null,
+  "desktop.type_text": null,
+};
+
+/** Abilities shown per app; the rest are counted. */
+const ABILITIES_PER_AREA = 8;
+
+/** A tool's action in words: `gmail.create_draft` → `create draft`. */
+function actionWords(name: string): string {
+  const dot = name.indexOf(".");
+  return (dot >= 0 ? name.slice(dot + 1) : name).replaceAll("_", " ");
 }
 
 /** Whether an agent may see a tool: granted and not blocked, or a platform tool. */
@@ -167,6 +229,56 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
   const store = options.artifacts;
 
   return {
+    async capabilities(ctx, agentIds) {
+      const kits = (await options.toolkits?.toolkits(ctx)) ?? [];
+      const cards = new Map<string, AgentCapability[]>();
+      for (const agentId of agentIds) {
+        const agent = await options.agents.get(ctx, agentId);
+        if (!agent) continue;
+        const areas = new Map<string, { abilities: string[]; tools: string[] }>();
+        const add = (area: string, tool: string, ability: string | null, asks: boolean) => {
+          const entry = areas.get(area) ?? { abilities: [], tools: [] };
+          entry.tools.push(tool);
+          const words = ability && (asks ? `${ability} (asks first)` : ability);
+          if (words && !entry.abilities.includes(words)) entry.abilities.push(words);
+          areas.set(area, entry);
+        };
+        for (const d of registry.descriptors()) {
+          if (NOT_A_CAPABILITY.has(d.name) || PLATFORM_TOOLS.has(d.name)) continue;
+          const grant = grantFor(agent.grants, d.name);
+          if (!grant || grant.mode === "blocked") continue;
+          const prefix = d.name.includes(".") ? d.name.slice(0, d.name.indexOf(".")) : d.name;
+          const ability = d.name in ABILITIES ? (ABILITIES[d.name] ?? null) : actionWords(d.name);
+          add(AREAS[prefix] ?? prefix, d.name, ability, grant.mode === "approve");
+        }
+        for (const kit of kits) {
+          for (const tool of kit.tools) {
+            const grant = grantFor(agent.grants, tool.name);
+            if (!grant || grant.mode === "blocked") continue;
+            add(kit.name, tool.name, actionWords(tool.name), grant.mode === "approve");
+          }
+        }
+        cards.set(
+          agentId,
+          // An area of folded tools alone says nothing new, but its tools still count.
+          [...areas]
+            .filter(([, { abilities }]) => abilities.length > 0)
+            .map(([area, { abilities, tools }]) => ({
+              area,
+              abilities:
+                abilities.length > ABILITIES_PER_AREA
+                  ? [
+                      ...abilities.slice(0, ABILITIES_PER_AREA),
+                      `${abilities.length - ABILITIES_PER_AREA} more`,
+                    ]
+                  : abilities,
+              tools,
+            })),
+        );
+      }
+      return cards;
+    },
+
     async listTools(ctx, listing = {}) {
       // The model only ever sees tools this agent was granted (§7: small tool lists).
       const agent = await options.agents.get(ctx, ctx.agentId);

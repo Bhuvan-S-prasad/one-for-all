@@ -61,3 +61,5 @@ Each file records one significant decision: the context, what we chose, what we 
 | [0041](0041-desktop-apps-accessibility-tree-first.md) | Desktop apps through the accessibility tree first, screenshots as a fallback | Computer | Accepted; opening superseded by ADR-0043 |
 | [0042](0042-python-packages-and-office-files.md) | Python packages in each agent's venv; any file can go back to the person | Computer | Accepted |
 | [0043](0043-opening-a-file-on-the-desktop-is-not-outbound.md) | Opening a file on the desktop is not outbound | Security | Accepted |
+| [0044](0044-team-roster-from-grants-coordinators-delegate.md) | The team roster is built from grants, and coordinators delegate first | Runtime | Accepted |
+| [0045](0045-a-chat-keeps-its-working-state.md) | A chat keeps each agent's working state across runs | Runtime | Accepted |

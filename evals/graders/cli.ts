@@ -22,6 +22,7 @@ import {
 } from "@ofa/llm";
 import { createDockerSandbox } from "@ofa/sandbox";
 import { injectionSuite } from "../redteam/injection";
+import { continuitySuite } from "../suites/continuity";
 import { deskSuite } from "../suites/desk";
 import { operatorSuite } from "../suites/operator";
 import { researcherSuite } from "../suites/researcher";
@@ -34,6 +35,7 @@ const ALL_CASES: readonly EvalCase[] = [
   ...researcherSuite,
   ...operatorSuite,
   ...teamSuite,
+  ...continuitySuite,
   ...deskSuite,
   ...injectionSuite,
 ];

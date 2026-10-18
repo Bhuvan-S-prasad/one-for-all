@@ -80,6 +80,15 @@ export const MOOD_WORDS: Partial<Record<FamiliarMood, string>> = {
   asleep: "Asleep",
 };
 
+/** Specialist or coordinator (ADR-0044), in plain words. */
+export const ROLE_INFO = {
+  specialist: { label: "Does the work", hint: "Uses its own tools for its one job." },
+  coordinator: {
+    label: "Leads a team",
+    hint: "Plans and hands work to the other agents. Tools a teammate has are left to them.",
+  },
+} as const;
+
 export const TIER_INFO = {
   fast: { label: "Fast", hint: "Quick replies, simple lookups." },
   standard: { label: "Standard", hint: "Most jobs. A good default." },

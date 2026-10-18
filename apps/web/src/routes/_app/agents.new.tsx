@@ -20,6 +20,7 @@ function HatchPage() {
     job: "",
     description: "",
     tier: "standard",
+    role: "specialist",
     tools: BUILTIN_TOOLS.filter((t) => t.starter).map((t) => t.name),
     grants: [],
   }));

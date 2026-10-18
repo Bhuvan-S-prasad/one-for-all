@@ -8,6 +8,7 @@ import {
   type ChildRunResult,
   type LLMGateway,
   type RunContext,
+  type RunId,
   type TeamDirectory,
   type StepRunner,
   type ThreadId,
@@ -16,6 +17,7 @@ import {
 } from "@ofa/core";
 import {
   createMemoryApprovals,
+  createMemoryChatRecords,
   createMemoryRuntime,
   createMemoStepRunner,
   runAgent,
@@ -143,6 +145,9 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
     },
   ]);
 
+  // The runs the person starts: the first, and a second when the case continues.
+  const mainRuns = new Set<string>([ctx.runId]);
+
   // Teammates (M5.13): profiles by handle, and the handoffs the run makes.
   const teammates = (evalCase.team ?? []).map((t) => ({
     ...t,
@@ -158,11 +163,23 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
   }[] = [];
   const team: TeamDirectory | undefined = teammates.length
     ? {
-        // One level deep, as in the app: only the run under test hands work on.
-        members: async (c) =>
-          c.runId === ctx.runId
-            ? teammates.map((t) => ({ id: t.id, slug: t.slug, name: t.name, job: t.job }))
-            : [],
+        // One level deep, as in the app: only the person's runs hand work on.
+        // Each teammate with its capability card, as in the app (ADR-0044).
+        async members(c) {
+          if (!mainRuns.has(c.runId)) return [];
+          const cards =
+            (await tools.capabilities?.(
+              c,
+              teammates.map((t) => t.id),
+            )) ?? new Map();
+          return teammates.map((t) => ({
+            id: t.id,
+            slug: t.slug,
+            name: t.name,
+            job: t.job,
+            capabilities: cards.get(t.id) ?? [],
+          }));
+        },
         async handoff(c, input) {
           const member = findMember(await team!.members(c), input.agent);
           if (!member) throw new Error(`There is no agent called ${input.agent} to hand work to.`);
@@ -260,30 +277,33 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
     threads: runtime.threads,
     memory: runtime.memory,
     approvals,
+    // Each agent's record per chat (ADR-0045), so a case can continue.
+    chats: createMemoryChatRecords(),
     ...(team ? { team } : {}),
     ...(evalCase.harness ? { options: evalCase.harness } : {}),
   };
-  const steps = createMemoStepRunner({
-    onWait,
-    // What Inngest's step.invoke does: run the child, from its brief, to the end.
-    onInvoke: async (_id, child): Promise<ChildRunResult> => {
-      const result = await runAgent(
-        {
-          ctx: { ...ctx, agentId: child.agentId, runId: child.runId },
-          threadId: child.threadId,
-          trigger: "delegation",
-        },
-        deps,
-        patientSteps(createMemoStepRunner({ onWait }), options.wait ?? sleep),
-      );
-      return {
-        status: result.status,
-        stopReason: result.stopReason,
-        reply: result.reply,
-        tainted: result.tainted,
-      };
-    },
-  });
+  const makeSteps = () =>
+    createMemoStepRunner({
+      onWait,
+      // What Inngest's step.invoke does: run the child, from its brief, to the end.
+      onInvoke: async (_id, child): Promise<ChildRunResult> => {
+        const result = await runAgent(
+          {
+            ctx: { ...ctx, agentId: child.agentId, runId: child.runId },
+            threadId: child.threadId,
+            trigger: "delegation",
+          },
+          deps,
+          patientSteps(createMemoStepRunner({ onWait }), options.wait ?? sleep),
+        );
+        return {
+          status: result.status,
+          stopReason: result.stopReason,
+          reply: result.reply,
+          tainted: result.tainted,
+        };
+      },
+    });
 
   const started = Date.now();
   let result: Transcript["result"] = null;
@@ -293,10 +313,63 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
     result = await runAgent(
       { ctx, threadId, trigger: "message" },
       deps,
-      patientSteps(steps, options.wait ?? sleep),
+      patientSteps(makeSteps(), options.wait ?? sleep),
     );
   } catch (thrown) {
     error = thrown instanceof Error ? thrown.message : String(thrown);
+  }
+
+  // The person writes again in the same chat (ADR-0045): a second run there.
+  const callsOf = (runId: string) =>
+    runtime.runs.events
+      .filter((e) => e.runId === runId && e.type === "tool.called")
+      .map((e) => ({ name: String(e.payload.tool), args: e.payload.args }));
+  const lastReply = () =>
+    (runtime.threads.messages.get(threadId) ?? []).filter((m) => m.author === "agent").at(-1)
+      ?.content ?? null;
+  let underTest: string = ctx.runId;
+  let before: Transcript["before"] = null;
+  if (evalCase.continueWith && !error) {
+    before = {
+      reply: lastReply(),
+      stopReason: result?.stopReason ?? null,
+      toolCalls: callsOf(ctx.runId),
+    };
+    const next: RunContext = { ...ctx, runId: asId<RunId>("run_eval_2") };
+    underTest = next.runId;
+    mainRuns.add(next.runId);
+    if (evalCase.continueWith.agent) {
+      runtime.agents.profiles.set(ctx.agentId, {
+        ...evalCase.agent,
+        ...evalCase.continueWith.agent,
+        id: ctx.agentId,
+      });
+    }
+    runtime.runs.records.set(next.runId, {
+      id: next.runId,
+      agentId: ctx.agentId,
+      threadId,
+      trigger: "message",
+      status: "queued",
+      tainted: false,
+      usage: { inputTokens: 0, outputTokens: 0, costUsd: 0, modelCalls: 0, toolCalls: 0 },
+    });
+    runtime.threads.messages.get(threadId)?.push({
+      id: asId("msg_continue"),
+      author: "user",
+      agentId: null,
+      content: evalCase.continueWith.prompt,
+      createdAt: new Date(),
+    });
+    try {
+      result = await runAgent(
+        { ctx: next, threadId, trigger: "message" },
+        deps,
+        patientSteps(makeSteps(), options.wait ?? sleep),
+      );
+    } catch (thrown) {
+      error = thrown instanceof Error ? thrown.message : String(thrown);
+    }
   }
 
   let files: SavedFile[] | null = null;
@@ -314,7 +387,7 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
     runtime.runs.events
       .filter((e) => e.runId === runId)
       .map((e) => ({ type: e.type, payload: e.payload }));
-  const events = logOf(ctx.runId);
+  const events = logOf(underTest);
   const children: ChildTranscript[] = handoffs.map((h) => ({
     agent: h.slug,
     brief: h.brief,
@@ -327,11 +400,8 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
       .filter((e) => e.type === "tool.called")
       .map((e) => ({ name: String(e.payload.tool), args: e.payload.args })),
   }));
-  const replies = (runtime.threads.messages.get(threadId) ?? []).filter(
-    (m) => m.author === "agent",
-  );
   return {
-    reply: replies.at(-1)?.content ?? null,
+    reply: lastReply(),
     result,
     error,
     events,
@@ -345,6 +415,7 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
     sent,
     approvals: [...approvals.records],
     children,
+    before,
     durationMs: Date.now() - started,
   };
 }
