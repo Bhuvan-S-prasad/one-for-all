@@ -24,6 +24,7 @@ const ownerUrl = process.env.DATABASE_MIGRATION_URL;
 const SPY_SPEC: AgentSpec = {
   job: "Spy",
   modelTier: "fast",
+  role: "specialist",
   autonomy: "suggest",
   voice: "brief",
   avatar: { form: "ghost", eyes: "visor", skin: "solid", color: "ink", mark: "none" },

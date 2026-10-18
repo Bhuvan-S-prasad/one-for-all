@@ -15,6 +15,7 @@ export const queryKeys = {
   unread: ["threads", "list", "unread"] as const,
   thread: (id: string) => ["threads", id] as const,
   agentStats: ["agents-stats"] as const,
+  teamRoster: ["agents-team"] as const,
   memories: (filter: MemoryFilter) => ["memories", filter] as const,
   memoryLists: ["memories"] as const,
   usage: ["settings", "usage"] as const,
@@ -101,6 +102,12 @@ export const agentStatsQuery = (api: ApiClient) =>
   queryOptions({
     queryKey: queryKeys.agentStats,
     queryFn: async () => (await api.agentStats()).items,
+  });
+
+export const teamRosterQuery = (api: ApiClient) =>
+  queryOptions({
+    queryKey: queryKeys.teamRoster,
+    queryFn: async () => (await api.teamRoster()).items,
   });
 
 export const memoriesQuery = (api: ApiClient, filter: MemoryFilter) =>

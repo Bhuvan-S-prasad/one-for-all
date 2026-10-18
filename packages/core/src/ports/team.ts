@@ -17,6 +17,40 @@ export interface TeamMember {
   readonly capabilities?: readonly AgentCapability[];
 }
 
+/** The line that opens the roster in `delegate_task`'s description. */
+export const ROSTER_HEADING = "Agents you can hand work to (pick each by what it can do):";
+
+/**
+ * Members most related to a request first (ADR-0044), so the ones that
+ * matter keep full cards when a large team is cut to one line each. Ties keep
+ * their order.
+ */
+export function rankByRequest(members: readonly TeamMember[], request: string): TeamMember[] {
+  const words = new Set(
+    request
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter((w) => w.length > 3),
+  );
+  if (words.size === 0) return [...members];
+  const score = (m: TeamMember) => {
+    const about = [
+      m.name,
+      m.job,
+      ...(m.capabilities ?? []).flatMap((c) => [c.area, ...c.abilities]),
+    ]
+      .join(" ")
+      .toLowerCase();
+    let hits = 0;
+    for (const word of words) if (about.includes(word)) hits += 1;
+    return hits;
+  };
+  return members
+    .map((m, i) => ({ m, i, s: score(m) }))
+    .sort((a, b) => b.s - a.s || a.i - b.i)
+    .map(({ m }) => m);
+}
+
 /** About 1,000 tokens of cards at the 32k window; agents past that get one line (ADR-0044). */
 export const ROSTER_CARD_CHARS = 4_000;
 

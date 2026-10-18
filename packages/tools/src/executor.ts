@@ -235,33 +235,35 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
       for (const agentId of agentIds) {
         const agent = await options.agents.get(ctx, agentId);
         if (!agent) continue;
-        const areas = new Map<string, string[]>();
-        const add = (area: string, ability: string, asks: boolean) => {
-          const list = areas.get(area) ?? [];
-          const words = asks ? `${ability} (asks first)` : ability;
-          if (!list.includes(words)) list.push(words);
-          areas.set(area, list);
+        const areas = new Map<string, { abilities: string[]; tools: string[] }>();
+        const add = (area: string, tool: string, ability: string | null, asks: boolean) => {
+          const entry = areas.get(area) ?? { abilities: [], tools: [] };
+          entry.tools.push(tool);
+          const words = ability && (asks ? `${ability} (asks first)` : ability);
+          if (words && !entry.abilities.includes(words)) entry.abilities.push(words);
+          areas.set(area, entry);
         };
         for (const d of registry.descriptors()) {
           if (NOT_A_CAPABILITY.has(d.name) || PLATFORM_TOOLS.has(d.name)) continue;
           const grant = grantFor(agent.grants, d.name);
           if (!grant || grant.mode === "blocked") continue;
           const prefix = d.name.includes(".") ? d.name.slice(0, d.name.indexOf(".")) : d.name;
-          const ability = d.name in ABILITIES ? ABILITIES[d.name] : actionWords(d.name);
-          if (ability) add(AREAS[prefix] ?? prefix, ability, grant.mode === "approve");
+          const ability = d.name in ABILITIES ? (ABILITIES[d.name] ?? null) : actionWords(d.name);
+          add(AREAS[prefix] ?? prefix, d.name, ability, grant.mode === "approve");
         }
         for (const kit of kits) {
           for (const tool of kit.tools) {
             const grant = grantFor(agent.grants, tool.name);
             if (!grant || grant.mode === "blocked") continue;
-            add(kit.name, actionWords(tool.name), grant.mode === "approve");
+            add(kit.name, tool.name, actionWords(tool.name), grant.mode === "approve");
           }
         }
         cards.set(
           agentId,
+          // An area of folded tools alone says nothing new, but its tools still count.
           [...areas]
-            .filter(([, abilities]) => abilities.length > 0)
-            .map(([area, abilities]) => ({
+            .filter(([, { abilities }]) => abilities.length > 0)
+            .map(([area, { abilities, tools }]) => ({
               area,
               abilities:
                 abilities.length > ABILITIES_PER_AREA
@@ -270,6 +272,7 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
                       `${abilities.length - ABILITIES_PER_AREA} more`,
                     ]
                   : abilities,
+              tools,
             })),
         );
       }

@@ -11,9 +11,18 @@ import {
   shareLoginRequestSchema,
   type AgentStatsList,
   type ShareLoginResponse,
+  type TeamRoster,
   type ThreadSummaryPage,
 } from "@ofa/contracts";
-import { AppError, asId, normalizeLoginSite, NotFoundError } from "@ofa/core";
+import {
+  AppError,
+  asId,
+  normalizeLoginSite,
+  NotFoundError,
+  type AgentCapability,
+  type AgentId,
+  type RunId,
+} from "@ofa/core";
 import { workspaceEvent } from "@ofa/events";
 import {
   agentRunStats,
@@ -48,9 +57,12 @@ import type { AppEnv } from "../types";
  *   GET   /api/agents/:id/threads its chats with the person, most recent first (?q=&cursor=) (UX.13)
  *   POST  /api/agents/:id/threads start a new chat (an empty current chat is reused)
  *   GET   /api/agents/stats       per agent: runs this week and the last good result (UX.12)
+ *   GET   /api/agents/team        active agents with what each can do, from grants (ADR-0044)
  *   POST  /api/agents/:id/logins/share  copy one site's browser login to another agent (ADR-0010)
  */
-export function agentRoutes(deps: Pick<Container, "db" | "sessions" | "bus" | "sandbox">) {
+export function agentRoutes(
+  deps: Pick<Container, "db" | "sessions" | "bus" | "sandbox" | "harness">,
+) {
   const { db } = deps;
   const announce = (workspaceId: string, agentId: string) =>
     deps.bus
@@ -82,6 +94,34 @@ export function agentRoutes(deps: Pick<Container, "db" | "sessions" | "bus" | "s
               : null,
           })),
         } satisfies AgentStatsList);
+      })
+      // The roster a coordinator sees (ADR-0044, TC.07): what each active agent
+      // can do, from the same grants and connected apps as its tool list.
+      .get("/team", async (c) => {
+        const tenant = c.get("tenant");
+        const active = (await listAgents(db, tenant)).filter((a) => a.status === "active");
+        const ids = active.map((a) => asId<AgentId>(a.id));
+        const { tools } = deps.harness;
+        const cards =
+          tools.capabilities && ids.length
+            ? await tools.capabilities(
+                { ...tenant, agentId: ids[0]!, runId: asId<RunId>("team-roster") },
+                ids,
+              )
+            : new Map<string, readonly AgentCapability[]>();
+        return c.json({
+          items: active.map((a) => ({
+            id: a.id,
+            slug: a.slug,
+            name: a.name,
+            job: a.spec.job,
+            capabilities: (cards.get(a.id) ?? []).map((card) => ({
+              area: card.area,
+              abilities: [...card.abilities],
+              tools: [...card.tools],
+            })),
+          })),
+        } satisfies TeamRoster);
       })
       .post("/", async (c) => {
         const tenant = c.get("tenant");

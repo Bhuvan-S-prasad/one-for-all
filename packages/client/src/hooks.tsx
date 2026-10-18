@@ -28,6 +28,7 @@ import {
   agentQuery,
   agentsQuery,
   agentStatsQuery,
+  teamRosterQuery,
   agentThreadQuery,
   agentThreadsQuery,
   approvalsQuery,
@@ -400,6 +401,11 @@ export function useRunArtifacts(runId: string | undefined, options: { enabled?: 
 /** Per agent: runs this week and the last good result (UX.12). */
 export function useAgentStats() {
   return useQuery(agentStatsQuery(useApiClient()));
+}
+
+/** The team a coordinator would see, with capability cards (ADR-0044). */
+export function useTeamRoster() {
+  return useQuery(teamRosterQuery(useApiClient()));
 }
 
 // ── Memory (UX.14) ───────────────────────────────────────────────────────────

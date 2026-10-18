@@ -1,5 +1,6 @@
 import { ApiError } from "@ofa/client";
 import {
+  AGENT_ROLES,
   AGENT_VOICES,
   FAMILIAR_COLORS,
   FAMILIAR_EYES,
@@ -8,6 +9,7 @@ import {
   FAMILIAR_MOODS,
   FAMILIAR_SKINS,
   type AgentGrant,
+  type AgentRole,
   type CreateAgentInput,
   type FamiliarColor,
   type FamiliarLook,
@@ -22,7 +24,8 @@ import { ErrorAlert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { BUILTIN_TOOLS, MOOD_SENTENCES, TIER_INFO } from "@/lib/agents";
+import { TeamPreview } from "@/components/team-preview";
+import { BUILTIN_TOOLS, MOOD_SENTENCES, ROLE_INFO, TIER_INFO } from "@/lib/agents";
 import { cn } from "@/lib/utils";
 
 // The hatch flow (M2.24), from the design canvas's "Hatch a new agent":
@@ -36,6 +39,8 @@ export interface AgentDraft {
   job: string;
   description: string;
   tier: (typeof MODEL_TIERS)[number];
+  /** Does its job, or leads a team (ADR-0044). */
+  role: AgentRole;
   /** Built-in tools switched on. */
   tools: string[];
   /** Every other grant (connected apps, anything set elsewhere), kept as it is unless changed here. */
@@ -59,7 +64,13 @@ export function toRequest(draft: AgentDraft): CreateAgentInput {
   return {
     name: draft.name.trim(),
     description: draft.description.trim(),
-    spec: { job: draft.job.trim(), modelTier: draft.tier, voice: draft.voice, avatar: draft.look },
+    spec: {
+      job: draft.job.trim(),
+      modelTier: draft.tier,
+      role: draft.role,
+      voice: draft.voice,
+      avatar: draft.look,
+    },
     grants: [...draft.tools.map((tool) => ({ tool, mode: "auto" as const })), ...others],
   };
 }
@@ -101,6 +112,8 @@ export function randomLook(): FamiliarLook {
 
 interface AgentEditorProps {
   initial: AgentDraft;
+  /** The agent being edited: left out of its own team preview. */
+  agentId?: string;
   mode: "hatch" | "edit";
   saving: boolean;
   error: unknown;
@@ -108,7 +121,15 @@ interface AgentEditorProps {
   onSave: (draft: AgentDraft) => void;
 }
 
-export function AgentEditor({ initial, mode, saving, error, onCancel, onSave }: AgentEditorProps) {
+export function AgentEditor({
+  initial,
+  agentId,
+  mode,
+  saving,
+  error,
+  onCancel,
+  onSave,
+}: AgentEditorProps) {
   const [draft, setDraft] = useState(initial);
   const [step, setStep] = useState(0);
   const [trait, setTrait] = useState<Trait>("form");
@@ -396,6 +417,33 @@ export function AgentEditor({ initial, mode, saving, error, onCancel, onSave }: 
                   ))}
                 </div>
               </div>
+              <div className="flex flex-col gap-2">
+                <span id="role-label" className="eyebrow text-xs text-muted-foreground">
+                  Role
+                </span>
+                <div
+                  role="radiogroup"
+                  aria-labelledby="role-label"
+                  className="grid gap-2.5 sm:grid-cols-2"
+                >
+                  {AGENT_ROLES.map((r) => (
+                    <button
+                      key={r}
+                      type="button"
+                      role="radio"
+                      aria-checked={draft.role === r}
+                      onClick={() => set({ role: r })}
+                      className={cn(
+                        "flex flex-col items-start gap-1 rounded-md border-2 bg-card px-4 py-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                        draft.role === r ? "border-primary" : "border-border",
+                      )}
+                    >
+                      <span className="font-semibold">{ROLE_INFO[r].label}</span>
+                      <span className="text-sm text-muted-foreground">{ROLE_INFO[r].hint}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
             </>
           )}
 
@@ -459,6 +507,14 @@ export function AgentEditor({ initial, mode, saving, error, onCancel, onSave }: 
                 }
                 agentName={displayName}
               />
+              {draft.role === "coordinator" && (
+                <TeamPreview
+                  agentId={agentId}
+                  agentName={displayName}
+                  tools={draft.tools}
+                  grants={draft.grants}
+                />
+              )}
             </>
           )}
 

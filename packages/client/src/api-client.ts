@@ -34,6 +34,8 @@ import {
   agentListResponseSchema,
   agentSchema,
   agentStatsListSchema,
+  teamRosterSchema,
+  type TeamRoster,
   approvalListSchema,
   approvalSchema,
   appToolListSchema,
@@ -299,6 +301,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request("POST", "/api/agents/import", importAgentResponseSchema, file),
     agentStats: (): Promise<AgentStatsList> =>
       request("GET", "/api/agents/stats", agentStatsListSchema),
+    /** The active agents with what each can do, as a coordinator sees them (ADR-0044). */
+    teamRoster: (): Promise<TeamRoster> => request("GET", "/api/agents/team", teamRosterSchema),
 
     // ── Threads ────────────────────────────────────────────────────────────
     /** The person's group chats, most recent first (M5.04). */

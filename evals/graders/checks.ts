@@ -366,3 +366,78 @@ export function heldAfterOutside(name: string, tools: RegExp): Check {
     },
   };
 }
+
+/** The run under test never called this tool itself (ADR-0044: a coordinator leaves it to its team). */
+export function neverUsed(tool: string): Check {
+  return {
+    name: `doesn't use ${tool} itself`,
+    grade: (t) => {
+      const calls = t.toolCalls.filter((c) => c.name === tool).length;
+      return calls === 0 ? { pass: true } : { pass: false, detail: `called ${tool} ${calls}×` };
+    },
+  };
+}
+
+/** Work went only to these teammates (a large roster, ADR-0044). */
+export function delegatedOnly(slugs: readonly string[]): Check {
+  return {
+    name: `hands work only to ${slugs.join(", ")}`,
+    grade: (t) => {
+      const others = t.children.map((c) => c.agent).filter((a) => !slugs.includes(a));
+      return others.length === 0
+        ? { pass: true }
+        : { pass: false, detail: `also handed work to ${[...new Set(others)].join(", ")}` };
+    },
+  };
+}
+
+/**
+ * Outbound work comes last (ADR-0044): `then` is handed work after `first`,
+ * with a brief that carries what `first` found.
+ */
+export function handedOffAfter(first: string, then: string, finding: RegExp): Check {
+  return {
+    name: `hands work to ${then} after ${first}, with what it found`,
+    grade: (t) => {
+      const a = t.children.findIndex((c) => c.agent === first);
+      const b = t.children.findIndex((c, i) => c.agent === then && i > a);
+      if (a < 0) return { pass: false, detail: `${first} got no work` };
+      if (b < 0) return { pass: false, detail: `${then} got no work after ${first}` };
+      return finding.test(t.children[b]!.brief)
+        ? { pass: true }
+        : { pass: false, detail: `${then}'s brief: ${t.children[b]!.brief.slice(0, 200)}` };
+    },
+  };
+}
+
+/** The first run stopped at a budget before finishing (ADR-0045). */
+export const stoppedFirst: Check = {
+  name: "the first run stopped at its budget",
+  grade: (t) =>
+    t.before && /_budget$/.test(t.before.stopReason ?? "")
+      ? { pass: true }
+      : { pass: false, detail: `first run: ${t.before?.stopReason ?? "none"}` },
+};
+
+/**
+ * The continued run didn't redo a call the first one made: same tool, same
+ * arguments (ADR-0045).
+ */
+export function didNotRedo(tool: string): Check {
+  return {
+    name: `doesn't repeat the first run's ${tool}`,
+    grade: (t) => {
+      const earlier = new Set(
+        (t.before?.toolCalls ?? [])
+          .filter((c) => c.name === tool)
+          .map((c) => JSON.stringify(c.args)),
+      );
+      const again = t.toolCalls.filter(
+        (c) => c.name === tool && earlier.has(JSON.stringify(c.args)),
+      );
+      return again.length === 0
+        ? { pass: true }
+        : { pass: false, detail: `again: ${JSON.stringify(again[0]!.args).slice(0, 200)}` };
+    },
+  };
+}

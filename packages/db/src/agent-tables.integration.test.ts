@@ -42,6 +42,7 @@ const ownerUrl = process.env.DATABASE_MIGRATION_URL;
 const SPEC: AgentSpec = {
   job: "Research",
   modelTier: "standard",
+  role: "specialist",
   autonomy: "act-with-approval",
   voice: "calm",
   avatar: { form: "bloom", eyes: "googly", skin: "dots", color: "lilac", mark: "spark" },

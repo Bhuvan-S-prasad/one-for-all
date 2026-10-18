@@ -203,11 +203,21 @@ describe("capability cards (ADR-0044)", () => {
       },
     });
     const cards = await e.capabilities!(ctx, [asId("res"), asId("inbox"), asId("gone")]);
-    expect(cards.get("res")).toEqual([{ area: "web", abilities: ["search", "read pages"] }]);
+    expect(cards.get("res")).toEqual([
+      { area: "web", abilities: ["search", "read pages"], tools: ["web.search", "web.read_url"] },
+    ]);
     expect(cards.get("inbox")).toEqual([
       // files.list folds into its area: on its own it says nothing new.
-      { area: "files", abilities: ["send files to the person"] },
-      { area: "Gmail", abilities: ["search messages", "create draft (asks first)"] },
+      {
+        area: "files",
+        abilities: ["send files to the person"],
+        tools: ["files.send", "files.list"],
+      },
+      {
+        area: "Gmail",
+        abilities: ["search messages", "create draft (asks first)"],
+        tools: ["gmail.search_messages", "gmail.create_draft"],
+      },
     ]);
     expect(cards.has("gone")).toBe(false);
   });
@@ -218,7 +228,7 @@ describe("capability cards (ADR-0044)", () => {
       slug: `agent${n}`,
       name: `Agent ${n}`,
       job: "Helps",
-      capabilities: [{ area: "web", abilities: ["search", "read pages"] }],
+      capabilities: [{ area: "web", abilities: ["search", "read pages"], tools: ["web.search"] }],
     });
     const text = rosterText([member(1), member(2), member(3)], 120);
     expect(text).toBe(
@@ -426,7 +436,10 @@ describe("delegate_task (M5.01)", () => {
   it("shows what each agent can do, from its grants (ADR-0044)", async () => {
     const [tool] = await withTeam(
       [
-        { ...researcher, capabilities: [{ area: "web", abilities: ["search", "read pages"] }] },
+        {
+          ...researcher,
+          capabilities: [{ area: "web", abilities: ["search", "read pages"], tools: [] }],
+        },
         { id: asId<AgentId>("idle"), slug: "idle", name: "Idle", job: "Waits", capabilities: [] },
       ],
       "auto",

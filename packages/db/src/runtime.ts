@@ -19,7 +19,16 @@ import {
 import type { BusPayload } from "@ofa/events";
 import { and, asc, desc, eq, gt, inArray, notInArray, sql } from "drizzle-orm";
 import type { Database } from "./client";
-import { agent, agentGrant, message, run, runEvent, threadState, toolCall } from "./schema/index";
+import {
+  agent,
+  agentGrant,
+  message,
+  run,
+  runEvent,
+  thread,
+  threadState,
+  toolCall,
+} from "./schema/index";
 import { withTenant } from "./tenant";
 
 // Postgres implementations of the runtime ports in `@ofa/core` (§6). After
@@ -239,6 +248,7 @@ function toProfile(
     description: row.description,
     status: row.status,
     job: spec.job,
+    role: spec.role,
     modelTier: spec.modelTier,
     autonomy: spec.autonomy,
     voice: spec.voice,
@@ -268,6 +278,17 @@ export function createAgentDirectory(db: Database): AgentDirectory {
 export function createThreadStore(db: Database, options: RuntimeStoreOptions = {}): ThreadStore {
   const announce = announcer(options);
   return {
+    async coordinatorOf(ctx, threadId) {
+      const [row] = await withTenant(db, ctx, (tx) =>
+        tx
+          .select({ kind: thread.kind, coordinator: thread.coordinatorAgentId })
+          .from(thread)
+          .where(eq(thread.id, threadId))
+          .limit(1),
+      );
+      return row?.kind === "group" && row.coordinator ? asId<AgentId>(row.coordinator) : null;
+    },
+
     async recentMessages(ctx: TenantContext, threadId, limit) {
       const rows = await withTenant(db, ctx, (tx) =>
         tx

@@ -4,6 +4,7 @@ import {
   runSchema,
   sendMessageResponseSchema,
   threadListSchema,
+  teamRosterSchema,
   threadSchema,
   type MessageReceivedEvent,
 } from "@ofa/contracts";
@@ -461,5 +462,27 @@ describe.skipIf(!hasDb)("handing work to other agents (integration)", async () =
         content: "Anything at all.",
       }),
     ).rejects.toThrow(/can't be woken/);
+  });
+
+  it("lists the team with what each agent can do, from its grants (ADR-0044)", async () => {
+    await hatch("Searcher", [
+      { tool: "web.search", mode: "auto" },
+      { tool: "web.read_url", mode: "approve" },
+      { tool: "todo.write", mode: "auto" },
+    ]);
+    const res = await send("GET", "/api/agents/team");
+    expect(res.status).toBe(200);
+    const roster = teamRosterSchema.parse(await res.json());
+    const bySlug = new Map(roster.items.map((m) => [m.slug, m]));
+    expect(bySlug.get("searcher")?.capabilities).toEqual([
+      {
+        area: "web",
+        abilities: ["search", "read pages (asks first)"],
+        tools: ["web.search", "web.read_url"],
+      },
+    ]);
+    // Platform tools (plan, handoffs) aren't capabilities.
+    expect(bySlug.get("coordinator")?.capabilities).toEqual([]);
+    expect(bySlug.get("writer")).toMatchObject({ name: "Writer", job: "Writer", capabilities: [] });
   });
 });

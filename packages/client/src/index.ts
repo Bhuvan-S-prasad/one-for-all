@@ -11,6 +11,7 @@ export {
   useAgent,
   useAgents,
   useAgentStats,
+  useTeamRoster,
   useAgentThread,
   useAgentThreads,
   useApprovals,

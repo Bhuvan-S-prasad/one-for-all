@@ -18,6 +18,7 @@ const SAMPLE_AGENTS: readonly {
     spec: {
       job: "Research",
       modelTier: "standard",
+      role: "specialist",
       autonomy: "act-with-approval",
       voice: "calm",
       avatar: { form: "bloom", eyes: "googly", skin: "dots", color: "lilac", mark: "spark" },
@@ -38,6 +39,7 @@ const SAMPLE_AGENTS: readonly {
     spec: {
       job: "Inbox triage",
       modelTier: "fast",
+      role: "specialist",
       autonomy: "suggest",
       voice: "brief",
       avatar: { form: "drop", eyes: "beans", skin: "stripes", color: "mint", mark: "none" },

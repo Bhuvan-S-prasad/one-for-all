@@ -162,6 +162,8 @@ export interface AgentProfile {
   readonly description: string;
   readonly status: "active" | "paused" | "archived";
   readonly job: string;
+  /** A coordinator plans and hands work to its team (ADR-0044). Absent means specialist. */
+  readonly role?: "specialist" | "coordinator";
   readonly modelTier: ModelTier;
   readonly autonomy: string;
   readonly voice: string;
@@ -187,6 +189,8 @@ export interface ConversationMessage {
 }
 
 export interface ThreadStore {
+  /** A group thread's coordinator, who acts as one there (ADR-0044); null elsewhere. */
+  coordinatorOf?(ctx: TenantContext, threadId: ThreadId): Promise<AgentId | null>;
   /** The latest `limit` messages, oldest first. */
   recentMessages(
     ctx: TenantContext,
@@ -325,6 +329,8 @@ export interface AgentCapability {
   readonly area: string;
   /** What it can do there; `(asks first)` where its grant asks a person. */
   readonly abilities: readonly string[];
+  /** The tools behind it, so a coordinator can be kept off what a teammate covers. */
+  readonly tools: readonly string[];
 }
 
 /** Lists the tools an agent may use and runs them through policy (hard rule 5). */

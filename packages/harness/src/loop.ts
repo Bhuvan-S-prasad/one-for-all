@@ -15,6 +15,9 @@ import {
   type LLMRequest,
   type MemoryStore,
   type LLMImage,
+  rankByRequest,
+  ROSTER_HEADING,
+  rosterText,
   type RunContext,
   type RunEventWrite,
   type RunStore,
@@ -201,6 +204,30 @@ function preview(text: string, length: number): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** A coordinator's team (ADR-0044): its roster, and which teammates have each tool. */
+interface CoordinatorTeam {
+  readonly roster: string;
+  /** Tool name → handles of the teammates that have it. */
+  readonly covered: Record<string, string[]>;
+}
+
+/**
+ * A coordinator's tool list (ADR-0044): without the tools a teammate has, and
+ * with the roster moved out of `delegate_task` into its instructions.
+ */
+function forCoordinator(tools: readonly ToolDescriptor[], team: CoordinatorTeam): ToolDescriptor[] {
+  return tools
+    .filter((t) => !team.covered[t.name])
+    .map((t) =>
+      t.name === DELEGATE_TASK
+        ? {
+            ...t,
+            description: `${t.description.split(`\n${ROSTER_HEADING}`)[0]}\nYour team, with what each one can do, is in your instructions.`,
+          }
+        : t,
+    );
 }
 
 /** The search a `web.search` call asked for, written the same way each time. */
@@ -480,6 +507,27 @@ export async function runAgent(
       const record: ChatRecord | null = keepsRecord
         ? await deps.chats!.get(ctx, input.threadId as ThreadId)
         : null;
+      // A coordinator (ADR-0044): by its role, or as the leader of this group
+      // chat. A run handed work or woken by another agent has no team (one
+      // level, one hop), so it works as itself.
+      let team: CoordinatorTeam | null = null;
+      if (deps.team && !start.proactive && input.trigger !== "delegation") {
+        const leads =
+          agent.role === "coordinator" ||
+          (!!input.threadId &&
+            !!deps.threads.coordinatorOf &&
+            (await deps.threads.coordinatorOf(ctx, input.threadId)) === ctx.agentId);
+        const members = leads ? await deps.team.members(ctx) : [];
+        if (members.length > 0) {
+          const covered: Record<string, string[]> = {};
+          for (const member of members) {
+            for (const card of member.capabilities ?? []) {
+              for (const tool of card.tools) (covered[tool] ??= []).push(member.slug);
+            }
+          }
+          team = { roster: rosterText(rankByRequest(members, request)), covered };
+        }
+      }
       const taintedByRecord = !start.tainted && quotesOutside(record);
       if (taintedByRecord) {
         await log([
@@ -490,7 +538,7 @@ export async function runAgent(
       return {
         history,
         memories,
-        tools,
+        tools: team ? forCoordinator(tools, team) : tools,
         window: model.contextWindow,
         messageIds: messages.map((m) => m.id as string),
         request: request.slice(0, 600),
@@ -498,6 +546,7 @@ export async function runAgent(
         episodes,
         record,
         taintedByRecord,
+        team,
       };
     });
     if (context.taintedByRecord) tainted = true;
@@ -609,6 +658,7 @@ export async function runAgent(
           summary,
           turns,
           record: context.record,
+          team: context.team?.roster ?? null,
           planCarried,
           wrapUp,
         },
@@ -632,6 +682,7 @@ export async function runAgent(
                 summary: result.summary,
                 turns: turns.slice(result.replaced),
                 record: context.record,
+                team: context.team?.roster ?? null,
                 planCarried,
                 wrapUp,
               },
@@ -676,6 +727,7 @@ export async function runAgent(
               summary,
               turns,
               record: context.record,
+              team: context.team?.roster ?? null,
               planCarried,
               wrapUp,
             },
@@ -771,23 +823,44 @@ export async function runAgent(
         // nothing runs, so there is no new call to check or count.
         const key = call.name === "web.search" && !call.invalid ? searchKey(call.args) : null;
         const earlier = key ? searches.get(key) : undefined;
-        let result: ToolStepResult = earlier
-          ? await steps.run(`${toolCallId}-reused`, async () => {
+        // A coordinator's teammate has this tool (ADR-0044): it isn't in its
+        // list, and if it calls it anyway, nothing runs.
+        const owners = context.team?.covered[call.name];
+        let result: ToolStepResult = owners
+          ? await steps.run(`${toolCallId}-team`, async () => {
               await log([
-                runEvent(`${toolCallId}-reused`, "tool.reused", {
+                runEvent(`${toolCallId}-failed`, "tool.failed", {
                   toolCallId,
-                  tool: call.name,
-                  reusedFrom: earlier.toolCallId,
+                  tool: call.name.slice(0, 100),
+                  durationMs: 0,
+                  code: "left_to_team",
+                  message: `Left to ${owners.join(", ")}`,
                 }),
               ]);
               return {
-                content: `You already ran this search in this task, so here are the same results again. Use them, or search for something different.\n${earlier.content}`,
-                untrusted: earlier.untrusted,
-                ok: true,
+                content: `Not done: ${call.name} is your team's work. Hand it to ${owners.join(" or ")} with delegate_task.`,
+                untrusted: false,
+                ok: false,
                 taintedNow: false,
               };
             })
-          : await steps.run(toolCallId, () => runTool(toolCallId, call, tainted));
+          : earlier
+            ? await steps.run(`${toolCallId}-reused`, async () => {
+                await log([
+                  runEvent(`${toolCallId}-reused`, "tool.reused", {
+                    toolCallId,
+                    tool: call.name,
+                    reusedFrom: earlier.toolCallId,
+                  }),
+                ]);
+                return {
+                  content: `You already ran this search in this task, so here are the same results again. Use them, or search for something different.\n${earlier.content}`,
+                  untrusted: earlier.untrusted,
+                  ok: true,
+                  taintedNow: false,
+                };
+              })
+            : await steps.run(toolCallId, () => runTool(toolCallId, call, tainted));
         if (result.approval) {
           const decision = await askPerson(toolCallId, call, result.approval);
           if (decision.status === "approved" && decision.site) allowedSites.add(decision.site);
@@ -817,7 +890,7 @@ ${result.content}`,
             };
           }
         }
-        if (!earlier) {
+        if (!earlier && !owners) {
           usage = addUsage(usage, { inputTokens: 0, outputTokens: 0, costUsd: 0 }, { tool: 1 });
         }
         if (result.taintedNow) tainted = true;
@@ -860,6 +933,7 @@ ${result.content}`,
                 ...(proactive ? { readOnly: true } : {}),
               }),
             );
+            if (context.team) tools = forCoordinator(tools, context.team);
           }
         }
         if (result.ok && call.name === DELEGATE_TASK) {

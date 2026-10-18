@@ -36,6 +36,7 @@ describe.skipIf(!appUrl || !ownerUrl)("memory store (integration)", () => {
     const spec = {
       job: "x",
       modelTier: "fast",
+      role: "specialist",
       autonomy: "suggest",
       voice: "calm",
       avatar,

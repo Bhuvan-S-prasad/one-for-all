@@ -1,4 +1,4 @@
-import { findMember, rosterText, type TeamDirectory } from "@ofa/core";
+import { findMember, ROSTER_HEADING, rosterText, type TeamDirectory } from "@ofa/core";
 import { z } from "zod";
 import { defineTool } from "../define";
 
@@ -86,7 +86,7 @@ export function delegateTaskTool(team: TeamDirectory | null) {
       if (members.length === 0) return null;
       // Each with what it can do, from its grants (ADR-0044).
       return {
-        description: `${DESCRIPTION}\nAgents you can hand work to (pick each by what it can do):\n${rosterText(members)}`,
+        description: `${DESCRIPTION}\n${ROSTER_HEADING}\n${rosterText(members)}`,
       };
     },
     async describe({ agent, brief }) {

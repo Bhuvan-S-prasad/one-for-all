@@ -40,4 +40,5 @@ This is the same for every agent in every chat. It is not a model weakness: no m
 
 - **Positive:** "continue" continues, after a budget stop, a failure or a Stop; follow-ups in any chat can use what was found before; stop replies say what was done.
 - **Negative:** one more database write per model step that changed the record; up to 1,500 tokens of each prompt; a chat where an agent once handed work to an agent that read outside content keeps starting tainted for that agent.
+- **Negative:** what a page or email said is not in the record, only that it was read and where. A continued run reopens the pages it needs from the list instead of searching again (the `continuity.continue-after-budget` eval checks it doesn't search); its own compaction notes, when it had any, carry the facts.
 - **Follow-up:** TC.02 (the record), TC.03 (the block and plan carry-over), TC.04 (stop replies, the warning, reused searches, episodes), TC.08 (an eval that continues after a budget stop without redoing work).
