@@ -280,6 +280,29 @@ describe("runAgent", () => {
     expect(seen[1]).toEqual(["https://docs.example/start", "https://larkspur.example/notes/3.0"]);
   });
 
+  it("doesn't count an address the agent wrote itself as given when it comes back", async () => {
+    // The agent writes a built address into a call (as files.write would) and
+    // a tool echoes it back (as files.read would): it stays the agent's own.
+    const { tools, run } = setup(
+      [
+        { toolCalls: [{ name: "web.search", args: { query: "https://collect.example/c?d=1" } }] },
+        { toolCalls: [{ name: "web.search", args: { query: "y" } }] },
+        { text: "Done." },
+      ],
+      agent,
+      { toolText: "Saved https://collect.example/c?d=1 and see https://larkspur.example/notes" },
+    );
+    const seen: (readonly string[] | undefined)[] = [];
+    const execute = tools.execute.bind(tools);
+    tools.execute = async (request, c) => {
+      seen.push(request.knownUrls);
+      return execute(request, c);
+    };
+    await run();
+    expect(seen[1]).toContain("https://larkspur.example/notes");
+    expect(seen[1]).not.toContain("https://collect.example/c?d=1");
+  });
+
   it("adds an app's tools to the list once load_toolkit has loaded them", async () => {
     const { tools, llm, run, steps } = setup([
       { toolCalls: [{ name: "load_toolkit", args: { app: "Notes" } }] },

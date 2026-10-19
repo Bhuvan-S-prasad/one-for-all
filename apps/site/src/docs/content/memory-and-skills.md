@@ -25,7 +25,7 @@ Every run that replied leaves an episode: "Asked: … Answered: …", replaced b
 At 3 at night in your time zone (or when you ask), one fast model call per agent:
 
 - merges facts that say the same thing (the merged fact is verified only if all of them were),
-- adds facts its clean recent episodes show,
+- adds facts its clean recent episodes show (verified only if every fact it was shown was),
 - proposes skills for your approval.
 
 Rules that need no model expire copies, facts unconfirmed for 30 days, and facts never recalled in 180 days. **Nothing is deleted**: expired facts are kept but no longer used.

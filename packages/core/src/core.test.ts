@@ -3,6 +3,7 @@ import {
   TenantRequiredError,
   asId,
   assertTenant,
+  givenKeys,
   hostMatchesSite,
   loginSecretNames,
   loginSiteOf,
@@ -48,6 +49,10 @@ describe("saved login sites", () => {
     expect(normalizeLoginSite("https://user:pw@example.org/")).toBe("example.org");
     expect(normalizeLoginSite("localhost")).toBeNull();
     expect(normalizeLoginSite("not a site")).toBeNull();
+    // A script or file address is no site, whatever host it pretends to have.
+    expect(normalizeLoginSite("javascript://shop.example/%0afetch('x')")).toBeNull();
+    expect(normalizeLoginSite("file://shop.example/etc/passwd")).toBeNull();
+    expect(normalizeLoginSite("http://shop.example/")).toBe("shop.example");
   });
 
   it("match only the site and its subdomains", () => {
@@ -70,10 +75,26 @@ describe("addresses a run was given", () => {
   });
 
   it("treats the same address the same however it is written", () => {
-    expect(urlKey("HTTPS://WWW.Shop.example/orders/5512/#top")).toBe(
+    expect(urlKey("HTTPS://WWW.Shop.example/orders/5512/")).toBe(
       "https://shop.example/orders/5512",
     );
     expect(urlKey("https://shop.example/?q=1")).toBe("https://shop.example?q=1");
     expect(urlKey("https://shop.example/Orders")).not.toBe(urlKey("https://shop.example/orders"));
+    expect(urlKey("https://shop.example/orders/5512#")).toBe("https://shop.example/orders/5512");
+  });
+
+  it("keeps the fragment, since a page's script reads it", () => {
+    expect(urlKey("https://verify.example/check#email=sam@example.com")).toBe(
+      "https://verify.example/check#email=sam@example.com",
+    );
+    expect(urlKey("https://verify.example/check#email=sam@example.com")).not.toBe(
+      urlKey("https://verify.example/check"),
+    );
+    // A given address also lets the run open it without its fragment, not with another one.
+    expect(givenKeys("https://www.Docs.example/start/#install")).toEqual([
+      "https://docs.example/start#install",
+      "https://docs.example/start",
+    ]);
+    expect(givenKeys("https://docs.example/start")).toEqual(["https://docs.example/start"]);
   });
 });

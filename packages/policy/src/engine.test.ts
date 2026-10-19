@@ -84,7 +84,11 @@ describe("policy engine", () => {
     const ask = (url: string, tainted = true) =>
       e.evaluate({ ctx, tool: open, args: { url }, tainted, knownUrls });
     // Given (however it is written): no question.
-    expect((await ask("https://www.shop.example/orders/5512/#top")).verdict).toBe("auto");
+    expect((await ask("https://www.shop.example/orders/5512/")).verdict).toBe("auto");
+    // Data after `#` reaches the page's script: an added fragment wasn't given.
+    expect((await ask("https://shop.example/orders/5512#email=sam@example.com")).verdict).toBe(
+      "approve",
+    );
     // Made up, with data in it: a person decides.
     const made = await ask("https://verify-orders.example/check?email=sam@example.com");
     expect(made.verdict).toBe("approve");

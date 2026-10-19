@@ -33,7 +33,7 @@ The free fast-tier models that do this work think aloud before answering. In the
 - **Nightly consolidation** (`memory-consolidate`, hourly): it handles each workspace where it is 3 at night (its `time_zone`) and whose last pass is at least 20 hours old, acting as the workspace owner. `POST /api/memories/consolidate` asks for one now (owner or admin).
   - **One model call per agent** (`memory.consolidate@1`) reads up to 60 of its facts (as `f1…fn`) and 30 new untainted episodes. It returns:
     - **merges:** the merged fact is verified only if every fact it replaces was, and the old ones expire;
-    - **up to 5 new facts:** verified, from untainted work only;
+    - **up to 5 new facts:** from untainted work only, and verified only if every fact the call was shown was verified (an unverified one could come back reworded as "new"; amended 2026-10-19 after the security audit);
     - **up to 2 skill proposals:** status `proposed`; a person approves them (ADR-0036).
   - **One pass over the shared workspace facts** merges only.
   - **Rules that need no model:**

@@ -357,7 +357,12 @@ Stays where it is: the approval card (M4.09), the file card (M3.06) and the comp
 
 ## Backlog (after M7)
 
-- Inviting members to a workspace. Decided 2026-10-02: sign-in stays owner-only until then (the owner is created by first-run setup; public sign-up stays off)
+- Inviting members to a workspace. Decided 2026-10-02: sign-in stays owner-only until then (the owner is created by first-run setup; public sign-up stays off). Before invites ship, bind each person's own work to them (found in the 2026-10-19 security audit; RLS is per workspace, so each is a route or repository check):
+  - chats: `getThread`, `updateThread` and `listMessages` check the caller's `thread_member` row (threads routes, `POST /api/runs/:id/retry`), and `/api/ws` sends message events only to the chat's members;
+  - runs: `/api/runs` lists, reads, stops and retries only runs the caller started or whose chat they are in (owners and admins exempt), as `POST /api/approvals/:id` already does; `GET /api/approvals` likewise;
+  - schedules: `GET /api/schedules` and `DELETE /api/schedules/:id` filter by `schedule.user_id`;
+  - routines: `PATCH` and `DELETE /api/routines/:id` only by the creator or an owner/admin, since a routine runs as its creator with their app sign-ins;
+  - sandbox: watching and taking over an agent's computer (`?control=1`), and `POST /api/agents/:id/logins/share`, get a role or run-owner check.
 - Voice: dictation, live voice chat, voice memos from agents
 - Teach a task by demonstration (record a browser workflow → draft skill)
 - LLM action reviewer as an extra policy verdict source
@@ -379,6 +384,12 @@ Stays where it is: the approval card (M4.09), the file card (M3.06) and the comp
 ## Session log
 
 Newest first. Keep entries short.
+
+### 2026-10-19 (session 26, security)
+- **Done:** a full security audit (report kept out of git in `docs/security-audit/`) and its fixes: one private-address check for `egress.mjs` and `safeFetch` that judges IPv4 inside IPv6 by the IPv4 address; approval cards list every argument of a held call in full with padding shown; address provenance keeps the fragment and never counts an address the agent wrote itself as given; `browser.open`, screen navigation and site answers are http(s) only; consolidation's new facts stay unverified if it was shown an unverified fact; learning after a tainted run in the same chat stores unverified facts; the sandbox service refuses requests with an `Origin` header and takes `?token=` only on the `/cdp` WebSocket; Inngest dev mode is off once a signing key is set and refused in production; a scheduled task fires only as its owner. ADR-0025, 0027, 0030, 0037 and 0045 amended.
+- **Checks:** unit tests in the changed packages, typecheck, lint (no errors), format; the egress bypass rerun against the fixed proxy in a no-network container (403 for `[::ffff:127.0.0.1]` and `CONNECT [::ffff:7f00:1]:443`). Not run: integration tests (the schedule owner check has no integration test yet) and a live run.
+- **Next:** rebuild the sandbox image (`egress.mjs` and `server.mjs` changed), then M6.01. The per-person checks above (Backlog, invites) wait for invites.
+- **Open:** the dev sandbox still defaults to the public `ofa-sandbox-dev-token`; with `Origin` refused, only local processes could use it.
 
 ### 2026-10-18 (session 25)
 - **Done:** found in a live run that a chief of staff did its own research instead of delegating and that "continue" after its budget stop started over (only chat text reaches the next run). New milestone **Teams and continuity**; TC.01–TC.05 (5 of 9): ADR-0044 and ADR-0045, the chat record (`thread_state`), the "Earlier in this chat" block with plan carry-over and taint, stop replies, the 80% warning, reused searches, better episodes, capability cards in every roster.

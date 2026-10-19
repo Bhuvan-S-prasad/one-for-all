@@ -414,6 +414,8 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
         if (decision.verdict !== "auto" && !request.approved) {
           // A person must agree first (§6.2): nothing runs; the harness asks
           // them, showing what the call would do, and calls again if they agree.
+          // The card lists every argument in full (showArgs): a summary can be
+          // cut short, and what the person approves must be what runs.
           return {
             status: "blocked",
             verdict: decision.verdict,
@@ -422,7 +424,7 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
             summary: await redact(ctx, await describe(tool, parsed.value, runCtx)),
             ...(decision.allowSite ? { allowSite: decision.allowSite } : {}),
             ...editableIn(tool, parsed.value),
-            ...(tool.showArgs ? { showArgs: true } : {}),
+            showArgs: true,
           };
         }
 

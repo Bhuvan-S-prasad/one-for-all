@@ -981,12 +981,39 @@ describe("safe fetch", () => {
       "fd00::1",
       "fe80::1",
       "::ffff:127.0.0.1",
+      // IPv4 inside IPv6, as the URL parser writes it and in other spellings.
+      "::ffff:7f00:1",
+      "[::ffff:a9fe:a9fe]",
+      "::ffff:ac11:2",
+      "0:0:0:0:0:ffff:7f00:1",
+      "::7f00:1",
+      "::127.0.0.1",
+      "64:ff9b::7f00:1",
+      "64:ff9b::a9fe:a9fe",
+      "2002:7f00:1::",
+      "::",
+      "fec0::1",
+      "192.0.2.1",
+      "203.0.113.9",
     ]) {
       expect(isPrivateAddress(ip), ip).toBe(true);
     }
-    for (const ip of ["93.184.216.34", "1.1.1.1", "2606:4700::1111"]) {
+    for (const ip of [
+      "93.184.216.34",
+      "1.1.1.1",
+      "2606:4700::1111",
+      "::ffff:8.8.8.8",
+      "::ffff:808:808",
+      "64:ff9b::808:808",
+    ]) {
       expect(isPrivateAddress(ip), ip).toBe(false);
     }
+  });
+
+  it("refuses IPv4-mapped IPv6 literals, whatever the spelling", async () => {
+    await expect(safeFetch("http://[::ffff:127.0.0.1]:3000/")).rejects.toThrow(/private/);
+    await expect(safeFetch("http://[::ffff:7f00:1]/")).rejects.toThrow(/private/);
+    await expect(safeFetch("http://[::ffff:169.254.169.254]/")).rejects.toThrow(/private/);
   });
 
   it("refuses localhost, private IPs, odd schemes and credentials before connecting", async () => {

@@ -133,8 +133,9 @@ export function createApp(container: Container): App {
     desktopHandler(container, upgradeWebSocket, controllers),
   );
 
-  // Inngest calls in here to run agent steps. Requests are signed in
-  // production (INNGEST_SIGNING_KEY); the dev server is local only.
+  // Inngest calls in here to run agent steps. Outside dev mode every request
+  // must be signed (INNGEST_SIGNING_KEY); dev mode, which checks nothing, is
+  // refused in production (packages/config) and the dev server is local only.
   const inngest = serveInngest({
     client: container.inngest,
     functions: container.functions,

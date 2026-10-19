@@ -42,7 +42,7 @@ It reads outside content | a web page, an email, a document, an app's output: th
 
 ## Address provenance
 
-In a tainted run, opening an address counts as outbound unless the run was given it. `browser.open`, `web.read_url` and any tool that opens an address run freely only for addresses from the conversation or from the run's own tool results. An address the agent built itself (a page can ask for `evil.example/?email=…`) waits for a person. Addresses in a chat record written by a tainted run don't count as given.
+In a tainted run, opening an address counts as outbound unless the run was given it. `browser.open`, `web.read_url` and any tool that opens an address run freely only for addresses from the conversation or from the run's own tool results. An address the agent built itself (a page can ask for `evil.example/?email=…` or `…#email=…`) waits for a person, even after it saved the address to a file and read it back. Only `http` and `https` addresses open at all. Addresses in a chat record written by a tainted run don't count as given.
 
 ## Proactive checks
 

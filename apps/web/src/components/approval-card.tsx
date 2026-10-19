@@ -2,7 +2,7 @@ import { useDecideApproval } from "@ofa/client";
 import type { Agent, Approval } from "@ofa/contracts";
 import { Check, CheckCheck, Info, ShieldAlert, X } from "lucide-react";
 import { useId, useMemo, useState } from "react";
-import { approvalFields, approveLabel, changedText, expiresIn } from "@/lib/approvals";
+import { approvalFields, approveLabel, changedText, expiresIn, visibleText } from "@/lib/approvals";
 import { shortTime } from "@/lib/format";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -93,7 +93,7 @@ export function ApprovalCard({
       <div className="flex flex-col gap-3 px-4 py-3.5">
         {rest.length > 0 && (
           <pre className="max-h-40 overflow-auto rounded-[10px] bg-background/70 px-3 py-2 font-mono text-[12.5px] whitespace-pre-wrap">
-            {rest.join("\n")}
+            {visibleText(rest.join("\n"))}
           </pre>
         )}
         {shown.length > 0 && (
@@ -101,8 +101,12 @@ export function ApprovalCard({
             {shown.map((field) => (
               <div key={field.name} className="contents">
                 <dt className="text-muted-foreground">{field.label}</dt>
-                <dd className="line-clamp-4 break-words whitespace-pre-wrap">
-                  {field.value || <span className="text-muted-foreground">(empty)</span>}
+                <dd className="max-h-60 overflow-auto font-mono text-[12.5px] break-words whitespace-pre-wrap">
+                  {field.value ? (
+                    visibleText(field.value)
+                  ) : (
+                    <span className="text-muted-foreground">(empty)</span>
+                  )}
                 </dd>
               </div>
             ))}

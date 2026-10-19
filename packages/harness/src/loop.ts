@@ -1,6 +1,7 @@
 import { INNGEST_EVENTS, type DelegationStatus, type RunStopReason } from "@ofa/contracts";
 import {
   APPROVAL_TIMEOUT_MS,
+  givenKeys,
   toolkitToolName,
   urlKey,
   urlsIn,
@@ -353,6 +354,8 @@ export async function runAgent(
   let hook: RunHookContext | null = null;
   /** Addresses the run was given, in `urlKey` form (filled in as the run goes). */
   const knownUrls = new Set<string>();
+  /** Addresses the agent wrote into its own calls before they were given: never given later. */
+  const authoredUrls = new Set<string>();
   /**
    * What each handoff in this run answered, by handle and name, so a later
    * brief can carry it in full (`include_results_from`, TC.09). Rebuilt on
@@ -587,7 +590,10 @@ export async function runAgent(
     // Addresses the run was given (§10.3): in the conversation, and in what
     // its tools return. In a tainted run, opening any other one needs a person.
     const learnUrls = (text: string) => {
-      for (const url of urlsIn(text)) knownUrls.add(urlKey(url));
+      for (const url of urlsIn(text)) {
+        if (authoredUrls.has(urlKey(url))) continue;
+        for (const k of givenKeys(url)) knownUrls.add(k);
+      }
     };
     for (const message of context.history) {
       // A brief or message was written by another model. If that run had read
@@ -743,7 +749,9 @@ export async function runAgent(
         if (compacted) {
           summary = compacted.summary;
           recordChanged = true;
-          learnUrls(compacted.summary);
+          // The summary is the model's own text: every address it should
+          // carry was learned when it first appeared (ADR-0027).
+          if (!tainted) learnUrls(compacted.summary);
           turns = turns.slice(compacted.replaced);
           usage = addUsage(usage, compacted, { model: 1 });
           assembled = assembleContext(
@@ -851,6 +859,13 @@ export async function runAgent(
         const call = withLoadHint(offered, tools);
         /** The call as it ran: with the person's changes, if they made any. */
         let ran: ToolCallTurn = call;
+        // An address the agent writes into a call before it was given is its
+        // own (ADR-0027): reading it back later (from a file it wrote) must
+        // not make it given.
+        for (const url of urlsIn(JSON.stringify(call.args ?? {}))) {
+          const k = urlKey(url);
+          if (!knownUrls.has(k)) authoredUrls.add(k);
+        }
         // The same search again in this run gets its earlier result (ADR-0045):
         // nothing runs, so there is no new call to check or count.
         const key = call.name === "web.search" && !call.invalid ? searchKey(call.args) : null;
