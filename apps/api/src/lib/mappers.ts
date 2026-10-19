@@ -13,6 +13,7 @@ import {
   type Skill,
   type Thread,
   type ThreadSummary,
+  type Upload,
 } from "@ofa/contracts";
 import type {
   AgentWithGrants,
@@ -26,6 +27,7 @@ import type {
   SkillRow,
   ThreadSummaryRow,
   ThreadWithMembers,
+  UploadRow,
 } from "@ofa/db";
 
 // Database rows → API shapes from `@ofa/contracts`. The client validates
@@ -201,6 +203,17 @@ export function toEpisode(row: EpisodeRow): Episode {
     summary: row.summary,
     outcome: row.outcome,
     tainted: row.tainted,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+export function toUpload(row: UploadRow): Upload {
+  return {
+    id: row.id,
+    threadId: row.threadId,
+    name: row.name,
+    mimeType: row.mimeType,
+    size: row.size,
     createdAt: row.createdAt.toISOString(),
   };
 }

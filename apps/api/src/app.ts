@@ -7,7 +7,7 @@ import type { Container } from "./container";
 import { toHttpError } from "./lib/errors";
 import { rateLimit } from "./lib/rate-limit";
 import { clientIp } from "./lib/request";
-import { hostCheck, originCheck } from "./middleware/perimeter";
+import { hostCheck, isUploadRequest, originCheck } from "./middleware/perimeter";
 import { requestContext } from "./middleware/request-context";
 import { requireSession, requireTenant } from "./middleware/session";
 import { agentFileRoutes } from "./routes/agent-files";
@@ -16,6 +16,7 @@ import { approvalRoutes } from "./routes/approvals";
 import { connectionCallbackRoutes, mcpServerRoutes } from "./routes/mcp-servers";
 import { policyRuleRoutes } from "./routes/policy-rules";
 import { artifactRoutes } from "./routes/artifacts";
+import { uploadRoutes } from "./routes/uploads";
 import { healthRoutes } from "./routes/health";
 import { loginRoutes } from "./routes/logins";
 import { memoryRoutes } from "./routes/memories";
@@ -80,7 +81,11 @@ export function createApp(container: Container): App {
   );
 
   // ── API ──────────────────────────────────────────────────────────────────
-  app.use("/api/*", bodyLimit({ maxSize: 1024 * 1024 }));
+  // JSON bodies stay small; a file upload streams to storage under its own limit (EN.09).
+  const smallBodies = bodyLimit({ maxSize: 1024 * 1024 });
+  app.use("/api/*", (c, next) =>
+    isUploadRequest(c.req.method, c.req.path) ? next() : smallBodies(c, next),
+  );
   app.use("/api/*", async (c, next) => {
     await next();
     c.header("Cache-Control", "no-store");
@@ -106,6 +111,7 @@ export function createApp(container: Container): App {
   app.route("/api/connections", connectionCallbackRoutes(container));
   app.route("/api/memories", memoryRoutes(container));
   app.route("/api/artifacts", artifactRoutes(container));
+  app.route("/api/uploads", uploadRoutes(container));
   app.route("/api/logins", loginRoutes(container));
   app.route("/api/settings", settingsRoutes(container));
   app.route("/api/routines", routineRoutes(container));

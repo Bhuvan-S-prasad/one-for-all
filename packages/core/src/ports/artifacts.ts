@@ -37,8 +37,14 @@ export interface ArtifactInput {
   readonly kind: ArtifactKind;
   readonly name: string;
   readonly mimeType: string;
-  readonly content: Uint8Array | string;
+  /** The bytes, or a stream of exactly `size` bytes for large files (ADR-0047). */
+  readonly content: Uint8Array | string | ArtifactStream;
   readonly untrusted: boolean;
+}
+
+export interface ArtifactStream {
+  readonly body: AsyncIterable<Uint8Array>;
+  readonly size: number;
 }
 
 export interface ArtifactStore {

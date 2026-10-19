@@ -28,6 +28,7 @@ export const TENANT_TABLES = [
   "secret",
   "audit_log",
   "artifact",
+  "upload",
   "approval",
   "mcp_server",
   "connection",

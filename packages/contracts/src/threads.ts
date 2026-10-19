@@ -83,10 +83,34 @@ export const messageSchema = z.object({
 });
 export type Message = z.infer<typeof messageSchema>;
 
-export const sendMessageRequestSchema = z.object({
-  content: z.string().trim().min(1, "Write a message").max(MAX_MESSAGE_LENGTH),
+/** Files attached to one message at most (EN.09). */
+export const MAX_UPLOADS_PER_MESSAGE = 10;
+
+export const sendMessageRequestSchema = z
+  .object({
+    content: z.string().trim().max(MAX_MESSAGE_LENGTH).default(""),
+    /** Files uploaded to this chat first (`POST /api/threads/:id/uploads`), sent with the message. */
+    uploads: z.array(idSchema).max(MAX_UPLOADS_PER_MESSAGE).default([]),
+  })
+  .refine((m) => m.content.length > 0 || m.uploads.length > 0, {
+    message: "Write a message",
+    path: ["content"],
+  });
+export type SendMessageRequest = z.input<typeof sendMessageRequestSchema>;
+
+/** A file a person attached to a chat (EN.09). */
+export const uploadSchema = z.object({
+  id: idSchema,
+  threadId: idSchema,
+  name: z.string(),
+  mimeType: z.string(),
+  size: z.number().int().nonnegative(),
+  createdAt: timestampSchema,
 });
-export type SendMessageRequest = z.infer<typeof sendMessageRequestSchema>;
+export type Upload = z.infer<typeof uploadSchema>;
+
+/** Largest file a person can attach: 2 GB with an object store, else 10 MB (ADR-0047). */
+export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024 - 1;
 
 /** The stored message and the run it started (null when no agent answers). */
 export const sendMessageResponseSchema = z.object({

@@ -14,7 +14,7 @@ import {
 } from "@ofa/core";
 import { and, asc, eq, inArray, isNotNull } from "drizzle-orm";
 import type { Database } from "../client";
-import { artifact } from "../schema/index";
+import { artifact, upload } from "../schema/index";
 import { withTenant } from "../tenant";
 
 // The artifact store (M3.06). Small content lives in a bytea column; with an
@@ -166,17 +166,24 @@ export function createArtifactStore(db: Database, blobs?: BlobStore | null): Art
 }
 
 /**
- * Of the given object-store keys, those an artifact row still points at
- * (owner connection: the sweep looks across workspaces, ADR-0047).
+ * Of the given object-store keys, those an artifact or an upload still points
+ * at (owner connection: the sweep looks across workspaces, ADR-0047).
  */
 export async function referencedBlobKeys(
   ownerDb: Database,
   keys: readonly string[],
 ): Promise<Set<string>> {
   if (keys.length === 0) return new Set();
-  const rows = await ownerDb
-    .select({ key: artifact.blobKey })
-    .from(artifact)
-    .where(and(isNotNull(artifact.blobKey), inArray(artifact.blobKey, [...keys])));
-  return new Set(rows.flatMap((r) => (r.key ? [r.key] : [])));
+  const list = [...keys];
+  const [artifacts, uploads] = await Promise.all([
+    ownerDb
+      .select({ key: artifact.blobKey })
+      .from(artifact)
+      .where(and(isNotNull(artifact.blobKey), inArray(artifact.blobKey, list))),
+    ownerDb
+      .select({ key: upload.blobKey })
+      .from(upload)
+      .where(and(isNotNull(upload.blobKey), inArray(upload.blobKey, list))),
+  ]);
+  return new Set([...artifacts, ...uploads].flatMap((r) => (r.key ? [r.key] : [])));
 }

@@ -48,3 +48,8 @@ export interface BlobSweeper {
 
 /** A blob younger than this is never swept: its row may still be on the way. */
 export const BLOB_SWEEP_GRACE_MS = 60 * 60 * 1000;
+
+/** Where a file a person attached to a chat keeps its bytes (EN.09). */
+export function uploadBlobKey(workspaceId: string, uploadId: string): string {
+  return `w/${workspaceId}/u/${uploadId}`;
+}

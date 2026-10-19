@@ -181,3 +181,13 @@ export {
   type Tx,
 } from "./tenant";
 export { prepareTestDatabase, withDatabaseName, type TestDatabase } from "./testing";
+export {
+  attachmentLine,
+  attachUploads,
+  createUpload,
+  formatBytes,
+  getUpload,
+  openUpload,
+  sendableUploads,
+  type UploadRow,
+} from "./repos/uploads";
