@@ -2,7 +2,7 @@
 // (ADR-0049), so a computer needs only ffmpeg and the Python packages, not a
 // copy of the engine. Bump SCRIPTS_VERSION when a script changes.
 
-export const SCRIPTS_VERSION = 2;
+export const SCRIPTS_VERSION = 3;
 
 /**
  * Beats, downbeats, energy per beat and sections by energy. Beat This! when
@@ -23,6 +23,9 @@ def smooth(values, width):
 
 def main():
     src, out = sys.argv[1], sys.argv[2]
+    # The song's real tempo, when the caller knows it: trackers often lock onto 2/3 or
+    # 3/2 of it (a 150 BPM song read as 99), which puts every cut off the real beat.
+    hint = float(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] else None
     ffmpeg = os.environ.get("OFA_VIDEO_FFMPEG", "ffmpeg")
     with tempfile.TemporaryDirectory() as tmp:
         wav = os.path.join(tmp, "audio.wav")
@@ -44,7 +47,8 @@ def main():
     hop = 512
     onset = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop)
     if beats is None:
-        _, frames = librosa.beat.beat_track(onset_envelope=onset, sr=sr, hop_length=hop)
+        _, frames = librosa.beat.beat_track(onset_envelope=onset, sr=sr, hop_length=hop, bpm=hint)
+        tracker = "librosa" if hint is None else "librosa, tempo given"
         beats = [float(t) for t in librosa.frames_to_time(frames, sr=sr, hop_length=hop)]
     beats = sorted(t for t in beats if 0 <= t < duration)
     rms = librosa.feature.rms(y=y, hop_length=hop)[0]

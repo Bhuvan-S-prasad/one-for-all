@@ -91,9 +91,15 @@ export function createApp(container: Container): App {
 
   // ── API ──────────────────────────────────────────────────────────────────
   // JSON bodies stay small; a file upload streams to storage under its own limit (EN.09).
+  // Inngest is exempt: it posts a run's whole state with every step (contact
+  // sheets, file contents), which passes 1 MB in a long run, and a refused step
+  // fails the run (found when an editor run died on its first image). Its
+  // requests are signed with the signing key wherever one is set.
   const smallBodies = bodyLimit({ maxSize: 1024 * 1024 });
   app.use("/api/*", (c, next) =>
-    isUploadRequest(c.req.method, c.req.path) ? next() : smallBodies(c, next),
+    isUploadRequest(c.req.method, c.req.path) || c.req.path === "/api/inngest"
+      ? next()
+      : smallBodies(c, next),
   );
   app.use("/api/*", async (c, next) => {
     await next();

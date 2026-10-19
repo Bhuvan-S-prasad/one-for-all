@@ -53,7 +53,7 @@ export async function handleMcpMessage(
         tools: options.tools.map((t) => ({
           name: t.name,
           description: t.description,
-          inputSchema: z.toJSONSchema(t.input, { target: "draft-7", io: "input" }),
+          inputSchema: z.toJSONSchema(t.input, { target: "draft-2020-12", io: "input" }),
           annotations: { readOnlyHint: t.readOnly, destructiveHint: false },
         })),
       });

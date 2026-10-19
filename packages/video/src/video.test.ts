@@ -319,6 +319,9 @@ describe("the MCP front door", () => {
       "styles",
     ]);
     expect(list.result.tools.every((t) => t.inputSchema.type === "object")).toBe(true);
+    // Anthropic accepts only JSON Schema 2020-12: no draft-7 tuples (`items: [..]`).
+    expect(JSON.stringify(list.result.tools)).not.toMatch(/"items":\[/);
+    expect(JSON.stringify(list.result.tools)).toContain("prefixItems");
     const styles = await handleMcpMessage(
       {
         jsonrpc: "2.0",

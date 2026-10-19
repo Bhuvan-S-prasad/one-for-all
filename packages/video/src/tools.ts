@@ -31,6 +31,17 @@ export interface VideoTool<S extends z.ZodType = z.ZodType> {
 
 const define = <S extends z.ZodType>(tool: VideoTool<S>) => tool;
 
+/** A song's real tempo, when the person or its page says so. */
+const bpmArg = z
+  .number()
+  .min(40)
+  .max(240)
+  .optional()
+  .describe(
+    "The song's real tempo in BPM if you know it (from its page); give the same value to every tool that takes the song. Trackers sometimes read 150 BPM as 99.",
+  );
+const bpmOpts = (bpm: number | undefined) => (bpm === undefined ? {} : { bpm });
+
 const path = z.string().min(1).max(1_000);
 const s = (n: number) => n.toFixed(2);
 
@@ -97,14 +108,17 @@ export function videoTools(read: (path: string) => Promise<string>): VideoTool[]
       name: "music",
       description:
         "Measure a song (or any file's sound): tempo, beats, downbeats, and sections by energy (low, mid, high). Cutting to music always starts here; plan_beats reads the result by the same path.",
-      input: z.object({ path: path.describe("The song or a file with sound") }),
+      input: z.object({
+        path: path.describe("The song or a file with sound"),
+        bpm: bpmArg,
+      }),
       readOnly: true,
       timeoutMs: 15 * 60_000,
-      async run(engine, { path: p }) {
-        const map = await engine.music(p);
+      async run(engine, { path: p, bpm }) {
+        const map = await engine.music(p, bpmOpts(bpm));
         const sections = map.sections.map((x) => `${s(x.start)}–${s(x.end)} ${x.level}`).join("; ");
         return {
-          text: `${p}: ${map.tempo.toFixed(1)} BPM, ${s(map.duration)} s, ${map.beats.length} beats, ${map.downbeats.length} bars (${map.tracker}). Sections: ${sections}. First downbeats: ${map.downbeats
+          text: `${p}: ${map.tempo.toFixed(1)} BPM, ${s(map.duration)} s, ${map.beats.length} beats, ${map.downbeats.length} bars (${map.tracker}). If you know the song's real tempo and it differs, run this again with bpm (trackers often read a 150 BPM song as 99). Sections: ${sections}. First downbeats: ${map.downbeats
             .slice(0, 8)
             .map(s)
             .join(", ")}.`,
@@ -161,11 +175,12 @@ export function videoTools(read: (path: string) => Promise<string>): VideoTool[]
         fps: z.number().int().min(12).max(60).default(30),
         from: z.number().min(0).optional().describe("Start in the song, seconds"),
         to: z.number().min(0).optional().describe("End in the song, seconds"),
+        bpm: bpmArg,
       }),
       readOnly: true,
       timeoutMs: 15 * 60_000,
       async run(engine, args) {
-        const map = await engine.music(args.music);
+        const map = await engine.music(args.music, bpmOpts(args.bpm));
         const slots = engine.plan(map, args.style, {
           fps: args.fps,
           ...(args.from !== undefined ? { from: args.from } : {}),
@@ -194,6 +209,7 @@ export function videoTools(read: (path: string) => Promise<string>): VideoTool[]
         "Build the whole timeline for a cut to a song, in one call, and save it as a file: slots on the beats for the style, filled from the sources' shots (the strongest on the drop and the hits, calm shots in calm sections, each started just before its motion peak, no shot twice in a row), with the style's effects, ramps and grade. Then read the summary, and render with timeline_file. Use this instead of writing the timeline by hand, which is too long to write. Run video.scan on the sources first if you want to choose them.",
       input: z.object({
         music: path.describe("The song"),
+        bpm: bpmArg,
         sources: z
           .array(path)
           .min(1)
@@ -223,7 +239,7 @@ export function videoTools(read: (path: string) => Promise<string>): VideoTool[]
       timeoutMs: 30 * 60_000,
       async run(engine, args) {
         if (args.to <= args.from) throw new Error("to must be after from");
-        const map = await engine.music(args.music);
+        const map = await engine.music(args.music, bpmOpts(args.bpm));
         const slots = engine.plan(map, args.style, { fps: args.fps, from: args.from, to: args.to });
         const moments = [];
         for (const src of args.sources) {
@@ -306,12 +322,13 @@ export function videoTools(read: (path: string) => Promise<string>): VideoTool[]
         ...timelineArgs,
         output: path.describe("The rendered .mp4"),
         music: path.optional().describe("The song, to check cuts against its beats"),
+        bpm: bpmArg,
       }),
       readOnly: true,
       timeoutMs: 30 * 60_000,
       async run(engine, args) {
         const timeline = await timelineOf(args, read);
-        const map = args.music ? await engine.music(args.music) : undefined;
+        const map = args.music ? await engine.music(args.music, bpmOpts(args.bpm)) : undefined;
         const r = await engine.verify(timeline, args.output, map ? { music: map } : {});
         const offsets = r.cuts.beatOffsets;
         const worst = offsets?.length ? Math.max(...offsets.map(Math.abs)) : null;

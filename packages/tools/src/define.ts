@@ -218,7 +218,12 @@ export function defineJsonSchemaTool(
 
 export function toDescriptor(tool: ToolDefinition<never>): ToolDescriptor {
   const { $schema: _ignored, ...schema } = (tool.inputSchema ??
-    z.toJSONSchema(tool.input as z.ZodType, { target: "draft-7" })) as Record<string, unknown>;
+    // 2020-12, which Anthropic requires (draft-7 writes a fixed-length pair as
+    // `items: [..]`, which it rejects: the editor failed before its first model call).
+    z.toJSONSchema(tool.input as z.ZodType, { target: "draft-2020-12" })) as Record<
+    string,
+    unknown
+  >;
   return {
     name: tool.name,
     description: tool.description,

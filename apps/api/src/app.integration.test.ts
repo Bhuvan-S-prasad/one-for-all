@@ -57,6 +57,26 @@ describe.skipIf(!hasDb)("API (integration)", () => {
     expect(await res.json()).toMatchObject({ status: "ok", checks: { database: "ok" } });
   });
 
+  it("keeps JSON bodies small, except for Inngest, whose steps carry a run's whole state", async () => {
+    const big = JSON.stringify({ filler: "x".repeat(1_500_000) });
+    const send = (path: string) =>
+      app.request(url(path), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin,
+          "content-length": String(big.length),
+        },
+        body: big,
+      });
+    const limited = `{"error":{"code":"bad_request","message":"bad_request"}}`;
+    const refused = await send("/api/session");
+    expect(refused.status).toBe(400);
+    expect(await refused.text()).toBe(limited);
+    // Whatever Inngest's own handler says about this body, it isn't our size limit.
+    expect(await (await send("/api/inngest")).text()).not.toBe(limited);
+  });
+
   it("needs setup on a fresh install", async () => {
     const res = await app.request(url("/api/setup"));
     expect(setupStatusSchema.parse(await res.json())).toEqual({ needsSetup: true });

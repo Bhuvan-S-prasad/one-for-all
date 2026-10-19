@@ -226,14 +226,15 @@ export function createVideoEngine(options: VideoEngineOptions) {
     },
 
     /** Beats, downbeats, energy and sections of a song (or any file's sound). */
-    async music(path: string): Promise<MusicMap> {
+    /** Beats and sections of a song. `bpm`: its real tempo, when known, so the tracker can't lock onto 2/3 of it. */
+    async music(path: string, opts: { readonly bpm?: number } = {}): Promise<MusicMap> {
       const src = await resolve(path);
       const { music } = await scripts();
-      const out = `${await work()}/analysis/music-${hash([src, await stamp(src), SCRIPTS_VERSION])}.json`;
+      const out = `${await work()}/analysis/music-${hash([src, await stamp(src), opts.bpm ?? null, SCRIPTS_VERSION])}.json`;
       await mkdir(`${await work()}/analysis`);
       if (!(await exists(out)))
         await exec(
-          [await python(), music, src, out],
+          [await python(), music, src, out, opts.bpm === undefined ? "" : String(opts.bpm)],
           15 * 60_000,
           `Analysing the music in ${path}`,
         );
