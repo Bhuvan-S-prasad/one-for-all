@@ -44,6 +44,29 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  # Object store for large artifacts (ADR-0047): S3 on 127.0.0.1:3900, admin
+  # API on 127.0.0.1:3903. Not on the sandbox network. The app sets up its
+  # layout, key and bucket on start, with the dev defaults below.
+  garage:
+    image: dxflrs/garage:v2.4.1
+    restart: unless-stopped
+    environment:
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:-0d0e0f0a0b0c0d0e0f0a0b0c0d0e0f0a0b0c0d0e0f0a0b0c0d0e0f0a0b0c0d0e}
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN:-ofa-garage-dev-admin-token}
+    volumes:
+      - ./garage/garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+    ports:
+      - "127.0.0.1:${GARAGE_S3_PORT:-3900}:3900"
+      - "127.0.0.1:${GARAGE_ADMIN_PORT:-3903}:3903"
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
   # Web search for agents (web.search). JSON API at http://127.0.0.1:8888.
   searxng:
     image: searxng/searxng:2026.9.25-12f8b6515
@@ -124,5 +147,7 @@ networks:
 
 volumes:
   postgres-data:
+  garage-meta:
+  garage-data:
   sandbox-home:
   sandbox-workspace:

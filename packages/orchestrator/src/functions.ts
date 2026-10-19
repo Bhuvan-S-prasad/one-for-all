@@ -10,6 +10,7 @@ import {
 import {
   asId,
   type ApprovalStore,
+  type BlobSweeper,
   type ChildRunRequest,
   type ConsolidationResult,
   type LLMGateway,
@@ -51,7 +52,12 @@ export interface OrchestratorDeps {
   readonly schedules?: ScheduleRunner;
   /** Nightly memory consolidation (M5.09). */
   readonly memory?: MemoryMaintenance;
+  /** Removes blobs no artifact points at any more (ADR-0047); absent without an object store. */
+  readonly blobSweep?: BlobSweeper;
 }
+
+/** Hourly, away from the other hourly work. */
+export const BLOB_SWEEP_CRON = "45 * * * *";
 
 /** Hourly: each workspace is consolidated when it is 3 at night there. */
 export const MEMORY_CONSOLIDATION_CRON = "15 * * * *";
@@ -372,6 +378,7 @@ export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
 
   const functions: InngestFunction.Any[] = [agentRun, agentRunCancelled, agentLearn];
   if (deps.tokenRefresh) functions.push(tokenRefreshFunction(inngest, deps.tokenRefresh));
+  if (deps.blobSweep) functions.push(blobSweepFunction(inngest, deps.blobSweep));
   if (deps.routines) functions.push(routineTickFunction(inngest, deps.routines));
   if (deps.schedules) functions.push(scheduleFireFunction(inngest, deps.schedules));
   if (deps.memory) {
@@ -556,6 +563,20 @@ function scheduleFireFunction(inngest: Inngest.Any, schedules: ScheduleRunner) {
  * sign-in is its own step: one provider that is down doesn't hold up the rest,
  * and it is tried again at the next tick.
  */
+/** The object store's orphan sweep (ADR-0047): one step, one at a time. */
+function blobSweepFunction(inngest: Inngest.Any, sweeper: BlobSweeper) {
+  return inngest.createFunction(
+    {
+      id: "blob-sweep",
+      name: "Remove files no artifact points at",
+      triggers: [{ cron: BLOB_SWEEP_CRON }],
+      concurrency: [{ limit: 1 }],
+      retries: 1,
+    },
+    async ({ step }) => step.run("sweep", () => sweeper.sweep(new Date())),
+  );
+}
+
 function tokenRefreshFunction(inngest: Inngest.Any, refresher: TokenRefresher) {
   return inngest.createFunction(
     {

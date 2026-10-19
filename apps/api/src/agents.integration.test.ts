@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { createServer, type AddressInfo } from "node:net";
 import { serve } from "@hono/node-server";
 import { loadConfig } from "@ofa/config";
@@ -26,7 +26,14 @@ import {
   type RunCancelledEvent,
 } from "@ofa/contracts";
 import { asId, type AgentId, type RunId, type TenantContext } from "@ofa/core";
-import { insertMemory, loadRootEnv, withDatabaseName } from "@ofa/db";
+import { sweepOrphans } from "@ofa/blobs";
+import {
+  createDatabase,
+  insertMemory,
+  loadRootEnv,
+  referencedBlobKeys,
+  withDatabaseName,
+} from "@ofa/db";
 import { createMemoryEventBus } from "@ofa/events";
 import type { RunDispatcher } from "@ofa/orchestrator";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -67,6 +74,15 @@ describe.skipIf(!hasDb)("M2 API (integration)", async () => {
     // A throwaway vault key, and no environment key, so Settings is predictable.
     vault: { ...base.vault, key: randomBytes(32).toString("base64") },
     llm: { ...base.llm, apiKey: undefined },
+    // The dev stack's Garage (`pnpm infra:up`), with its dev credentials (ADR-0047).
+    blobs: base.blobs ?? {
+      endpoint: "http://127.0.0.1:3900",
+      bucket: "ofa-test-api",
+      region: "garage",
+      accessKeyId: "GK0a1b2c3d4e5f60718293a4b5",
+      secretAccessKey: "d".repeat(64),
+      garage: { adminUrl: "http://127.0.0.1:3903", adminToken: "ofa-garage-dev-admin-token" },
+    },
   };
 
   const started: MessageReceivedEvent[] = [];
@@ -103,7 +119,8 @@ describe.skipIf(!hasDb)("M2 API (integration)", async () => {
       headers: { cookie, origin, "content-type": "application/json" },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-  const get = (path: string) => app.request(url(path), { headers: { cookie } });
+  const get = (path: string, headers: Record<string, string> = {}) =>
+    app.request(url(path), { headers: { cookie, ...headers } });
 
   const sage: CreateAgentInput = {
     name: "Sage",
@@ -411,6 +428,61 @@ describe.skipIf(!hasDb)("M2 API (integration)", async () => {
     expect(content.headers.get("x-content-type-options")).toBe("nosniff");
     expect(await content.text()).toBe("<script>alert(1)</script>");
     expect((await get("/api/artifacts/00000000-0000-4000-8000-000000000000")).status).toBe(404);
+  });
+
+  it("keeps a large artifact in the object store and serves it by range", async () => {
+    // The dev stack's Garage (ADR-0047); the server sets it up on start.
+    expect(container.blobs).not.toBeNull();
+    await container.blobs!.ready();
+    const runCtx = { ...tenant(), agentId: asId<AgentId>(agentId), runId: asId<RunId>(retryRunId) };
+    const bytes = new Uint8Array(2 * 1024 * 1024).map((_, i) => i % 251);
+    const kept = await container.artifacts.put(runCtx, {
+      key: "big-1",
+      kind: "file",
+      name: "clip.mp4",
+      mimeType: "video/mp4",
+      content: bytes,
+      untrusted: false,
+    });
+    expect(kept.size).toBe(bytes.length);
+    // The bytes are in the store, under the workspace and the artifact.
+    const blobKey = `w/${tenant().workspaceId}/a/${kept.id}`;
+    expect((await container.blobs!.get(blobKey))?.totalSize).toBe(bytes.length);
+
+    const whole = await get(`/api/artifacts/${kept.id}/content`);
+    expect(whole.status).toBe(200);
+    expect(whole.headers.get("accept-ranges")).toBe("bytes");
+    expect(new Uint8Array(await whole.arrayBuffer())).toEqual(bytes);
+
+    const part = await get(`/api/artifacts/${kept.id}/content`, { range: "bytes=1000-1009" });
+    expect(part.status).toBe(206);
+    expect(part.headers.get("content-range")).toBe(`bytes 1000-1009/${bytes.length}`);
+    expect([...new Uint8Array(await part.arrayBuffer())]).toEqual([...bytes.slice(1000, 1010)]);
+    const tail = await get(`/api/artifacts/${kept.id}/content`, { range: "bytes=-4" });
+    expect([...new Uint8Array(await tail.arrayBuffer())]).toEqual([...bytes.slice(-4)]);
+    expect(
+      (await get(`/api/artifacts/${kept.id}/content`, { range: `bytes=${bytes.length}-` })).status,
+    ).toBe(416);
+
+    // The hourly sweep (after an hour's grace) removes a blob no row points
+    // at, and keeps the artifact's.
+    const stray = `w/${tenant().workspaceId}/a/${randomUUID()}`;
+    await container.blobs!.put(stray, new Uint8Array([1, 2, 3]), {
+      size: 3,
+      contentType: "application/octet-stream",
+    });
+    const owner = createDatabase(config.database.migrationUrl, { max: 1 });
+    try {
+      await sweepOrphans(
+        container.blobs!,
+        (keys) => referencedBlobKeys(owner.db, keys),
+        new Date(Date.now() + 2 * 60 * 60 * 1000),
+      );
+    } finally {
+      await owner.close();
+    }
+    expect(await container.blobs!.get(stray)).toBeNull();
+    expect((await container.blobs!.get(blobKey))?.totalSize).toBe(bytes.length);
   });
 
   it("lists waiting approvals, settles one once, and wakes the run", async () => {

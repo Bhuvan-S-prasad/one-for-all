@@ -104,7 +104,7 @@ Nine layers, each with one responsibility. A layer only calls the layers below i
 | **L6 Model gateway** | Provider adapters (one file each; OpenRouter first), model tiers, shared rate-limit queue, fallback chain with per-model circuit breakers, token and cost metering; requests with images go only to models that read them (a vision chain, then the tier's own, DT.10). | `packages/llm` | Bypass the queue, pick a model outside the workspace's tier mapping, or let provider details leak upward. |
 | **L7 Memory** | Semantic, episodic, procedural and prospective stores; recall; post-run extraction; nightly consolidation. | `packages/memory` | Accept writes that skip policy. |
 | **L8 Computer** | A light desktop per agent (ADR-0040): shell, files in `/workspace`, Python with a venv per agent (ADR-0042), Chromium over CDP with one profile per agent, desktop apps through the accessibility tree (ADR-0041), the whole screen streamed over VNC for watching and takeover. | `packages/sandbox`, `infra/docker/sandbox` | Touch the host file system or Docker socket, or reach domains outside the egress allowlist. |
-| **L9 Data & platform** | Postgres + pgvector with row-level security, credential vault, event bus, telemetry, validated config. | `packages/db`, `vault`, `events`, `telemetry`, `config` | Run a query without a `TenantContext`. |
+| **L9 Data & platform** | Postgres + pgvector with row-level security, credential vault, event bus, telemetry, validated config. | `packages/db`, `blobs`, `vault`, `events`, `telemetry`, `config` | Run a query without a `TenantContext`. |
 
 ---
 
@@ -121,6 +121,7 @@ All defined in `packages/core`. Adapters are chosen only in a composition root (
 | `PolicyEngine` | `evaluate(action, ctx)` → allow / approve / human / deny | Same | Same, plus org policies |
 | `CredentialVault` | Get, put, rotate, redact secrets | AES-256-GCM, key from OS keychain or env | KMS envelope encryption |
 | `MemoryStore` | Write, recall, consolidate | Postgres + pgvector | Same |
+| `BlobStore` | Put, get (streamed, by range), delete and list large file bytes; artifacts over 1 MB live here, their rows stay in Postgres (ADR-0047) | Garage (S3), internal network only | Any S3-compatible store (S3, R2) |
 | `EventBus` | Publish and subscribe | Postgres `LISTEN/NOTIFY` | Valkey pub/sub |
 | `Telemetry` | Spans and metrics | OpenTelemetry → local Phoenix, or off | OpenTelemetry → Langfuse or Grafana |
 
@@ -250,7 +251,7 @@ Every prompt is assembled from typed blocks, each with a token budget derived fr
 
 **Techniques**
 
-- **Artifacts over dumps.** Output longer than 12,000 characters is stored as an artifact (the `artifact` table; 10 MB at most); the context gets its start and a handle, `artifact://<id>`, which the agent reopens with `artifacts.read`, a platform tool every agent may use for its own artifacts. Files an agent writes are kept the same way and shown under its reply.
+- **Artifacts over dumps.** Output longer than 12,000 characters is stored as an artifact (the `artifact` table; bytes over 1 MB go to the object store, up to 2 GB, ADR-0047); the context gets its start and a handle, `artifact://<id>`, which the agent reopens with `artifacts.read`, a platform tool every agent may use for its own artifacts. Files an agent writes are kept the same way and shown under its reply.
 - **Structured compaction.** Older turns become sections: decisions made, facts learned, open items, artifacts produced. The result is the agent's private notes, placed in the task block, never a message in the conversation: a model once returned notes inserted as a user message as its answer. The notes count against the history budget.
 - **Read in chunks.** `web.read_url` returns 6,000 characters at a time and says how to read on (`from`), so a few long pages do not fill a small window.
 - **Scoped subagents.** Delegated work starts from a brief; parent transcripts never leak into a child's window.
@@ -521,6 +522,7 @@ All clients are thin: they render chat, approvals and activity, and every action
 | `inngest` | ~200 MB | Self-hosted durable execution engine and dashboard | Internal; dashboard via Tailscale |
 | `sandbox` | up to 1.5 GB (three desktops measured at 0.9–1.2 GB, DT.13) | Our slim image (ADR-0025): a light desktop and Chromium per agent on demand (at most three open, ADR-0040), shell, files, Python with a venv per agent (ADR-0042), each agent as its own user | Internal network only |
 | `egress` | ~30 MB | The sandbox's only exit: an allowlisting HTTP(S) proxy that never reaches private addresses; forwards the app to the sandbox service | Internal |
+| `garage` | ~10 MB idle | Object store for artifacts over 1 MB: footage, generated images and video, renders (ADR-0047); set up by the app on start | Internal |
 | `phoenix` (optional) | ~300 MB | Local trace viewer | Profile `observability` |
 | `ollama` (optional) | Model-dependent | Local models | Profile `local-models` |
 
@@ -528,7 +530,7 @@ Outbound connections: OpenRouter, MCP servers, allowlisted sites the sandbox vis
 
 Always-on hosting options for users: a spare Mac mini or laptop, a Raspberry Pi 5 (8 GB), or their own Oracle Cloud Always Free VM (2 OCPU / 12 GB ARM; all images must ship arm64).
 
-Backups: `infra/scripts/backup.sh` runs a nightly `pg_dump`.
+Backups: `infra/scripts/backup.sh` runs a nightly `pg_dump` and copies the Garage volume, since large artifacts live there (ADR-0047).
 
 ### 14.2 Cloud mode
 
@@ -658,6 +660,7 @@ one-for-all/
 │   ├── memory/                   stores, recall, extraction, consolidation
 │   ├── sandbox/                  docker + e2b adapters, CDP browser, page snapshots, screen and desktop streams
 │   ├── channels/                 web, telegram, slack, email adapters
+│   ├── blobs/                    BlobStore adapters: S3 (Garage and others), in-memory, Garage setup
 │   ├── vault/                    encryption, secret refs, redaction
 │   ├── events/                   event bus adapters + typed event catalog
 │   ├── telemetry/                OpenTelemetry setup and span helpers

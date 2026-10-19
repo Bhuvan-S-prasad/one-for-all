@@ -18,7 +18,7 @@ export {
   type AgentWrite,
 } from "./repos/agents";
 export { createApprovalStore } from "./repos/approvals";
-export { createArtifactStore } from "./repos/artifacts";
+export { createArtifactStore, referencedBlobKeys } from "./repos/artifacts";
 export { createConnectionStore, listConnectionsDueForRefresh } from "./repos/connections";
 export { recordAudit, type AuditEntry } from "./repos/audit";
 export {

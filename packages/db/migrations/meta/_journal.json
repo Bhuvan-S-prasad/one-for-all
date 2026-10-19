@@ -127,6 +127,13 @@
       "when": 1792303769589,
       "tag": "0017_thread_state",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1792390769952,
+      "tag": "0018_artifact_blobs",
+      "breakpoints": true
     }
   ]
 }

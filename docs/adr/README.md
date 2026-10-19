@@ -64,3 +64,4 @@ Each file records one significant decision: the context, what we chose, what we 
 | [0044](0044-team-roster-from-grants-coordinators-delegate.md) | The team roster is built from grants, and coordinators delegate first | Runtime | Accepted |
 | [0045](0045-a-chat-keeps-its-working-state.md) | A chat keeps each agent's working state across runs | Runtime | Accepted |
 | [0046](0046-public-site-and-docs-as-their-own-app.md) | The public site and docs are their own static app | Clients | Accepted |
+| [0047](0047-object-storage-for-media.md) | Large files go to object storage, Garage in self-host | Platform | Accepted |

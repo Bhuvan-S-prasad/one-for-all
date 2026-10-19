@@ -31,6 +31,19 @@ if (config.database.migrateOnStart) {
 
 if (container.vaultRotation) void finishVaultRotation(container.vaultRotation, config, logger);
 
+// The object store (ADR-0047): set Garage up and make sure of the bucket. The
+// app still starts without it; artifacts over 1 MB then fail until it is back.
+if (container.blobs) {
+  await container.blobs.ready().then(
+    () => logger.info("object store ready", { endpoint: config.blobs?.endpoint }),
+    (error: unknown) =>
+      logger.error("object store not ready: large files can't be kept until it is", {
+        endpoint: config.blobs?.endpoint,
+        error: error instanceof Error ? error.message : String(error),
+      }),
+  );
+}
+
 const app = createApp(container);
 const server = serve(
   { fetch: app.fetch, hostname: config.server.host, port: config.server.port },

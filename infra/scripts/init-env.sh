@@ -43,6 +43,13 @@ INNGEST_SIGNING_KEY=$(hex 32)
 
 SEARXNG_SECRET=$(hex 32)
 
+# The object store for large files (Garage, ADR-0047). The key ID is Garage's
+# format: GK and 24 hex digits.
+GARAGE_RPC_SECRET=$(hex 32)
+GARAGE_ADMIN_TOKEN=$(hex 32)
+GARAGE_S3_KEY_ID=GK$(hex 12)
+GARAGE_S3_SECRET=$(hex 32)
+
 # The app and the agents' computer share this; agents never see it.
 SANDBOX_TOKEN=$(hex 32)
 # Sites the agents' computer may reach, comma-separated (each covers its

@@ -80,6 +80,7 @@ function memoryArtifacts(sent: SentFile[]): ArtifactStore {
     },
     get: async (_c, id) => [...rows.values()].find((r) => r.id === id) ?? null,
     read: async () => null,
+    open: async () => null,
     listForRun: async (_c, runId) => [...rows.values()].filter((r) => r.runId === runId),
   };
 }

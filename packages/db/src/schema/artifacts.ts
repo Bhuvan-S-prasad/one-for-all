@@ -22,8 +22,8 @@ const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () =>
  * What a run produced that is too big for the context or worth keeping
  * (M3.06, ARCHITECTURE.md §7): long tool output the agent can reopen with
  * `artifact://<id>`, and files it wrote, which people can open from the chat.
- * Stored in Postgres in self-host; cloud mode can move content to object
- * storage behind the same `ArtifactStore` port.
+ * Small ones are stored in Postgres; content over 1 MB goes to the object
+ * store when one is set up (ADR-0047), and the row keeps its key.
  */
 export const artifact = pgTable(
   "artifact",
@@ -41,7 +41,10 @@ export const artifact = pgTable(
     size: integer("size").notNull(),
     /** The content came from outside the system (a page, a command's output). */
     untrusted: boolean("untrusted").notNull(),
-    content: bytea("content").notNull(),
+    /** The bytes, up to 1 MB when an object store is set up (else up to 10 MB)... */
+    content: bytea("content"),
+    /** ...or where they are in the object store (ADR-0047). Exactly one is set. */
+    blobKey: text("blob_key"),
     createdAt: createdAt(),
   },
   (t) => [
@@ -57,7 +60,11 @@ export const artifact = pgTable(
     }).onDelete("cascade"),
     unique("artifact_run_key_uq").on(t.runId, t.key),
     check("artifact_kind_ck", sql`${t.kind} in ('output', 'file')`),
-    check("artifact_size_ck", sql`${t.size} >= 0 and ${t.size} <= 10485760`),
+    check(
+      "artifact_size_ck",
+      sql`${t.size} >= 0 and (${t.blobKey} is not null or ${t.size} <= 10485760)`,
+    ),
+    check("artifact_bytes_ck", sql`(${t.content} is null) <> (${t.blobKey} is null)`),
     index("artifact_workspace_run_idx").on(t.workspaceId, t.runId),
   ],
 );

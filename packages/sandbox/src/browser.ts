@@ -177,12 +177,11 @@ export function createCdpBrowser(endpoint: () => Promise<string>): AgentBrowser 
   return {
     open: (url) =>
       withPage(async (page) => {
-        // Web pages only: Page.navigate runs a javascript: address in the open page.
-        if (!/^https?:\/\//i.test(url)) {
-          throw new SandboxError(
-            "navigation_failed",
-            `Couldn't open ${url}: only http and https pages open.`,
-          );
+        // Page.navigate runs a javascript: address inside the open page, with
+        // its cookies; never that. (Agents' browser.open takes http(s) only.)
+        // Browsers skip leading spaces and control characters in an address.
+        if (/^javascript:/i.test(url.replace(/^[\s\u0000-\u001f]+/, ""))) {
+          throw new SandboxError("navigation_failed", `Couldn't open ${url}: scripts don't open.`);
         }
         const loaded = page.cdp.next("Page.loadEventFired", {
           sessionId: page.session,

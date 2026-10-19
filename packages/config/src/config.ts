@@ -48,6 +48,16 @@ export interface Config {
   readonly search: { readonly searxngUrl: string | undefined };
   /** The agents' computer; null when this server has none. */
   readonly sandbox: { readonly url: string; readonly token: string } | null;
+  /** The object store (ADR-0047); null keeps every artifact in Postgres. */
+  readonly blobs: {
+    readonly endpoint: string;
+    readonly bucket: string;
+    readonly region: string;
+    readonly accessKeyId: string;
+    readonly secretAccessKey: string;
+    /** Set when the store is Garage and the app should set it up. */
+    readonly garage: { readonly adminUrl: string; readonly adminToken: string } | null;
+  } | null;
   readonly telemetry: { readonly otlpEndpoint: string | undefined };
   readonly inngest: {
     readonly dev: boolean;
@@ -152,6 +162,7 @@ export function loadConfig(source: Record<string, string | undefined> = process.
         env.SEARXNG_URL ?? (env.NODE_ENV === "development" ? "http://127.0.0.1:8888" : undefined),
     },
     sandbox: sandboxConfig(env),
+    blobs: blobsConfig(env),
     telemetry: { otlpEndpoint: env.OTEL_EXPORTER_OTLP_ENDPOINT },
     inngest: {
       dev: inngestDev(env),
@@ -178,6 +189,37 @@ function inngestDev(env: Env): boolean {
     throw new Error("INNGEST_DEV can't be on in production: Inngest's calls would not be signed");
   }
   return dev;
+}
+
+/**
+ * `pnpm infra:up` runs Garage for development on 127.0.0.1 with fixed dev
+ * credentials (as for the sandbox); elsewhere the endpoint and both keys
+ * must be set together, or none for no object store.
+ */
+function blobsConfig(env: Env): Config["blobs"] {
+  const dev = env.NODE_ENV === "development";
+  const endpoint = env.BLOB_S3_ENDPOINT ?? (dev ? "http://127.0.0.1:3900" : undefined);
+  if (!endpoint) return null;
+  const accessKeyId = env.BLOB_S3_ACCESS_KEY_ID ?? (dev ? "GK0a1b2c3d4e5f60718293a4b5" : undefined);
+  const secretAccessKey = env.BLOB_S3_SECRET_ACCESS_KEY ?? (dev ? "d".repeat(64) : undefined);
+  if (!accessKeyId || !secretAccessKey) {
+    throw new Error(
+      "BLOB_S3_ENDPOINT is set but BLOB_S3_ACCESS_KEY_ID or BLOB_S3_SECRET_ACCESS_KEY is not",
+    );
+  }
+  const adminUrl =
+    env.GARAGE_ADMIN_URL ?? (dev && !env.BLOB_S3_ENDPOINT ? "http://127.0.0.1:3903" : undefined);
+  const adminToken = env.GARAGE_ADMIN_TOKEN ?? (dev ? "ofa-garage-dev-admin-token" : undefined);
+  if (adminUrl && !adminToken)
+    throw new Error("GARAGE_ADMIN_URL is set but GARAGE_ADMIN_TOKEN is not");
+  return {
+    endpoint,
+    bucket: env.BLOB_S3_BUCKET,
+    region: env.BLOB_S3_REGION,
+    accessKeyId,
+    secretAccessKey,
+    garage: adminUrl && adminToken ? { adminUrl, adminToken } : null,
+  };
 }
 
 /**

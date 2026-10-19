@@ -10,6 +10,7 @@ export * from "./ports/memory";
 export * from "./ports/policy";
 export * from "./ports/runtime";
 export * from "./ports/artifacts";
+export * from "./ports/blobs";
 export * from "./ports/approvals";
 export * from "./ports/connections";
 export * from "./ports/sandbox";

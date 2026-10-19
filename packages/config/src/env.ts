@@ -83,6 +83,18 @@ export const envSchema = z
     SANDBOX_URL: z.url().optional(),
     /** Shared secret with the sandbox service. Never reaches agents. */
     SANDBOX_TOKEN: z.string().min(16, "SANDBOX_TOKEN must be at least 16 characters").optional(),
+    /**
+     * Object store for artifacts over 1 MB (ADR-0047): any S3-compatible
+     * endpoint. Unset (outside development): artifacts stay in Postgres, up to 10 MB.
+     */
+    BLOB_S3_ENDPOINT: z.url().optional(),
+    BLOB_S3_BUCKET: z.string().min(3).default("ofa-media"),
+    BLOB_S3_REGION: z.string().min(1).default("garage"),
+    BLOB_S3_ACCESS_KEY_ID: z.string().min(16).optional(),
+    BLOB_S3_SECRET_ACCESS_KEY: z.string().min(32).optional(),
+    /** Garage's admin API: when set, the app sets Garage up on start (layout, its key, the bucket). */
+    GARAGE_ADMIN_URL: z.url().optional(),
+    GARAGE_ADMIN_TOKEN: z.string().min(16).optional(),
     /** OTLP/HTTP endpoint for traces (e.g. a local Phoenix). Unset: traces are off (ADR-0019). */
     OTEL_EXPORTER_OTLP_ENDPOINT: z.url().optional(),
 

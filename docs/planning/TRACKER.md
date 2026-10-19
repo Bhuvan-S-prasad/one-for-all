@@ -27,7 +27,7 @@ The single place to see what is done, what is in progress and what comes next. A
 | | |
 |---|---|
 | **Current milestone** | Enhancements (before M6) |
-| **Next task** | EN.01 ADR: several providers and a model per agent |
+| **Next task** | EN.09 uploads and streaming files into and out of the agent's computer (then EN.01) |
 | **Blockers** | None. Dev services must be running (`pnpm infra:up`) for integration tests |
 | **Decisions pending** | License (see [ARCHITECTURE.md §19](../architecture/ARCHITECTURE.md#19-open-questions)); needed before first public push, not before M1 work |
 
@@ -47,7 +47,7 @@ The single place to see what is done, what is in progress and what comes next. A
 | [Desktop](#desktop) | Watch an agent work on its own desktop; it makes Word and Excel files | ✅ Done | 14 / 14 |
 | [Teams and continuity](#teams-and-continuity) | "Continue" continues; a coordinator routes by capability | ✅ Done | 11 / 11 |
 | [Site and docs](#site-and-docs) | A public landing page and docs for what is built | ✅ Done | 7 / 7 |
-| [Enhancements](#enhancements) | Your own model per agent; images and video; teams that discuss; email triggers | ⬜ Not started | 0 / 30 |
+| [Enhancements](#enhancements) | Your own model per agent; images and video; teams that discuss; email triggers | 🟨 In progress | 2 / 30 |
 | [M6 Everywhere](#m6-everywhere) | Approve from the phone; chat on Telegram and Slack | ⬜ Not started | 0 / 8 |
 | [M7 Hardening](#m7-hardening) | Evals gate CI; backups; E2B and cloud adapters | ⬜ Not started | 0 / 11 |
 
@@ -333,8 +333,8 @@ Stays where it is: the approval card (M4.09), the file card (M3.06) and the comp
 - [ ] EN.06 Re-run the tier spike and the evals on Claude and OpenAI models; set each provider's default tiers from the results — **Deps:** EN.04
 
 **Media storage**
-- [ ] EN.07 ADR: object storage for media. MinIO's community edition is archived (no images since 2025-10), so compare Garage, SeaweedFS and a plain volume; a `BlobStore` port in `@ofa/core` with an S3 adapter, chosen in `container.ts`; which artifacts move (over a size threshold), signed short-lived downloads through the API, backups, the ~3 GB and arm64 targets; amends ADR-0042
-- [ ] EN.08 The chosen store in `docker-compose.dev.yml` and the self-host bundle (internal network only, credentials from `init-env.sh`), the `BlobStore` S3 adapter, large artifacts written there with metadata in Postgres, streamed downloads, existing rows left as they are — **Deps:** EN.07
+- [x] EN.07 → ADR-0047: Garage (6 MiB idle, 99 MB image, arm64) over SeaweedFS (80 MiB) and RustFS (109 MiB), measured side by side; set up through its admin API in six calls, checked; ARCHITECTURE.md §4, §7, §14.1, §17 and L9; ADR-0042 amended. Original task: ADR: object storage for media. MinIO's community edition is archived (no images since 2025-10), so compare Garage, SeaweedFS and a plain volume; a `BlobStore` port in `@ofa/core` with an S3 adapter, chosen in `container.ts`; which artifacts move (over a size threshold), signed short-lived downloads through the API, backups, the ~3 GB and arm64 targets; amends ADR-0042
+- [x] EN.08 → `BlobStore` and `BlobSweeper` ports in core (streams as `AsyncIterable`, so core stays platform-free); `packages/blobs`: S3 adapter on `aws4fetch` (streamed uploads, ranged reads), in-memory store, `setUpGarage`, `sweepOrphans`; migration 0018 (`content` or `blob_key`, never both; 2 GB in the store); artifacts over 1 MB stored there; `GET /api/artifacts/:id/content` streams and serves `Range` (206/416); the hourly `blob-sweep` function (re-register Inngest); Garage in both Compose files, secrets from `init-env.sh`, `BLOB_S3_*`/`GARAGE_*` with dev defaults. Tests: blobs unit 2 and integration 3 against Garage, API integration (2 MB artifact in the store, ranges, sweep), config. Original task: The chosen store in `docker-compose.dev.yml` and the self-host bundle (internal network only, credentials from `init-env.sh`), the `BlobStore` S3 adapter, large artifacts written there with metadata in Postgres, streamed downloads, existing rows left as they are — **Deps:** EN.07
 - [ ] EN.09 Uploads from the web app: chunked upload of footage and images into a chat, stored as an artifact and copied into the agent's computer on request — **Deps:** EN.08
 
 **Images and video**
@@ -439,6 +439,12 @@ Stays where it is: the approval card (M4.09), the file card (M3.06) and the comp
 ## Session log
 
 Newest first. Keep entries short.
+
+### 2026-10-19 (session 26, media storage)
+- **Done:** CI fix: the consolidation test now expects the new fact to stay unverified (fix 5), and the sandbox's own `open` refuses only `javascript:` (its tests open `data:` pages; agents' `browser.open` stays http(s) only). Enhancements phase added; EN.07 (ADR-0047, Garage) and EN.08 (object store for artifacts over 1 MB).
+- **Checks:** unit tests in all 21 packages, all 7 integration suites (API 79, blobs 3 against the dev Garage), typecheck, lint (no errors), format; migration 0018 is on the dev database.
+- **Next:** `pnpm infra:up` once to start Garage if it isn't running; re-register Inngest for `blob-sweep`; EN.09.
+- **Open:** large uploads and `files.send` above 10 MB need streaming through the sandbox service (EN.09).
 
 ### 2026-10-19 (session 26, security)
 - **Done:** a full security audit (report kept out of git in `docs/security-audit/`) and its fixes: one private-address check for `egress.mjs` and `safeFetch` that judges IPv4 inside IPv6 by the IPv4 address; approval cards list every argument of a held call in full with padding shown; address provenance keeps the fragment and never counts an address the agent wrote itself as given; `browser.open`, screen navigation and site answers are http(s) only; consolidation's new facts stay unverified if it was shown an unverified fact; learning after a tainted run in the same chat stores unverified facts; the sandbox service refuses requests with an `Origin` header and takes `?token=` only on the `/cdp` WebSocket; Inngest dev mode is off once a signing key is set and refused in production; a scheduled task fires only as its owner. ADR-0025, 0027, 0030, 0037 and 0045 amended.

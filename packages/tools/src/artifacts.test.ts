@@ -63,6 +63,14 @@ function memoryArtifacts(): ArtifactStore & {
     async read(_c, id) {
       return rows.get(id)?.content ?? null;
     },
+    async open(_c, id) {
+      const content = rows.get(id)?.content;
+      if (!content) return null;
+      const body = (async function* () {
+        yield content;
+      })();
+      return { body, size: content.length, totalSize: content.length };
+    },
     async listForRun(_c, runId) {
       return [...rows.values()].filter((r) => r.runId === runId);
     },

@@ -2,12 +2,14 @@
 // Self-host and cloud differ only here. In self-host mode this one process
 // runs the API, the Inngest functions (agent runs) and the event bus.
 
+import { createS3BlobStore, setUpGarage, sweepOrphans } from "@ofa/blobs";
 import type { Config } from "@ofa/config";
 import { loginSecretNames } from "@ofa/core";
 import type {
   AgentDirectory,
   ApprovalStore,
   ArtifactStore,
+  BlobStore,
   ConnectionStore,
   CredentialVault,
   EventBus,
@@ -27,6 +29,7 @@ import {
   createConnectionStore,
   createPolicyRuleStore,
   createArtifactStore,
+  referencedBlobKeys,
   createDatabase,
   createChatRecordStore,
   createRunStore,
@@ -136,6 +139,8 @@ export interface Container {
   /** The agents' computer (M3); null when this server has none. */
   readonly sandbox: SandboxProvider | null;
   readonly artifacts: ArtifactStore;
+  /** The object store for large artifacts (ADR-0047); null when none is set up. */
+  readonly blobs: BlobStore | null;
   readonly approvals: ApprovalStore;
   /** MCP servers and people’s connections to them. */
   readonly connections: ConnectionStore;
@@ -294,6 +299,19 @@ function createOwnerAccess(config: Config, logger: Logger) {
   };
 }
 
+/** The S3 store, with Garage set up first when it is Garage (ADR-0047). */
+function createBlobStore(config: NonNullable<Config["blobs"]>): BlobStore {
+  const store = createS3BlobStore(config);
+  const { garage } = config;
+  return {
+    ...store,
+    async ready() {
+      if (garage) await setUpGarage({ ...garage, ...config });
+      await store.ready();
+    },
+  };
+}
+
 export function createContainer(config: Config, overrides: ContainerOverrides = {}): Container {
   // Every secret this process holds, so logs and traces never carry one
   // (hard rule 4): the server's own from config, and what the vault decrypts.
@@ -356,7 +374,9 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
   const memory = createPgMemoryStore(db);
   // The agents' computer: the Docker sandbox in self-host (ADR-0025).
   const sandbox = config.sandbox ? createDockerSandbox(config.sandbox) : null;
-  const artifacts = createArtifactStore(db);
+  // Artifacts over 1 MB go to the object store (ADR-0047); without one, Postgres keeps them.
+  const blobs = config.blobs ? createBlobStore(config.blobs) : null;
+  const artifacts = createArtifactStore(db, blobs);
   const approvals = createApprovalStore(db);
   const announceMessage = (workspaceId: string, threadId: string, messageId: string) =>
     publish(workspaceId, { kind: "message.created", threadId, messageId });
@@ -475,6 +495,25 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     routines,
     schedules: scheduler,
     memory: memoryMaintenance,
+    // Rows of every workspace are checked, so the owner connection (ADR-0047).
+    ...(blobs
+      ? {
+          blobSweep: {
+            sweep: (now: Date) =>
+              sweepOrphans(
+                blobs,
+                (keys) =>
+                  owner.use(
+                    "The object store sweep",
+                    (ownerDb) => referencedBlobKeys(ownerDb, keys),
+                    // Without the owner connection nothing counts as unused.
+                    new Set(keys),
+                  ),
+                now,
+              ),
+          },
+        }
+      : {}),
   });
 
   return {
@@ -494,6 +533,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     memory,
     sandbox,
     artifacts,
+    blobs,
     approvals,
     connections,
     mcp,
