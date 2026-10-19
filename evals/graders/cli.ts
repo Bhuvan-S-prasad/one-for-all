@@ -27,6 +27,7 @@ import { deskSuite } from "../suites/desk";
 import { operatorSuite } from "../suites/operator";
 import { researcherSuite } from "../suites/researcher";
 import { teamSuite } from "../suites/team";
+import { videoSuite } from "../suites/video";
 import { dockerComputer, type EvalComputer } from "./computer";
 import { runCases, type AttemptReport } from "./runner";
 import type { EvalCase } from "./types";
@@ -37,6 +38,7 @@ const ALL_CASES: readonly EvalCase[] = [
   ...teamSuite,
   ...continuitySuite,
   ...deskSuite,
+  ...videoSuite,
   ...injectionSuite,
 ];
 

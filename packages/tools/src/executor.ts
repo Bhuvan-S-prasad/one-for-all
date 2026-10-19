@@ -124,6 +124,7 @@ const AREAS: Record<string, string> = {
   shell: "terminal",
   files: "files",
   desktop: "desktop apps",
+  video: "video",
 };
 
 /** Built-in tools in a word or two; null folds a tool into its area's others. */
@@ -150,6 +151,14 @@ const ABILITIES: Record<string, string | null> = {
   "desktop.screenshot": null,
   "desktop.click_at": null,
   "desktop.type_text": null,
+  "video.scan": "read footage",
+  "video.music": "cut to music",
+  "video.transcribe": "transcribe speech",
+  "video.plan_beats": null,
+  "video.render": "edit and render",
+  "video.verify": null,
+  "video.contact_sheet": null,
+  "video.styles": null,
 };
 
 /** Abilities shown per app; the rest are counted. */

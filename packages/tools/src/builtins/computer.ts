@@ -136,7 +136,8 @@ function notConfigured(): never {
   });
 }
 
-async function computer(
+/** The agent's computer for this run; also used by the video tools. */
+export async function computer(
   sandbox: SandboxProvider | null,
   ctx: ToolRunContext,
 ): Promise<SandboxHandle> {

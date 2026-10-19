@@ -235,7 +235,7 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
   }
   let unprepared: string | null = null;
   try {
-    await computer?.prepare(ctx, evalCase.computer?.files ?? {});
+    await computer?.prepare(ctx, evalCase.computer?.files ?? {}, evalCase.computer?.setup);
   } catch (thrown) {
     unprepared = `Couldn't set up the computer: ${thrown instanceof Error ? thrown.message : String(thrown)}`;
   }

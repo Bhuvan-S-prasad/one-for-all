@@ -9,6 +9,7 @@ import type {
 import type { ToolDefinition } from "../define";
 import { artifactsReadTool } from "./artifacts";
 import { saveFileTool } from "./media";
+import { videoEditTools } from "./video";
 import { waitTool } from "./wait";
 import { browserTools, fileTools, shellTool, useSavedLoginTool } from "./computer";
 import { desktopTools } from "./desktop";
@@ -43,7 +44,8 @@ export interface BuiltinToolDeps {
 
 /**
  * The built-in tools (ARCHITECTURE.md §9.3): web and memory (M2), the
- * computer (M3), working with other agents and on the clock (M5).
+ * computer (M3), working with other agents and on the clock (M5), editing
+ * video (ADR-0049).
  */
 export function builtinTools(deps: BuiltinToolDeps): ToolDefinition<never>[] {
   return [
@@ -58,6 +60,7 @@ export function builtinTools(deps: BuiltinToolDeps): ToolDefinition<never>[] {
     shellTool(deps.sandbox ?? null),
     ...fileTools(deps.sandbox ?? null),
     ...desktopTools(deps.sandbox ?? null, deps.vision),
+    ...videoEditTools(deps.sandbox ?? null, deps.vision),
     artifactsReadTool(),
     loadToolkitTool(),
     waitTool(),

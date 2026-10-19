@@ -90,7 +90,11 @@ export interface EvalCase {
    * put in place first (paths may start with `~`, the agent's home).
    * Skipped when the sandbox isn't running.
    */
-  readonly computer?: { readonly files?: Readonly<Record<string, string>> };
+  readonly computer?: {
+    readonly files?: Readonly<Record<string, string>>;
+    /** A command run as the agent before the attempt: footage made with ffmpeg (EN.18). */
+    readonly setup?: string;
+  };
   /**
    * The person answering approval requests: true approves. By default they
    * approve everything, as someone watching a task they asked for would.

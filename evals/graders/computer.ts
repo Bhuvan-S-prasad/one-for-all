@@ -11,18 +11,20 @@ import type { RunContext, SandboxProvider } from "@ofa/core";
 export interface SavedFile {
   /** `/workspace/...`, or `~/...` in the agent's home. */
   readonly path: string;
-  readonly kind: "docx" | "xlsx" | "text" | "other";
+  readonly kind: "docx" | "xlsx" | "text" | "video" | "other";
   readonly size: number;
   /** The words in it: paragraphs and tables, or a sheet's rows as tab-separated lines. */
   readonly text: string | null;
   /** Why it couldn't be read as its kind (not really a Word file, say). */
   readonly error?: string;
+  /** A video's picture and length, from ffprobe (EN.18). */
+  readonly video?: { readonly width: number; readonly height: number; readonly duration: number };
 }
 
 export interface EvalComputer {
   readonly sandbox: SandboxProvider;
-  /** Nothing running, an empty home, then the case's files. */
-  prepare(ctx: RunContext, files: Readonly<Record<string, string>>): Promise<void>;
+  /** Nothing running, an empty home, then the case's files and its setup command. */
+  prepare(ctx: RunContext, files: Readonly<Record<string, string>>, setup?: string): Promise<void>;
   /** Close the desktop, read back what the run made or changed, and tidy the shared workspace. */
   collect(ctx: RunContext): Promise<SavedFile[]>;
 }
@@ -41,6 +43,7 @@ import json, os
 home = os.path.expanduser("~")
 start = os.stat(os.path.join(home, ".eval-start")).st_mtime_ns
 uid = os.getuid()
+VIDEO = {".mp4", ".mov", ".webm", ".mkv"}
 TEXT = {".txt", ".md", ".csv", ".tsv", ".json", ".py", ".html", ".htm", ".xml", ".log"}
 
 def read(path, ext):
@@ -62,6 +65,11 @@ def read(path, ext):
                 if any(v is not None for v in row):
                     lines.append("\t".join("" if v is None else str(v) for v in row))
         return "xlsx", "\n".join(lines)
+    if ext in VIDEO:
+        import subprocess
+        info = json.loads(subprocess.run(["ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", path], capture_output=True, check=True, text=True).stdout)
+        v = next(s for s in info["streams"] if s.get("codec_type") == "video")
+        return "video", json.dumps({"width": v["width"], "height": v["height"], "duration": float(info["format"]["duration"])})
     if ext in TEXT:
         with open(path, encoding="utf-8", errors="replace") as f:
             return "text", f.read(50000)
@@ -86,6 +94,9 @@ for root in ("/workspace", home):
             entry = {"path": shown, "size": st.st_size}
             try:
                 entry["kind"], entry["text"] = read(p, ext)
+                if entry["kind"] == "video":
+                    entry["video"] = json.loads(entry["text"])
+                    entry["text"] = None
             except Exception as e:
                 kind = ext[1:] if ext in (".docx", ".xlsx") else "other"
                 entry.update(kind=kind, text=None, error=f"{type(e).__name__}: {e}"[:300])
@@ -112,7 +123,7 @@ print(json.dumps(out))
 export function dockerComputer(sandbox: SandboxProvider): EvalComputer {
   return {
     sandbox,
-    async prepare(ctx, files) {
+    async prepare(ctx, files, setup) {
       const handle = await sandbox.acquire(ctx);
       await handle.restart(ctx.agentId);
       // Its venv stays: the sandbox checks it once per start and would not remake it.
@@ -125,6 +136,12 @@ export function dockerComputer(sandbox: SandboxProvider): EvalComputer {
       }
       for (const [path, content] of Object.entries(files)) {
         await handle.writeFile(ctx.agentId, path, content);
+      }
+      if (setup) {
+        const made = await handle.exec(ctx.agentId, setup, { timeoutMs: 5 * 60_000 });
+        if (made.exitCode !== 0) {
+          throw new Error(`The case's setup failed: ${made.stderr.trim().slice(-300)}`);
+        }
       }
       // The case's own files are older than the mark: only what the run changes counts.
       await handle.exec(ctx.agentId, `touch ${MARK}`);

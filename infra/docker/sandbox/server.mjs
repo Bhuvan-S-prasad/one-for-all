@@ -163,6 +163,11 @@ function agentEnv(user, extra = {}) {
     GTK2_RC_FILES: "/etc/gtk-2.0/one-for-all.gtkrc",
     // GTK2 apps (PCManFM) publish their accessibility tree only when asked (DT.09).
     GTK_MODULES: "gail:atk-bridge",
+    // The video engine's Python and models (ADR-0049); numba caches compiled
+    // code in the agent's own home, never a shared folder another agent could fill.
+    ...(process.env.OFA_VIDEO_PYTHON ? { OFA_VIDEO_PYTHON: process.env.OFA_VIDEO_PYTHON } : {}),
+    ...(process.env.OFA_VIDEO_MODELS ? { OFA_VIDEO_MODELS: process.env.OFA_VIDEO_MODELS } : {}),
+    NUMBA_CACHE_DIR: `${user.home}/.cache/numba`,
     ...extra,
   };
   if (PROXY) {

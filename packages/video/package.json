@@ -1,0 +1,23 @@
+{
+  "name": "@ofa/video",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The video engine (ADR-0049): music and footage analysis, beat-exact timelines, rendering with ffmpeg and checks. Stands alone: imports nothing from One-for-All; a CLI and an MCP server outside it.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run --passWithNoTests --exclude \"**/*.integration.test.ts\"",
+    "test:integration": "vitest run --passWithNoTests integration",
+    "cli": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "tsx": "4.23.15"
+  }
+}

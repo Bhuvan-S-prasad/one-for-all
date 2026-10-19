@@ -15,6 +15,7 @@
   "dependencies": {
     "@ofa/core": "workspace:*",
     "@ofa/policy": "workspace:*",
+    "@ofa/video": "workspace:*",
     "zod": "4.6.5"
   }
 }

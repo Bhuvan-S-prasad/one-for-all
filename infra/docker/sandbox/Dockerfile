@@ -90,10 +90,26 @@ RUN mkdir -p /home/agents /workspace \
     echo "agent${slot}:x:${uid}:" >> /etc/group; \
   done
 
+# Video editing (EN.16, ADR-0049): ffmpeg, and the video engine's analysis in
+# its own venv, apart from each agent's ~/.venv: librosa for beats, downbeats
+# and energy, faster-whisper for words with timestamps, its base model baked
+# in so transcribing needs no download. Beat This! (a better beat tracker)
+# needs PyTorch and stays optional: the engine uses it when it is installed.
+RUN apt-get update \
+  && apt-get install --yes --no-install-recommends ffmpeg \
+  && rm -rf /var/lib/apt/lists/*
+RUN python3 -m venv /opt/ofa-video/venv \
+  && /opt/ofa-video/venv/bin/pip install --no-cache-dir librosa==0.11.0 faster-whisper==1.1.1 \
+  && /opt/ofa-video/venv/bin/python -c "from faster_whisper import WhisperModel; WhisperModel('base', device='cpu', compute_type='int8', download_root='/opt/ofa-video/models')" \
+  && find /opt/ofa-video -name '__pycache__' -prune -exec rm -rf {} +
+
 COPY server.mjs egress.mjs /opt/sandbox/
 
+# The video engine finds its Python and models here; the service passes them to agents.
 ENV SANDBOX_PORT=7070 \
-  LANG=C.UTF-8
+  LANG=C.UTF-8 \
+  OFA_VIDEO_PYTHON=/opt/ofa-video/venv/bin/python \
+  OFA_VIDEO_MODELS=/opt/ofa-video/models
 EXPOSE 7070
 WORKDIR /workspace
 

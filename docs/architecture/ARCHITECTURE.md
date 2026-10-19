@@ -352,7 +352,7 @@ Setup cost per provider:
 
 Hand-written once, available to every agent subject to grants:
 
-`web.search` · `web.read_url` · `web.save_file` · `browser.*` · `desktop.*` · `shell.run` · `files.*` (including `files.send` and `files.receive`) · `docs.create` · `remember` · `recall` · `schedule_task` · `remind_me` · `create_routine` · `message_agent` · `delegate_task` · `ask_user` · `request_approval` · `notify_user` · `todo.*` · `run_skill` · `save_skill` · `use_saved_login` · `load_toolkit` · `wait`
+`web.search` · `web.read_url` · `web.save_file` · `browser.*` · `desktop.*` · `shell.run` · `files.*` (including `files.send` and `files.receive`) · `docs.create` · `remember` · `recall` · `schedule_task` · `remind_me` · `create_routine` · `message_agent` · `delegate_task` · `ask_user` · `request_approval` · `notify_user` · `todo.*` · `run_skill` · `save_skill` · `use_saved_login` · `load_toolkit` · `wait` · `video.*` (scan, music, transcribe, plan_beats, render, verify, contact_sheet, styles; ADR-0049)
 
 `artifacts.read`, `load_toolkit` and `wait` are platform tools: every agent has them without a grant. Files people attach to a chat (EN.09) reach the agent's computer only through `files.receive`, in a run of that chat (ADR-0048).
 
@@ -441,6 +441,7 @@ clean ──reads untrusted content──▶ tainted ──outbound tool call─
 - **Saved logins** (M3.08): two vault secrets per site, `login.<site>.password` (redacted from all output) and `login.<site>.username`. Only the executor decrypts them, for `use_saved_login`, which types them into a page on that site or its subdomains, never elsewhere. The API lists sites only.
 - Agents browse and use desktop apps through the accessibility tree (CDP for pages, AT-SPI for apps, ADR-0041): `desktop.snapshot` lists the window in front (as X reports it) as numbered controls, and `desktop.click`, `desktop.type` and `desktop.press` act on them, each number checked against the control's role and name. Screenshots, clicks at a point and raw typing (`desktop.screenshot`, `desktop.click_at`, `desktop.type_text`) are a fallback, listed only when the run's tier can see images; points are fractions of the screen (free vision models point far better that way, see the vision spike in §19); only the latest screenshot stays in the prompt and the run's state, and each is kept as a run artifact. Clicking, typing, key presses and the shell are outbound tools: after a run reads outside content they need a person's approval (§10.3); proactive checks may use none of them. Opening a file on the desktop (`desktop.open`) is not outbound: it uses only apps that send nothing anywhere, never the browser (ADR-0043).
 - **Python and files** (ADR-0042): pip, venv, openpyxl and python-docx are in the image; each agent has its own `~/.venv`, first on its PATH, so packages it installs stay in its home. pip goes through the egress proxy (an allowlist needs `pypi.org` and `files.pythonhosted.org`). `files.send` attaches any file from the computer to the reply, streamed, up to 2 GB (ADR-0047); `files.receive` copies a file the person attached into it.
+- **Video** (ADR-0049): ffmpeg, librosa and faster-whisper (base model) are in the image, in their own venv. The `video.*` tools run the video engine's commands as the agent; long ones (renders, transcription) run detached and are polled with short requests, so none outlives the service's 10-minute limit. Work files live in `~/.ofa-video`.
 - Each agent has its own Chromium profile, so one agent's logins are not available to another unless the user opts in.
 - Nothing an agent's computer runs for a person listens on the network, since agents share it: Chromium is driven over its DevTools pipe (`--remote-debugging-pipe`), relayed by the sandbox service, which keeps each connection's commands and page sessions apart; each display has an Xauthority key only its agent reads; desktop viewers use a Unix socket in a folder only that agent and the service can enter.
 
@@ -613,6 +614,7 @@ Summary only. Full records (context, decision, alternatives, consequences) are i
 | [0046](../adr/0046-public-site-and-docs-as-their-own-app.md) | Clients | The landing page and docs are `apps/site`, a static Vite app on Vercel that reads the decision records at build time | Docs that can't drift; the real familiars and routing on the page; no server code in public |
 | [0047](../adr/0047-object-storage-for-media.md) | Platform | Files over 1 MB in an S3-compatible store behind `BlobStore`; Garage in self-host | Images and video don't belong in Postgres; MinIO's community edition is gone |
 | [0048](../adr/0048-media-generation-through-catalog-apps.md) | Integrations | Media from catalog apps (Runway, Higgsfield), kept as files, `wait` for long jobs, paid calls ask first under a monthly cap | Generations are slow, their links expire, and they spend the person's money |
+| [0049](../adr/0049-video-engine-as-a-standalone-package.md) | Platform | The video engine is `packages/video`, importing nothing from One-for-All; `video.*` tools adapt it, and it runs alone as a CLI and an MCP server | Our own video edit agent, usable outside One-for-All without a second project |
 
 **Rejected along the way:** Next.js (mobile and WebSocket fit), Express (untyped), Neon (free-tier limits), Prisma (vector support), BullMQ (no durable waits), Inngest Cloud (execution caps), Composio (lock-in and pricing), E2B-only (finite credit), hosted-only (cost and data custody).
 
@@ -666,6 +668,7 @@ one-for-all/
 │   ├── sandbox/                  docker + e2b adapters, CDP browser, page snapshots, screen and desktop streams
 │   ├── channels/                 web, telegram, slack, email adapters
 │   ├── blobs/                    BlobStore adapters: S3 (Garage and others), in-memory, Garage setup
+│   ├── video/                    the video engine (ADR-0049): imports nothing internal; CLI and MCP server too
 │   ├── vault/                    encryption, secret refs, redaction
 │   ├── events/                   event bus adapters + typed event catalog
 │   ├── telemetry/                OpenTelemetry setup and span helpers

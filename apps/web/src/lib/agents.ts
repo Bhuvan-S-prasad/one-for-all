@@ -157,6 +157,12 @@ export const BUILTIN_TOOLS = [
     starter: false,
   },
   {
+    name: "video.*",
+    label: "Edit video",
+    hint: "Read footage and songs on its computer, cut to the beat or on speech, add effects and captions, and render videos. Needs files to send you the result.",
+    starter: false,
+  },
+  {
     name: "delegate_task",
     label: "Hand work to other agents",
     hint: "Give another of your agents a task and use its answer. That agent works with its own tools and permissions.",
