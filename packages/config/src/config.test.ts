@@ -30,6 +30,17 @@ describe("loadConfig", () => {
     });
   });
 
+  it("checks Inngest signatures once a signing key is set, and never skips them in production", () => {
+    expect(loadConfig({ ...valid, INNGEST_SIGNING_KEY: "signkey-test" }).inngest.dev).toBe(false);
+    expect(
+      loadConfig({ ...valid, INNGEST_SIGNING_KEY: "signkey-test", INNGEST_DEV: "1" }).inngest.dev,
+    ).toBe(true);
+    expect(() => loadConfig({ ...valid, NODE_ENV: "production", INNGEST_DEV: "1" })).toThrow(
+      /INNGEST_DEV/,
+    );
+    expect(loadConfig({ ...valid, NODE_ENV: "production" }).inngest.dev).toBe(false);
+  });
+
   it("finds the dev sandbox in development, and needs both settings elsewhere", () => {
     expect(loadConfig({ ...valid, NODE_ENV: "development" }).sandbox).toEqual({
       url: "http://127.0.0.1:7070",

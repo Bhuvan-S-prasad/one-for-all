@@ -9,7 +9,9 @@
 // CHOWN, SETUID, SETGID and KILL capabilities.
 //
 // HTTP on SANDBOX_PORT (internal network only), every route but /health
-// needs `Authorization: Bearer <SANDBOX_TOKEN>` (or `?token=` for WebSockets):
+// needs `Authorization: Bearer <SANDBOX_TOKEN>` (or `?token=` for the /cdp
+// WebSocket, which can't set a header). A request with an `Origin` header comes
+// from a web page, never from the app, and is refused:
 //
 //   GET  /health                       {ok, version}
 //   POST /exec    {agent, command, cwd?, timeoutMs?}
@@ -995,11 +997,20 @@ function httpError(status, message) {
   return Object.assign(new Error(message), { status });
 }
 
-function authorized(req, url) {
+/**
+ * The app is the only caller. A browser always names the page it comes from
+ * (`Origin`), and the app's Node clients never do, so a request with one is a
+ * web page trying the port (ADR-0017). The token comes in the header; only a
+ * WebSocket upgrade, which can't set one, may carry it as `?token=`.
+ */
+function authorized(req, url, { upgrade = false } = {}) {
+  if (req.headers.origin !== undefined) return false;
   const header = req.headers.authorization ?? "";
   const given = header.startsWith("Bearer ")
     ? header.slice(7)
-    : (url.searchParams.get("token") ?? "");
+    : upgrade
+      ? (url.searchParams.get("token") ?? "")
+      : "";
   const a = Buffer.from(given);
   const b = Buffer.from(TOKEN);
   return a.length === b.length && timingSafeEqual(a, b);
@@ -1265,8 +1276,9 @@ server.on("upgrade", (req, socket, head) => {
   if (url.pathname.startsWith("/desktop/")) return void upgradeDesktop(req, socket, head, url);
   const match = /^\/cdp\/([A-Za-z0-9-]{1,64})(\/.*)?$/.exec(url.pathname);
   const entry = match ? desktops.get(match[1]) : undefined;
-  if (!authorized(req, url) || !entry?.relay) {
-    socket.end(`HTTP/1.1 ${authorized(req, url) ? "404 Not Found" : "401 Unauthorized"}\r\n\r\n`);
+  const allowed = authorized(req, url, { upgrade: true });
+  if (!allowed || !entry?.relay) {
+    socket.end(`HTTP/1.1 ${allowed ? "404 Not Found" : "401 Unauthorized"}\r\n\r\n`);
     return;
   }
   const client = acceptWebSocket(req, socket, head);

@@ -50,6 +50,17 @@ export function approvalFields(approval: Approval): ApprovalField[] {
   return [...fields.filter((f) => !f.editable), ...fields.filter((f) => f.editable)];
 }
 
+/**
+ * A shown value with its hidden whitespace made visible, so padding can't push
+ * the rest of a command out of sight: runs of blank lines and long runs of
+ * spaces become a marker saying how many there were.
+ */
+export function visibleText(value: string): string {
+  return value
+    .replace(/\n(?:[ \t]*\n){2,}/g, (run) => `\n[${run.split("\n").length - 2} blank lines]\n`)
+    .replace(/[ \t]{8,}/g, (run) => ` [${run.length} spaces] `);
+}
+
 /** Only what really changed, so an untouched field runs as the agent wrote it. */
 export function changedText(
   fields: readonly ApprovalField[],

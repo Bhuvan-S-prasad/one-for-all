@@ -21,7 +21,7 @@ export interface LearnResult {
 
 type LearnDeps = Pick<
   HarnessDeps,
-  "llm" | "runs" | "agents" | "threads" | "memory" | "options" | "redact"
+  "llm" | "runs" | "agents" | "threads" | "memory" | "options" | "redact" | "chats"
 >;
 
 export async function learnFromRun(
@@ -47,6 +47,11 @@ export async function learnFromRun(
     const end = messages.findIndex((m) => m.id === input.messageId);
     const reply = messages[end];
     if (!reply) return { learned: false, calls: 0 };
+    // The history the facts come from crosses runs: if a run of this agent in
+    // this chat read outside content, its replies (which may quote that
+    // content) are in it, so what is learned here is unverified too (ADR-0013).
+    const record = await deps.chats?.get(ctx, input.threadId);
+    const verified = !run.tainted && !record?.tainted;
 
     const usage = await extractMemories({
       llm: deps.llm,
@@ -57,7 +62,7 @@ export async function learnFromRun(
         .slice(0, end)
         .map((m) => ({ author: m.author, agentId: m.agentId, content: m.content })),
       answer: reply.content,
-      verified: !run.tainted,
+      verified,
       threadId: input.threadId,
       log: async (events) =>
         deps.runs.append(

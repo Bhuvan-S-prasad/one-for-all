@@ -14,12 +14,24 @@ export function urlsIn(text: string): string[] {
 
 /**
  * The same address however it was written: scheme and host in lower case,
- * no `www.`, no fragment, no trailing slash.
+ * no `www.`, no trailing slash. The fragment stays: a page's script reads it,
+ * so data added after `#` reaches the site just as a query does.
  */
 export function urlKey(url: string): string {
-  const match = /^([a-z][a-z0-9+.-]*):\/\/([^/?#]*)([^#]*)/i.exec(url.trim());
+  const match = /^([a-z][a-z0-9+.-]*):\/\/([^/?#]*)([^#]*)(#.*)?/i.exec(url.trim());
   if (!match) return url.trim();
-  const [, scheme = "", host = "", rest = ""] = match;
+  const [, scheme = "", host = "", rest = "", hash = ""] = match;
   const path = rest.replace(/\/+(?=\?|$)/, "");
-  return `${scheme.toLowerCase()}://${host.toLowerCase().replace(/^www\./, "")}${path}`;
+  const fragment = hash === "#" ? "" : hash;
+  return `${scheme.toLowerCase()}://${host.toLowerCase().replace(/^www\./, "")}${path}${fragment}`;
+}
+
+/**
+ * The keys a given address lets the run open: itself, and itself without its
+ * fragment (leaving one out carries nothing more to the site).
+ */
+export function givenKeys(url: string): string[] {
+  const key = urlKey(url);
+  const hash = key.indexOf("#", key.indexOf("://") + 3);
+  return hash === -1 ? [key] : [key, key.slice(0, hash)];
 }

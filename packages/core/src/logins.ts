@@ -6,10 +6,13 @@
 /** `https://Accounts.Example.com/login` or `example.com.` → `accounts.example.com`; null if not a site. */
 export function normalizeLoginSite(input: string): string | null {
   // By hand: core uses no platform APIs (no URL).
+  const text = input.trim().toLowerCase();
+  // Only a web address names a site: `javascript://shop.example/…` or
+  // `file://shop.example/…` is not shop.example, whatever follows the `//`.
+  const scheme = /^([a-z][a-z0-9+.-]*):\/\//.exec(text)?.[1];
+  if (scheme && scheme !== "http" && scheme !== "https") return null;
   const host = (
-    input
-      .trim()
-      .toLowerCase()
+    text
       .replace(/^[a-z][a-z0-9+.-]*:\/\//, "")
       .replace(/^[^@/]*@/, "")
       .split(/[/?#:]/)[0] ?? ""

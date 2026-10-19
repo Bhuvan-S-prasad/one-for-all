@@ -177,6 +177,13 @@ export function createCdpBrowser(endpoint: () => Promise<string>): AgentBrowser 
   return {
     open: (url) =>
       withPage(async (page) => {
+        // Web pages only: Page.navigate runs a javascript: address in the open page.
+        if (!/^https?:\/\//i.test(url)) {
+          throw new SandboxError(
+            "navigation_failed",
+            `Couldn't open ${url}: only http and https pages open.`,
+          );
+        }
         const loaded = page.cdp.next("Page.loadEventFired", {
           sessionId: page.session,
           timeoutMs: LOAD_TIMEOUT,

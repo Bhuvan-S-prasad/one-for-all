@@ -26,8 +26,8 @@ The single place to see what is done, what is in progress and what comes next. A
 
 | | |
 |---|---|
-| **Current milestone** | M6 Everywhere |
-| **Next task** | M6.01 device pairing |
+| **Current milestone** | Enhancements (before M6) |
+| **Next task** | EN.01 ADR: several providers and a model per agent |
 | **Blockers** | None. Dev services must be running (`pnpm infra:up`) for integration tests |
 | **Decisions pending** | License (see [ARCHITECTURE.md §19](../architecture/ARCHITECTURE.md#19-open-questions)); needed before first public push, not before M1 work |
 
@@ -47,6 +47,7 @@ The single place to see what is done, what is in progress and what comes next. A
 | [Desktop](#desktop) | Watch an agent work on its own desktop; it makes Word and Excel files | ✅ Done | 14 / 14 |
 | [Teams and continuity](#teams-and-continuity) | "Continue" continues; a coordinator routes by capability | ✅ Done | 11 / 11 |
 | [Site and docs](#site-and-docs) | A public landing page and docs for what is built | ✅ Done | 7 / 7 |
+| [Enhancements](#enhancements) | Your own model per agent; images and video; teams that discuss; email triggers | ⬜ Not started | 0 / 30 |
 | [M6 Everywhere](#m6-everywhere) | Approve from the phone; chat on Telegram and Slack | ⬜ Not started | 0 / 8 |
 | [M7 Hardening](#m7-hardening) | Evals gate CI; backups; E2B and cloud adapters | ⬜ Not started | 0 / 11 |
 
@@ -317,6 +318,59 @@ Stays where it is: the approval card (M4.09), the file card (M3.06) and the comp
 - [x] SD.06 Checks: typecheck, lint, build; no personal data in the site (the repository address is the only link to its owner)
 - [x] SD.07 Landing page redone around motion (the first version read as too plain) → a preloader with a count and a lifting curtain; a hatchery hero where the team sits on the letters of "One for all.", every familiar's eyes follow the pointer, and a click hatches a new one that drops and bounces; a manifesto lit word by word with the scroll; "a day with your team" pinned and scrolled sideways through six colour scenes with a screen-sized clock (07:30 routine, 09:12 ask, 09:13 plan, 09:14 handoff lines drawing, 09:31 the lime "needs you", 23:00 asleep); taint played by the scroll (a page with a hidden order, the run turning red, the send held); the routing demo reordering with Flip; a deck of colour cards that stack; two marquees that speed up and lean with the scroll; a terminal that types the install; a lime finale with the team climbing over the name and a spinning seal to the repository. A custom cursor and magnetic buttons on fine pointers; everything off under reduced motion, and phones get stacked scenes. GSAP's SplitText, ScrollTrigger, DrawSVG, ScrambleText, Flip and CustomEase with Lenis
 
+## Enhancements
+
+**Goal:** run agents on the model you pay for, make and edit images and video, let a team talk things through, and start routines from email; agreed 2026-10-19 after studying Grok Bot.
+**Done when:** an agent on Claude or OpenAI (chosen per agent) researches a video, a script agent turns it into scenes, Runway or Higgsfield generates them after an approval that shows the cost, our video edit agent cuts and captions the result in its computer, and it plays in the chat; a group of three agents discusses a question in a fixed order and the coordinator closes with one answer.
+**ADRs:** 0022, 0025, 0033, 0042 (to amend); new ones below
+
+**Models: bring your own provider**
+- [ ] EN.01 ADR: several providers at once and a model per agent (amends ADR-0022; CLAUDE.md's "never name a model outside tier config" becomes "outside tier config or an agent's model setting"); ARCHITECTURE.md §7
+- [ ] EN.02 `packages/llm/src/providers/anthropic.ts` on `@ai-sdk/anthropic`: model list from the Models API with context and output limits, prompt caching on the system prompt and tools, `reasoning` mapped to extended thinking, image input, rate limits read from response headers, prices for cost metering — **Deps:** EN.01
+- [ ] EN.03 `packages/llm/src/providers/openai.ts` on `@ai-sdk/openai`: model table (the API's model list has no context or prices), reasoning effort, image input, rate-limit headers — **Deps:** EN.01
+- [ ] EN.04 Several providers in one install: register all three in `container.ts`, a key per provider in the vault (`llm.<provider>.api_key`), Settings to add, test and remove each key, tier chains across providers (`anthropic:…`, `openai:…`), defaults per provider, usage and cost per provider — **Deps:** EN.02, EN.03
+- [ ] EN.05 A model per agent: optional `model` in the agent spec (provider and model, falling back to the workspace tiers), a picker in the agent editor showing only models with tools (and images for agents with a desktop), carried in agent files, shown in Activity — **Deps:** EN.04
+- [ ] EN.06 Re-run the tier spike and the evals on Claude and OpenAI models; set each provider's default tiers from the results — **Deps:** EN.04
+
+**Media storage**
+- [ ] EN.07 ADR: object storage for media. MinIO's community edition is archived (no images since 2025-10), so compare Garage, SeaweedFS and a plain volume; a `BlobStore` port in `@ofa/core` with an S3 adapter, chosen in `container.ts`; which artifacts move (over a size threshold), signed short-lived downloads through the API, backups, the ~3 GB and arm64 targets; amends ADR-0042
+- [ ] EN.08 The chosen store in `docker-compose.dev.yml` and the self-host bundle (internal network only, credentials from `init-env.sh`), the `BlobStore` S3 adapter, large artifacts written there with metadata in Postgres, streamed downloads, existing rows left as they are — **Deps:** EN.07
+- [ ] EN.09 Uploads from the web app: chunked upload of footage and images into a chat, stored as an artifact and copied into the agent's computer on request — **Deps:** EN.08
+
+**Images and video**
+- [ ] EN.10 ADR: media generation through catalog apps (Runway, Higgsfield MCP), long jobs, results as artifacts, and spend: a generation shows its estimated cost on the approval card, and a workspace monthly cap stops it
+- [ ] EN.11 Runway and Higgsfield in the catalog: review each per `catalog-review.md` (auth, tools and annotations, models, what costs credits), pinned URLs and auth origins — **Deps:** EN.10
+- [ ] EN.12 Long-running tool calls: an MCP call that returns a job is polled inside durable steps until it finishes, fails or times out, with progress in the run log — **Deps:** EN.10
+- [ ] EN.13 Media results kept: generated images and videos downloaded into the blob store as artifacts (never left only at the provider's URL) — **Deps:** EN.08, EN.12
+- [ ] EN.14 Media in the chat: images in a grid and videos in a player inside replies, thumbnails from pages the agent read, full-size view, download — **Deps:** EN.13
+- [ ] EN.15 Spend control: the cost estimate on the card, the monthly cap in Settings, spend per agent in Activity — **Deps:** EN.11
+
+**Our video edit agent**
+- [ ] EN.16 Sandbox image: ffmpeg and local transcription (whisper.cpp or faster-whisper, small model), checked on arm64 with image size and memory noted; amends ADR-0025
+- [ ] EN.17 Video edit agent template and skills: ask for footage and goal, probe the files, transcribe, send an edit plan (cuts, captions, music, formats) for approval, cut on copies only, burn captions, export 9:16, 4:5, 1:1 and 16:9, check frames and audio before delivering, never post — **Deps:** EN.09, EN.16
+- [ ] EN.18 Evals for the video edit agent on fixture footage: the plan waits for approval, originals stay untouched, exports have the right sizes and captions match the transcript — **Deps:** EN.17
+
+**Teams that discuss**
+- [ ] EN.19 ADR: discussion in group chats (amends ADR-0033). When a person, or the coordinator, asks the group, members answer one at a time in a set order (named order, else the roster), each seeing the answers before it; one turn per member per round, at most N rounds; no agent wakes another outside its turn; the coordinator closes with one agreed answer; a stop ends it at once
+- [ ] EN.20 Discussion in the harness: a per-thread turn queue (one active run per thread), the round and turn limits, the closing summary, interrupts — **Deps:** EN.19
+- [ ] EN.21 Group chat UI: whose turn it is, folding agent-to-agent messages ("4 messages with 2 agents"), the closing answer pinned — **Deps:** EN.20
+- [ ] EN.22 Multi-agent evals for discussion: order kept, no runaway rounds, the summary reflects every member — **Deps:** EN.20
+
+**Triggers**
+- [ ] EN.23 ADR: routines started by events, limited to Telegram messages, Slack messages and polled email; no webhooks and no public URL (ADR-0016); narrow matching rules (sender, channel, words); taint (the triggering message is outside content)
+- [ ] EN.24 Trigger framework: a routine's "When to run" takes an event source and match rules; matched events start the routine as a tainted run, once per event (idempotent on the event ID) — **Deps:** EN.23
+- [ ] EN.25 Email trigger: poll the person's Gmail through their sign-in (history ID cursor), match rules, start the routine — **Deps:** EN.24
+- (Telegram and Slack triggers are part of M6.05 and M6.06, built on this framework.)
+
+**Logged-in command-line tools without credentials in the sandbox**
+- [ ] EN.26 ADR: credential-injecting egress (amends ADR-0025, keeps hard rule 4). The proxy adds the `Authorization` header for allowlisted API hosts (for example `api.github.com`) so `gh` and `git` work while the token never enters the sandbox; HTTPS needs interception with a local CA trusted only inside the sandbox and only for those hosts; how the proxy knows which agent is calling; taint and approvals for outbound requests
+- [ ] EN.27 Build it in `egress.mjs`: per-agent proxy identity, the host allowlist, header injection from tokens the app hands the proxy (never written to the sandbox), pass-through for every other host — **Deps:** EN.26
+- [ ] EN.28 Red-team tests before it ships: an agent tries to read the token (environment, files, `/proc`, proxy errors, redirects to other hosts, DNS tricks, request echo services), to use another agent's identity, and to reach a host outside the list; all must fail — **Deps:** EN.27
+- [ ] EN.29 GitHub through it: `gh` and `git push` work in an agent's computer with the person's GitHub sign-in, held for approval in tainted runs — **Deps:** EN.28
+
+**Close**
+- [ ] EN.30 Docs and site pages for providers, media, the video edit agent, discussion and triggers; end-to-end check of the done-when; tracker and Status line
+
 ## M6 Everywhere
 
 **Goal:** reach agents from the phone and chat apps.
@@ -327,8 +381,8 @@ Stays where it is: the approval card (M4.09), the file card (M3.06) and the comp
 - [ ] M6.02 `apps/mobile`: Expo, Expo Router, NativeWind, shared client, workspace-aware Metro config
 - [ ] M6.03 Mobile screens: pair, agents, chat, approvals, computer (VNC WebView + takeover), routine status, settings — **Deps:** M6.01, M6.02
 - [ ] M6.04 Push: Expo token registration; notifications for approvals, questions and results; deep links — **Deps:** M6.03
-- [ ] M6.05 Telegram adapter: long-polling listener, approvals with inline buttons
-- [ ] M6.06 Slack adapter: Socket Mode, DMs and mentions, draft cards
+- [ ] M6.05 Telegram adapter: long-polling listener, approvals with inline buttons; Telegram messages as a routine trigger (EN.24)
+- [ ] M6.06 Slack adapter: Socket Mode, DMs and mentions, draft cards; Slack messages as a routine trigger (EN.24)
 - [ ] M6.07 Guides: `docs/guides/tailscale.md`, Telegram setup
 - [ ] M6.08 EAS development builds for iOS and Android (store publishing tracked in Backlog)
 
@@ -357,8 +411,14 @@ Stays where it is: the approval card (M4.09), the file card (M3.06) and the comp
 
 ## Backlog (after M7)
 
-- Inviting members to a workspace. Decided 2026-10-02: sign-in stays owner-only until then (the owner is created by first-run setup; public sign-up stays off)
+- Inviting members to a workspace. Decided 2026-10-02: sign-in stays owner-only until then (the owner is created by first-run setup; public sign-up stays off). Before invites ship, bind each person's own work to them (found in the 2026-10-19 security audit; RLS is per workspace, so each is a route or repository check):
+  - chats: `getThread`, `updateThread` and `listMessages` check the caller's `thread_member` row (threads routes, `POST /api/runs/:id/retry`), and `/api/ws` sends message events only to the chat's members;
+  - runs: `/api/runs` lists, reads, stops and retries only runs the caller started or whose chat they are in (owners and admins exempt), as `POST /api/approvals/:id` already does; `GET /api/approvals` likewise;
+  - schedules: `GET /api/schedules` and `DELETE /api/schedules/:id` filter by `schedule.user_id`;
+  - routines: `PATCH` and `DELETE /api/routines/:id` only by the creator or an owner/admin, since a routine runs as its creator with their app sign-ins;
+  - sandbox: watching and taking over an agent's computer (`?control=1`), and `POST /api/agents/:id/logins/share`, get a role or run-owner check.
 - Voice: dictation, live voice chat, voice memos from agents
+- From the Grok Bot study (2026-10-19), not yet agreed: a chief of staff that creates agents from a chat (with the person confirming); connecting an app from an "Authorize" card in the chat; `ask_user` question cards with answer fields; a team org chart and a live "working" board; sidebar folders, channels and hidden agents; reactions and replies on messages; a per-agent "notify me" switch; a bigger catalog with categories and search; plugins that bundle a connector with skills; publishing and analytics for X, LinkedIn and YouTube; carousels and slides; long background commands an agent waits on
 - Teach a task by demonstration (record a browser workflow → draft skill)
 - LLM action reviewer as an extra policy verdict source
 - Email channel through a relay
@@ -379,6 +439,12 @@ Stays where it is: the approval card (M4.09), the file card (M3.06) and the comp
 ## Session log
 
 Newest first. Keep entries short.
+
+### 2026-10-19 (session 26, security)
+- **Done:** a full security audit (report kept out of git in `docs/security-audit/`) and its fixes: one private-address check for `egress.mjs` and `safeFetch` that judges IPv4 inside IPv6 by the IPv4 address; approval cards list every argument of a held call in full with padding shown; address provenance keeps the fragment and never counts an address the agent wrote itself as given; `browser.open`, screen navigation and site answers are http(s) only; consolidation's new facts stay unverified if it was shown an unverified fact; learning after a tainted run in the same chat stores unverified facts; the sandbox service refuses requests with an `Origin` header and takes `?token=` only on the `/cdp` WebSocket; Inngest dev mode is off once a signing key is set and refused in production; a scheduled task fires only as its owner. ADR-0025, 0027, 0030, 0037 and 0045 amended.
+- **Checks:** unit tests in the changed packages, typecheck, lint (no errors), format; the egress bypass rerun against the fixed proxy in a no-network container (403 for `[::ffff:127.0.0.1]` and `CONNECT [::ffff:7f00:1]:443`). Not run: integration tests (the schedule owner check has no integration test yet) and a live run.
+- **Next:** rebuild the sandbox image (`egress.mjs` and `server.mjs` changed), then M6.01. The per-person checks above (Backlog, invites) wait for invites.
+- **Open:** the dev sandbox still defaults to the public `ofa-sandbox-dev-token`; with `Origin` refused, only local processes could use it.
 
 ### 2026-10-18 (session 25)
 - **Done:** found in a live run that a chief of staff did its own research instead of delegating and that "continue" after its budget stop started over (only chat text reaches the next run). New milestone **Teams and continuity**; TC.01–TC.05 (5 of 9): ADR-0044 and ADR-0045, the chat record (`thread_state`), the "Earlier in this chat" block with plan carry-over and taint, stop replies, the 80% warning, reused searches, better episodes, capability cards in every roster.

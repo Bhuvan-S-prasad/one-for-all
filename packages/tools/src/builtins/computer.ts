@@ -189,7 +189,13 @@ export function browserTools(sandbox: SandboxProvider | null) {
       name: "browser.open",
       description:
         "Open a web page in your own browser and see it as an outline: headings, text, and every link, button and field with a number in brackets. Use those numbers with browser.click and browser.type. Logins you have made in your browser stay.",
-      input: z.object({ url: z.url().max(2_000).describe("The page to open") }),
+      // Web pages only: a javascript: address would run script in the open page.
+      input: z.object({
+        url: z
+          .url({ protocol: /^https?$/ })
+          .max(2_000)
+          .describe("The page to open (http or https)"),
+      }),
       annotations: { readOnly: true, opensUrl: "url" },
       async run({ url }, ctx) {
         return page(await (await browserOf(sandbox, ctx)).open(url));

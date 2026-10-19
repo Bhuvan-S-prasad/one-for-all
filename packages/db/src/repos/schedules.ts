@@ -139,6 +139,8 @@ export async function fireSchedule(
       .for("update")
       .limit(1);
     if (!row || row.status !== "pending") return { outcome: "cancelled" };
+    // It fires as the person it was set for, never as whoever the event names.
+    if (row.userId !== ctx.userId) return { outcome: "cancelled" };
     const touch = () =>
       tx.update(thread).set({ updatedAt: input.now }).where(eq(thread.id, row.threadId));
 

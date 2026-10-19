@@ -33,40 +33,69 @@ const CONNECT_TIMEOUT = 15_000;
 const log = (msg, fields = {}) =>
   console.log(JSON.stringify({ time: new Date().toISOString(), msg, ...fields }));
 
-/** Same ranges as @ofa/tools `isPrivateAddress` (web.read_url). */
+// Same ranges as @ofa/tools `isPrivateAddress` (web.read_url).
+const PRIVATE_V4 = new net.BlockList();
+for (const [subnet, prefix] of [
+  ["0.0.0.0", 8],
+  ["10.0.0.0", 8],
+  ["100.64.0.0", 10],
+  ["127.0.0.0", 8],
+  ["169.254.0.0", 16],
+  ["172.16.0.0", 12],
+  ["192.0.0.0", 16],
+  ["192.168.0.0", 16],
+  ["198.18.0.0", 15],
+  ["198.51.100.0", 24],
+  ["203.0.113.0", 24],
+  ["224.0.0.0", 3],
+]) {
+  PRIVATE_V4.addSubnet(subnet, prefix, "ipv4");
+}
+const PRIVATE_V6 = new net.BlockList();
+for (const [subnet, prefix] of [
+  ["fc00::", 7], // unique local
+  ["fe80::", 10], // link-local
+  ["fec0::", 10], // site-local (deprecated)
+  ["ff00::", 8], // multicast
+  ["2002::", 16], // 6to4: embeds an IPv4 address
+  ["64:ff9b:1::", 48], // local-use NAT64
+]) {
+  PRIVATE_V6.addSubnet(subnet, prefix, "ipv6");
+}
+
+/** The eight 16-bit groups of a valid IPv6 address, with any dotted tail folded in. */
+function ipv6Groups(address) {
+  let text = address;
+  const dotted = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(text);
+  if (dotted) {
+    const [a, b, c, d] = dotted.slice(1).map(Number);
+    text = `${text.slice(0, dotted.index)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const [head = "", tail] = text.split("::");
+  const front = head ? head.split(":") : [];
+  const back = tail ? tail.split(":") : [];
+  const gap = tail === undefined ? [] : Array(8 - front.length - back.length).fill("0");
+  return [...front, ...gap, ...back].map((group) => parseInt(group, 16));
+}
+
+/**
+ * An IPv6 address that carries an IPv4 one (mapped `::ffff:0:0/96` in any
+ * spelling, compatible `::/96`, NAT64 `64:ff9b::/96`) is judged by that IPv4
+ * address: the URL parser writes `[::ffff:127.0.0.1]` as `[::ffff:7f00:1]`.
+ */
 export function isPrivateAddress(address) {
-  const ip = address.toLowerCase().replace(/^\[|\]$/g, "");
-  if (net.isIPv4(ip)) {
-    const [a, b] = ip.split(".").map(Number);
-    return (
-      a === 0 ||
-      a === 10 ||
-      a === 127 ||
-      (a === 100 && b >= 64 && b <= 127) ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      (a === 192 && b === 0) ||
-      (a === 198 && (b === 18 || b === 19)) ||
-      a >= 224
-    );
-  }
-  if (net.isIPv6(ip)) {
-    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(ip);
-    if (mapped) return isPrivateAddress(mapped[1]);
-    return (
-      ip === "::" ||
-      ip === "::1" ||
-      ip.startsWith("fc") ||
-      ip.startsWith("fd") ||
-      ip.startsWith("fe8") ||
-      ip.startsWith("fe9") ||
-      ip.startsWith("fea") ||
-      ip.startsWith("feb") ||
-      ip.startsWith("ff")
-    );
-  }
-  return true;
+  const ip = address
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "")
+    .split("%")[0];
+  if (net.isIPv4(ip)) return PRIVATE_V4.check(ip, "ipv4");
+  if (!net.isIPv6(ip)) return true;
+  const g = ipv6Groups(ip);
+  const embedded = `${g[6] >> 8}.${g[6] & 255}.${g[7] >> 8}.${g[7] & 255}`;
+  const zeros = (from, to) => g.slice(from, to).every((n) => n === 0);
+  if (zeros(0, 5) && (g[5] === 0xffff || g[5] === 0)) return isPrivateAddress(embedded);
+  if (g[0] === 0x64 && g[1] === 0xff9b && zeros(2, 6)) return isPrivateAddress(embedded);
+  return PRIVATE_V6.check(ip, "ipv6");
 }
 
 export function hostAllowed(host, allow = ALLOW) {

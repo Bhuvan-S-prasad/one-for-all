@@ -29,7 +29,7 @@ export const screenInputSchema = z.discriminatedUnion("type", [
     modifiers,
   }),
   z.object({ type: z.literal("text"), text: z.string().min(1).max(10_000) }),
-  z.object({ type: z.literal("navigate"), url: z.url().max(2_000) }),
+  z.object({ type: z.literal("navigate"), url: z.url({ protocol: /^https?$/ }).max(2_000) }),
   z.object({ type: z.literal("back") }),
   z.object({ type: z.literal("reload") }),
 ]);

@@ -123,3 +123,6 @@ desktop.ini
 
 # Design-check screenshots and reports (local only)
 .taste-skill/
+
+# Security audit reports with working bypass details (local only)
+docs/security-audit/

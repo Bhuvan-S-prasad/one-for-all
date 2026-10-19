@@ -130,9 +130,13 @@ export async function consolidateMemory(
         }
       }
       // New facts and skills come only from the agent's own untainted work.
+      // The model also saw the agent's facts, and an unverified one (from a
+      // run that read outside content) could come back reworded as "new": so
+      // a new fact is verified only if every fact it was shown was (ADR-0037).
       if (agentId && episodes.length > 0) {
+        const verified = facts.every((f) => f.verified);
         for (const fact of plan.facts) {
-          await maintenance.addFact(ctx, { agentId, content: fact, verified: true });
+          await maintenance.addFact(ctx, { agentId, content: fact, verified });
           result.added += 1;
         }
         for (const skill of plan.skills) {

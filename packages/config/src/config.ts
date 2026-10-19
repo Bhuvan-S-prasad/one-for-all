@@ -154,7 +154,7 @@ export function loadConfig(source: Record<string, string | undefined> = process.
     sandbox: sandboxConfig(env),
     telemetry: { otlpEndpoint: env.OTEL_EXPORTER_OTLP_ENDPOINT },
     inngest: {
-      dev: env.INNGEST_DEV ?? env.NODE_ENV !== "production",
+      dev: inngestDev(env),
       baseUrl: env.INNGEST_BASE_URL,
       eventKey: env.INNGEST_EVENT_KEY,
       signingKey: env.INNGEST_SIGNING_KEY,
@@ -165,6 +165,19 @@ export function loadConfig(source: Record<string, string | undefined> = process.
     },
     version: env.APP_VERSION,
   };
+}
+
+/**
+ * Inngest's dev mode checks no signatures on /api/inngest, whatever the
+ * signing key: so it is off once a key is set (unless asked for), and never
+ * on in production.
+ */
+function inngestDev(env: Env): boolean {
+  const dev = env.INNGEST_DEV ?? (env.NODE_ENV !== "production" && !env.INNGEST_SIGNING_KEY);
+  if (dev && env.NODE_ENV === "production") {
+    throw new Error("INNGEST_DEV can't be on in production: Inngest's calls would not be signed");
+  }
+  return dev;
 }
 
 /**
