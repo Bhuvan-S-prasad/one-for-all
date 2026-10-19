@@ -67,6 +67,18 @@ const MIME: Record<string, string> = {
   gif: "image/gif",
   webp: "image/webp",
   zip: "application/zip",
+  // Media (EN.09): footage, renders, sound, subtitles.
+  mp4: "video/mp4",
+  m4v: "video/mp4",
+  mov: "video/quicktime",
+  webm: "video/webm",
+  mkv: "video/x-matroska",
+  mp3: "audio/mpeg",
+  m4a: "audio/mp4",
+  wav: "audio/wav",
+  ogg: "audio/ogg",
+  srt: "application/x-subrip",
+  vtt: "text/vtt",
 };
 
 /** Files that aren't text: files.write would make a broken one under that name. */
@@ -83,7 +95,19 @@ const NOT_TEXT = new Set([
   "gif",
   "webp",
   "zip",
+  "mp4",
+  "m4v",
+  "mov",
+  "webm",
+  "mkv",
+  "mp3",
+  "m4a",
+  "wav",
+  "ogg",
 ]);
+
+/** Files up to this size are read whole when sent, so their type can be told from the bytes. */
+const SNIFF_LIMIT = 10 * 1024 * 1024;
 
 /** A shared file's type: from its name, else text if it reads as text. */
 function sharedType(name: string, bytes: Uint8Array): string {
@@ -456,27 +480,93 @@ export function fileTools(sandbox: SandboxProvider | null) {
     defineTool({
       name: "files.send",
       description:
-        "Send a file from your computer to the person: it appears under your reply with a download button. Any type up to 10 MB (a Word or Excel file you made, an image, a PDF, a zip). Use it for files they asked for. Paths are relative to /workspace unless they start with / or ~ (your own folder).",
+        "Send a file from your computer to the person: it appears under your reply with a download button (images and videos show in the chat). Any type: a Word or Excel file you made, an image, a PDF, a video you rendered, a zip; up to 2 GB when this server has an object store, else 10 MB. Use it for files they asked for. Paths are relative to /workspace unless they start with / or ~ (your own folder).",
       input: z.object({ path: z.string().min(1).max(4_096) }),
       // The file goes to the person who asked, inside the app: not outbound.
       annotations: { idempotent: true },
+      // A large render takes a while to copy out.
+      timeoutMs: 30 * 60_000,
       async run({ path }, ctx) {
-        const bytes = await (await computer(sandbox, ctx)).readFile(ctx.agentId, path);
+        const box = await computer(sandbox, ctx);
         const name = path.split("/").pop() || path;
-        const kept = await ctx.artifacts?.put({
-          key: `${ctx.idempotencyKey}:send`,
-          kind: "file",
-          name,
-          mimeType: sharedType(name, bytes),
-          content: bytes,
-          untrusted: ctx.tainted,
-        });
+        const ext = name.toLowerCase().split(".").pop() ?? "";
+        const kept = async (
+          content: Uint8Array | { body: AsyncIterable<Uint8Array>; size: number },
+          mimeType: string,
+        ) =>
+          ctx.artifacts?.put({
+            key: `${ctx.idempotencyKey}:send`,
+            kind: "file",
+            name,
+            mimeType,
+            content,
+            untrusted: ctx.tainted,
+          });
+        let size: number;
+        let record;
+        // Large files stream from the computer to the object store (ADR-0047);
+        // small ones are read whole, so their type can be told from the bytes.
+        const streamed = box.readFileStream ? await box.readFileStream(ctx.agentId, path) : null;
+        if (streamed && streamed.size > SNIFF_LIMIT) {
+          size = streamed.size;
+          record = await kept(streamed, MIME[ext] ?? "application/octet-stream");
+        } else {
+          const bytes = streamed
+            ? new Uint8Array(await new Response(ReadableStream.from(streamed.body)).arrayBuffer())
+            : await box.readFile(ctx.agentId, path);
+          size = bytes.length;
+          record = await kept(bytes, sharedType(name, bytes));
+        }
         return {
-          content: kept
-            ? `Shared ${name} (${bytes.length.toLocaleString("en")} bytes); it shows under your reply.`
+          content: record
+            ? `Shared ${name} (${size.toLocaleString("en")} bytes); it shows under your reply.`
             : `Couldn't share ${name} from here.`,
           untrusted: false,
-          ...(kept ? { artifactId: kept.id } : {}),
+          ...(record ? { artifactId: record.id } : {}),
+        };
+      },
+    }),
+    defineTool({
+      name: "files.receive",
+      description:
+        'Copy a file the person attached in this chat into your computer, to work on it (cut a video, read a spreadsheet). Attached files show in the conversation as "[Attached: name · type · size · upload://<id>]". Give that upload:// handle and, if you like, where to put it (default /workspace/uploads/<name>).',
+      input: z.object({
+        upload: z
+          .string()
+          .regex(/^(upload:\/\/)?[0-9a-f-]{36}$/i, "an upload://<id> handle")
+          .describe("The upload://<id> handle from the conversation"),
+        path: z.string().min(1).max(4_096).optional().describe("Where to save it on your computer"),
+      }),
+      // Writes into the agent's own computer only: not outbound.
+      annotations: { idempotent: true },
+      timeoutMs: 30 * 60_000,
+      async run({ upload, path }, ctx) {
+        const id = upload.replace(/^upload:\/\//i, "").toLowerCase();
+        const file = await ctx.uploads?.open(id);
+        if (!file) {
+          throw Object.assign(new Error("No such attached file in this chat."), {
+            code: "not_found",
+          });
+        }
+        const target = path ?? `uploads/${file.name.replace(/[/\\]+/g, "_")}`;
+        const box = await computer(sandbox, ctx);
+        if (box.writeFileStream) {
+          await box.writeFileStream(ctx.agentId, target, file.body, file.size);
+        } else {
+          if (file.size > SNIFF_LIMIT) {
+            throw Object.assign(new Error("This computer can't take files over 10 MB."), {
+              code: "too_large",
+            });
+          }
+          const bytes = new Uint8Array(
+            await new Response(ReadableStream.from(file.body)).arrayBuffer(),
+          );
+          await box.writeFile(ctx.agentId, target, bytes);
+        }
+        return {
+          content: `Saved ${file.name} (${file.mimeType}, ${file.size.toLocaleString("en")} bytes) to ${target}.`,
+          // The person's own file, from their own chat.
+          untrusted: false,
         };
       },
     }),

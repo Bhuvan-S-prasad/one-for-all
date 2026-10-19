@@ -141,6 +141,13 @@
       "when": 1792394108602,
       "tag": "0019_uploads",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1792397247428,
+      "tag": "0020_spend",
+      "breakpoints": true
     }
   ]
 }

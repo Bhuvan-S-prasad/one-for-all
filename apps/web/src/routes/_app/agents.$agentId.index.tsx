@@ -35,12 +35,19 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
   type KeyboardEvent,
 } from "react";
 import { AgentTabs } from "@/components/agent-tabs";
+import {
+  AttachButton,
+  PendingAttachments,
+  SentAttachments,
+  useAttachments,
+} from "@/components/chat/attachments";
 import { LiveRun, WorkingRing } from "@/components/chat/live-run";
 import { Reply } from "@/components/chat/reply";
 import { RunPanel } from "@/components/chat/run-panel";
@@ -54,6 +61,7 @@ import { ComputerOverlay, ComputerPanel, usesComputer } from "@/components/compu
 import { Familiar } from "@/components/familiar";
 import { ErrorAlert } from "@/components/ui/alert";
 import { starters } from "@/lib/agents";
+import { splitAttachments } from "@/lib/attachments";
 import { duration, shortTime } from "@/lib/format";
 import { runPhase } from "@/lib/run-steps";
 import { isTyping, useStoredFlag } from "@/lib/shortcuts";
@@ -228,8 +236,8 @@ function Chat({ agent }: { agent: Agent }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [active, stopRun, startNewChat]);
 
-  const sendText = (text: string) =>
-    send.mutateAsync(text).then(() => {
+  const sendText = (text: string, uploads: readonly string[] = []) =>
+    send.mutateAsync({ content: text, uploads }).then(() => {
       // Writing in an older chat makes it the current one.
       if (threadId) {
         void navigate({
@@ -354,6 +362,7 @@ function Chat({ agent }: { agent: Agent }) {
             agent={agent}
             initial={draft}
             onDraftUsed={clearDraft}
+            threadId={thread?.id}
             disabled={!thread}
             sending={send.isPending}
             active={active}
@@ -737,9 +746,7 @@ function Thread(props: {
           {props.messages.map((m) =>
             m.author.type === "user" ? (
               <div key={m.id} className="flex max-w-[78%] flex-col items-end gap-1 self-end">
-                <div className="rounded-[20px_20px_6px_20px] border border-input bg-accent px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap">
-                  {m.content}
-                </div>
+                <UserMessage content={m.content} />
                 <span className="font-mono text-[11px] text-muted-foreground">
                   {shortTime(m.createdAt)}
                 </span>
@@ -786,17 +793,20 @@ function Composer(props: {
   agent: Agent;
   initial?: string;
   onDraftUsed: () => void;
+  threadId: string | undefined;
   disabled: boolean;
   sending: boolean;
   active: boolean;
   stopping: boolean;
   resuming: boolean;
-  onSend: (text: string) => Promise<void>;
+  onSend: (text: string, uploads?: readonly string[]) => Promise<void>;
   onStop: () => void;
   onResume: () => void;
 }) {
   const [text, setText] = useState(props.initial ?? "");
   const local = useRef<HTMLTextAreaElement | null>(null);
+  // Files to send with the message (EN.09).
+  const attachments = useAttachments(props.threadId);
   const { initial, onDraftUsed } = props;
   // `/` names one of the agent's skills (M5.08).
   const { data: skills } = useSkills(props.agent.id);
@@ -852,10 +862,13 @@ function Composer(props: {
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
     const content = text.trim();
-    if (!content || props.disabled || props.sending) return;
+    const uploads = attachments.ready;
+    if ((!content && uploads.length === 0) || props.disabled || props.sending) return;
+    if (attachments.uploading) return;
     setText("");
+    attachments.clear();
     try {
-      await props.onSend(content);
+      await props.onSend(content, uploads);
     } catch {
       setText(content); // Keep what they wrote if it didn't send.
     }
@@ -883,14 +896,28 @@ function Composer(props: {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing)
       void submit(event);
   };
-  const showStop = props.active && !text.trim();
+  const showStop = props.active && !text.trim() && attachments.items.length === 0;
+  const canSend = (!!text.trim() || attachments.ready.length > 0) && !attachments.uploading;
 
   return (
-    <form onSubmit={submit} className="mx-auto w-full max-w-[820px] px-4 pt-2 pb-4 md:px-8 md:pb-5">
+    <form
+      onSubmit={submit}
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes("Files")) e.preventDefault();
+      }}
+      onDrop={(e) => {
+        if (e.dataTransfer.files.length === 0) return;
+        e.preventDefault();
+        attachments.add(e.dataTransfer.files);
+      }}
+      className="mx-auto w-full max-w-[820px] px-4 pt-2 pb-4 md:px-8 md:pb-5"
+    >
+      <PendingAttachments items={attachments.items} onRemove={attachments.remove} />
       <label htmlFor="message" className="sr-only">
         Message {props.agent.name}
       </label>
-      <div className="relative flex items-end gap-2 rounded-[26px] border border-input bg-card p-2 pl-4 focus-within:border-ring/60">
+      <div className="relative flex items-end gap-1 rounded-[26px] border border-input bg-card p-2 pl-1.5 focus-within:border-ring/60">
+        <AttachButton onFiles={attachments.add} disabled={props.disabled || !props.threadId} />
         {picking && (
           <SkillSuggestions
             id="skill-suggestions"
@@ -917,6 +944,11 @@ function Composer(props: {
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKey}
+          onPaste={(e) => {
+            if (e.clipboardData.files.length === 0) return;
+            e.preventDefault();
+            attachments.add(e.clipboardData.files);
+          }}
           disabled={props.disabled}
           placeholder={
             props.active
@@ -940,7 +972,7 @@ function Composer(props: {
           <button
             type="submit"
             aria-label="Send"
-            disabled={props.disabled || props.sending || !text.trim()}
+            disabled={props.disabled || props.sending || !canSend}
             className="flex size-11 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground outline-none hover:bg-primary/85 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:bg-accent disabled:text-muted-foreground"
           >
             <ArrowUp className="size-5" aria-hidden />
@@ -955,5 +987,20 @@ function Composer(props: {
         {props.active && <span className="ml-auto">Esc stops {props.agent.name}</span>}
       </div>
     </form>
+  );
+}
+
+/** A person's message: its text, and the files attached to it (EN.09). */
+function UserMessage({ content }: { content: string }) {
+  const { text, files } = useMemo(() => splitAttachments(content), [content]);
+  return (
+    <>
+      {files.length > 0 && <SentAttachments files={files} />}
+      {text && (
+        <div className="rounded-[20px_20px_6px_20px] border border-input bg-accent px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap">
+          {text}
+        </div>
+      )}
+    </>
   );
 }

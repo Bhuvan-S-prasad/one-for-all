@@ -191,3 +191,9 @@ export {
   sendableUploads,
   type UploadRow,
 } from "./repos/uploads";
+export {
+  createSpendLedger,
+  setSpendCap,
+  spendByAgentSince,
+  type SpendByAgent,
+} from "./repos/spend";

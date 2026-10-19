@@ -17,6 +17,12 @@ import type { ToolDescriptor } from "./tools";
 export interface StepRunner {
   run<T>(id: string, fn: () => Promise<T>): Promise<T>;
   /**
+   * Pause, holding no process, for `ms` (Inngest `step.sleep`): an agent
+   * waiting on a long job, such as a video being made (EN.12). Absent where
+   * runs can't sleep; then waiting returns at once.
+   */
+  sleep?(id: string, ms: number): Promise<void>;
+  /**
    * Wait, holding no process, for an event whose `data[field]` equals `value`
    * (Inngest `step.waitForEvent`). Resolves with the event's data, or null
    * after `timeoutMs`. Only events sent after the wait starts count. Absent

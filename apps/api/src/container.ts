@@ -29,6 +29,9 @@ import {
   createConnectionStore,
   createPolicyRuleStore,
   createArtifactStore,
+  getUpload,
+  openUpload,
+  createSpendLedger,
   referencedBlobKeys,
   createDatabase,
   createChatRecordStore,
@@ -450,6 +453,17 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     ...(toolkits ? { toolkits } : {}),
     redact: (ctx, text) => vault.redact(ctx, text),
     artifacts,
+    // Files people attached (EN.09): only from the run's own chat.
+    async uploads(ctx, id) {
+      const [run, found] = await Promise.all([runs.get(ctx, ctx.runId), getUpload(db, ctx, id)]);
+      if (!run?.threadId || !found || found.threadId !== run.threadId || !found.messageId) {
+        return null;
+      }
+      const opened = await openUpload(db, blobs, ctx, found.id);
+      return opened
+        ? { name: found.name, mimeType: found.mimeType, size: found.size, body: opened.body }
+        : null;
+    },
     // Saved logins, decrypted only here, when use_saved_login asks (ADR-0012).
     async logins(ctx, site) {
       const names = loginSecretNames(site);
@@ -461,6 +475,8 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
       const { username } = JSON.parse(await vault.reveal(ctx, userRef)) as { username: string };
       return { username, password: await vault.reveal(ctx, passwordRef) };
     },
+    // Paid app credits against the monthly cap (EN.15).
+    spend: createSpendLedger(db),
     telemetry,
   });
 

@@ -1119,7 +1119,14 @@ async function streamFile(req, res, url) {
     if (sized.exitCode !== 0) throw httpError(404, sized.stderr.trim() || "No such file");
     const size = Number(sized.stdout.trim());
     if (!(size <= MAX_STREAM)) throw httpError(413, "The file is larger than 2 GB");
-    const child = spawnAs(user, ["bash", "-c", `${PATH_ARG} && exec cat -- "$p"`, "bash", WORKSPACE, path]);
+    const child = spawnAs(user, [
+      "bash",
+      "-c",
+      `${PATH_ARG} && exec cat -- "$p"`,
+      "bash",
+      WORKSPACE,
+      path,
+    ]);
     res.writeHead(200, {
       "content-type": "application/octet-stream",
       "content-length": String(size),
@@ -1157,7 +1164,10 @@ async function streamFile(req, res, url) {
   req.pipe(child.stdin);
   const code = await new Promise((resolve) => child.on("close", resolve));
   if (code !== 0) {
-    throw httpError(400, Buffer.concat(errors).toString("utf8").trim() || "Could not write the file");
+    throw httpError(
+      400,
+      Buffer.concat(errors).toString("utf8").trim() || "Could not write the file",
+    );
   }
   if (received !== size) throw httpError(400, "The upload ended early");
   send(res, 200, { size: received });

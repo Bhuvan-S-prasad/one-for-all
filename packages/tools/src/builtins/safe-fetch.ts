@@ -200,3 +200,104 @@ export async function safeFetch(input: string, opts: SafeFetchOptions = {}): Pro
     };
   }
 }
+
+// ── Downloading files (EN.13) ────────────────────────────────────────────────
+
+export interface SafeDownload {
+  /** Where it ended up, after redirects. */
+  readonly url: string;
+  readonly contentType: string;
+  /** From Content-Length; null when the server didn't say. */
+  readonly size: number | null;
+  /** The bytes, stopped with an error if they pass `maxBytes`. */
+  readonly body: AsyncIterable<Uint8Array>;
+}
+
+function openOnce(url: URL, timeoutMs: number): Promise<IncomingMessage> {
+  return new Promise((resolve, reject) => {
+    const request = url.protocol === "https:" ? httpsRequest : httpRequest;
+    const req = request(
+      url,
+      {
+        method: "GET",
+        lookup: guardedLookup as never,
+        timeout: timeoutMs,
+        headers: { "user-agent": "One-for-All agent (+https://github.com/one-for-all)" },
+      },
+      resolve,
+    );
+    req.on("timeout", () =>
+      req.destroy(
+        Object.assign(new Error("The server took too long to respond"), { code: "timeout" }),
+      ),
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+/**
+ * A file from the web as a stream, with the same guards as `safeFetch`: http
+ * and https only, no credentials, no private addresses (checked again on
+ * every redirect and on every DNS answer). Refuses one larger than `maxBytes`.
+ */
+export async function safeDownload(
+  input: string,
+  opts: { readonly maxBytes: number; readonly timeoutMs?: number; readonly maxRedirects?: number },
+): Promise<SafeDownload> {
+  const timeoutMs = opts.timeoutMs ?? 60_000;
+  const maxRedirects = opts.maxRedirects ?? 5;
+  let url = new URL(input);
+  for (let hop = 0; ; hop += 1) {
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new FetchBlockedError(`Only http and https URLs can be read (got ${url.protocol})`);
+    }
+    if (url.username || url.password) {
+      throw new FetchBlockedError("URLs with credentials are not allowed");
+    }
+    const host = url.hostname.replace(/^\[|\]$/g, "");
+    if (isIP(host) && isPrivateAddress(host)) {
+      throw new FetchBlockedError(`${host} is a private address`);
+    }
+    const res = await openOnce(url, timeoutMs);
+    const status = res.statusCode ?? 0;
+    const location = res.headers.location;
+    if (status >= 300 && status < 400 && location) {
+      res.resume();
+      if (hop >= maxRedirects) throw new Error("Too many redirects");
+      url = new URL(location, url);
+      continue;
+    }
+    if (status < 200 || status >= 300) {
+      res.resume();
+      throw Object.assign(new Error(`The server answered ${status}`), { code: "fetch_failed" });
+    }
+    const declared = Number(res.headers["content-length"]);
+    const size = Number.isInteger(declared) && declared >= 0 ? declared : null;
+    if (size !== null && size > opts.maxBytes) {
+      res.destroy();
+      throw Object.assign(new Error("The file is too large to keep"), { code: "too_large" });
+    }
+    const limit = opts.maxBytes;
+    async function* body(): AsyncIterable<Uint8Array> {
+      let seen = 0;
+      for await (const chunk of res as AsyncIterable<Buffer>) {
+        seen += chunk.length;
+        if (seen > limit) {
+          res.destroy();
+          throw Object.assign(new Error("The file is too large to keep"), { code: "too_large" });
+        }
+        yield new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.length);
+      }
+    }
+    return {
+      url: url.toString(),
+      contentType: String(res.headers["content-type"] ?? "")
+        .split(";")[0]!
+        .trim()
+        .toLowerCase(),
+      size,
+      body: body(),
+    };
+  }
+}

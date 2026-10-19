@@ -1,12 +1,14 @@
 import {
   artifactUri,
   noopTelemetry,
+  toCents,
   type AgentCapability,
   type AgentDirectory,
   type AgentProfile,
   type ArtifactStore,
   type PolicyEngine,
   type RunContext,
+  type SpendLedger,
   type Telemetry,
   type ToolCallStore,
   type ToolExecutor,
@@ -47,6 +49,16 @@ export interface ToolExecutorOptions {
    */
   readonly maxResultChars?: number;
   readonly artifacts?: ArtifactStore;
+  /** Files people attached, opened only for a run of their own chat (EN.09). */
+  readonly uploads?: (
+    ctx: RunContext,
+    id: string,
+  ) => Promise<{
+    readonly name: string;
+    readonly mimeType: string;
+    readonly size: number;
+    readonly body: AsyncIterable<Uint8Array>;
+  } | null>;
   /** Saved logins, decrypted only when a tool asks for one (M3.08, ADR-0012). */
   readonly logins?: (
     ctx: RunContext,
@@ -54,6 +66,11 @@ export interface ToolExecutorOptions {
   ) => Promise<{ readonly username: string; readonly password: string } | null>;
   readonly timeoutMs?: number;
   readonly now?: () => number;
+  /**
+   * Paid app credits (EN.15): a call with a cost estimate is refused when it
+   * would pass the workspace's monthly cap, and counted when it starts.
+   */
+  readonly spend?: SpendLedger;
 }
 
 function asText(content: ToolRunResult["content"]): string {
@@ -365,6 +382,9 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
           ...(options.logins
             ? { logins: { get: (site: string) => options.logins!(ctx, site) } }
             : {}),
+          ...(options.uploads
+            ? { uploads: { open: (id: string) => options.uploads!(ctx, id) } }
+            : {}),
           ...(store
             ? {
                 artifacts: {
@@ -411,6 +431,23 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
           };
         }
 
+        // Paid credits (EN.15): refuse before asking anyone, so nobody
+        // approves a call that the monthly cap would stop anyway.
+        const costCents = options.spend ? toCents(tool.annotations.costUsd ?? 0) : 0;
+        if (costCents > 0) {
+          const { spentCents, capCents } = await options.spend!.month(ctx);
+          if (capCents !== null && spentCents + costCents > capCents) {
+            const usd = (cents: number) => `$${(cents / 100).toFixed(2)}`;
+            const reason = `this month's limit for paid app credits is ${usd(capCents)}, and ${usd(spentCents)} is used; this call would cost about ${usd(costCents)}`;
+            return {
+              status: "blocked",
+              verdict: "deny",
+              reasons: [...decision.reasons, reason],
+              message: `Not run: ${reason}. A workspace owner can raise the limit in Settings.`,
+            };
+          }
+        }
+
         if (decision.verdict !== "auto" && !request.approved) {
           // A person must agree first (§6.2): nothing runs; the harness asks
           // them, showing what the call would do, and calls again if they agree.
@@ -435,6 +472,15 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
           args: JSON.parse(await redact(ctx, JSON.stringify(parsed.value ?? {}))),
           verdict: decision.verdict,
         });
+
+        // Counted when it starts: a provider may charge for a job that fails.
+        if (costCents > 0) {
+          await options.spend!.record(ctx, {
+            idempotencyKey: request.idempotencyKey,
+            tool: request.name,
+            costCents,
+          });
+        }
 
         let result: ToolRunResult | null = null;
         if (!begun.created) {
@@ -465,7 +511,10 @@ export function createToolExecutor(options: ToolExecutorOptions): ToolExecutor {
         }
 
         try {
-          result ??= await withTimeout(tool.run(parsed.value, runCtx), timeoutMs);
+          result ??= await withTimeout(
+            tool.run(parsed.value, runCtx),
+            Math.max(timeoutMs, tool.timeoutMs ?? 0),
+          );
         } catch (error) {
           const code = (error as { code?: string }).code ?? "tool_failed";
           const message = await redact(ctx, error instanceof Error ? error.message : String(error));

@@ -19,6 +19,7 @@ import {
 //   1. not granted, or blocked            deny
 //   2. always-human list                  human
 //   3. destructive annotation             approve
+//      a paid call (cost estimate)        approve
 //   4. taint escalation (outbound, and    approve   a person can allow the
 //      opening an address nobody gave)               site for the rest of the run
 //   5. ask-first rules                    approve
@@ -28,9 +29,13 @@ import {
 /**
  * Tools of the platform itself, available to every agent without a grant:
  * reopening its own saved output (M3.06), loading an app's tools it was
- * granted (M4.05). A grant can still block one.
+ * granted (M4.05), pausing for a long job (EN.12). A grant can still block one.
  */
-export const PLATFORM_TOOLS: ReadonlySet<string> = new Set(["artifacts.read", "load_toolkit"]);
+export const PLATFORM_TOOLS: ReadonlySet<string> = new Set([
+  "artifacts.read",
+  "load_toolkit",
+  "wait",
+]);
 
 /** The grant that covers a tool: an exact name beats an app wildcard (`hubspot.*`). */
 export function grantFor(
@@ -139,6 +144,15 @@ export function createPolicyEngine(options: PolicyEngineOptions): PolicyEngine {
       // 3. Risk annotations: destructive actions always need a person.
       if (tool.annotations.destructive) {
         holds.push({ verdict: "approve", reason: "destructive tools need approval" });
+      }
+
+      // 3b. Paid calls (EN.15, ADR-0048): spending a person's credits always
+      //     asks first, with the estimate, whatever the grant says.
+      if (tool.annotations.costUsd !== undefined && tool.annotations.costUsd > 0) {
+        holds.push({
+          verdict: "approve",
+          reason: `uses paid credits: about $${tool.annotations.costUsd.toFixed(2)} a call (estimate)`,
+        });
       }
 
       // 4. Taint escalation (§10.3): after reading untrusted content, anything

@@ -51,7 +51,8 @@ async function collect(body: Uint8Array | AsyncIterable<Uint8Array>, size: numbe
   let length = 0;
   for await (const part of body) {
     length += part.length;
-    if (length > size) throw Object.assign(new Error("More bytes than announced"), { code: "bad_request" });
+    if (length > size)
+      throw Object.assign(new Error("More bytes than announced"), { code: "bad_request" });
     parts.push(part);
   }
   if (length !== size) {

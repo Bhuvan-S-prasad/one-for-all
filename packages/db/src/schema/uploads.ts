@@ -1,5 +1,14 @@
 import { sql } from "drizzle-orm";
-import { check, customType, foreignKey, index, integer, pgTable, text, uuid } from "drizzle-orm/pg-core";
+import {
+  check,
+  customType,
+  foreignKey,
+  index,
+  integer,
+  pgTable,
+  text,
+  uuid,
+} from "drizzle-orm/pg-core";
 import { user } from "./auth";
 import { createdAt, id } from "./columns";
 import { workspaceId } from "./tenancy";

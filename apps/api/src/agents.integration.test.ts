@@ -18,6 +18,7 @@ import {
   sendMessageResponseSchema,
   threadSchema,
   threadSummaryPageSchema,
+  spendSummarySchema,
   usageTodaySchema,
   type ApprovalDecidedEvent,
   type CreateAgentInput,
@@ -29,6 +30,7 @@ import { asId, type AgentId, type RunId, type TenantContext } from "@ofa/core";
 import { sweepOrphans } from "@ofa/blobs";
 import {
   createDatabase,
+  createSpendLedger,
   insertMemory,
   loadRootEnv,
   referencedBlobKeys,
@@ -426,6 +428,8 @@ describe.skipIf(!hasDb)("M2 API (integration)", async () => {
       'attachment; filename="report _draft_.html"',
     );
     expect(content.headers.get("x-content-type-options")).toBe("nosniff");
+    // The route's own policy, not the app's (the global one used to replace it).
+    expect(content.headers.get("content-security-policy")).toBe("sandbox; default-src 'none'");
     expect(await content.text()).toBe("<script>alert(1)</script>");
     expect((await get("/api/artifacts/00000000-0000-4000-8000-000000000000")).status).toBe(404);
   });
@@ -682,6 +686,107 @@ describe.skipIf(!hasDb)("M2 API (integration)", async () => {
     expect(stats.items).toEqual([
       expect.objectContaining({ agentId, runsThisWeek: 2, lastResult: null }),
     ]);
+  });
+
+  it("counts paid app credits per agent against the monthly limit (EN.15)", async () => {
+    const ledger = createSpendLedger(container.db);
+    const run = { ...tenant(), agentId: asId<AgentId>(agentId), runId: asId<RunId>(randomUUID()) };
+    expect(await ledger.month(tenant())).toEqual({ spentCents: 0, capCents: null });
+    await ledger.record(run, {
+      idempotencyKey: `${run.runId}:t1`,
+      tool: "runway.x",
+      costCents: 50,
+    });
+    // A retried call is counted once.
+    await ledger.record(run, {
+      idempotencyKey: `${run.runId}:t1`,
+      tool: "runway.x",
+      costCents: 50,
+    });
+    await ledger.record(run, {
+      idempotencyKey: `${run.runId}:t2`,
+      tool: "runway.x",
+      costCents: 25,
+    });
+
+    const set = await send("PUT", "/api/settings/spend", { capUsd: 20 });
+    expect(set.status).toBe(200);
+    const summary = spendSummarySchema.parse(await (await get("/api/settings/spend")).json());
+    expect(summary).toMatchObject({ spentUsd: 0.75, capUsd: 20 });
+    expect(summary.byAgent).toEqual([
+      expect.objectContaining({ agentId, calls: 2, spentUsd: 0.75 }),
+    ]);
+    expect(await ledger.month(tenant())).toEqual({ spentCents: 75, capCents: 2000 });
+    expect((await send("PUT", "/api/settings/spend", { capUsd: -1 })).status).toBe(422);
+    await send("PUT", "/api/settings/spend", { capUsd: null });
+    expect((await ledger.month(tenant())).capCents).toBeNull();
+  });
+
+  it("takes files attached to a chat, sends them with a message once, and serves them", async () => {
+    await container.blobs!.ready();
+    const upload = (name: string, type: string, bytes: Uint8Array) =>
+      app.request(
+        url(`/api/threads/${threadId}/uploads?name=${encodeURIComponent(name)}&type=${type}`),
+        {
+          method: "POST",
+          headers: {
+            cookie,
+            origin,
+            "content-type": "application/octet-stream",
+            "content-length": String(bytes.length),
+          },
+          body: bytes,
+        },
+      );
+    const video = new Uint8Array(3 * 1024 * 1024).map((_, i) => i % 199);
+    const clip = await upload("beach day.mp4", "video/mp4", video);
+    expect(clip.status).toBe(201);
+    const clipUpload = (await clip.json()) as { id: string; size: number; mimeType: string };
+    expect(clipUpload).toMatchObject({ size: video.length, mimeType: "video/mp4" });
+    const pdf = (await (
+      await upload("notes.pdf", "application/pdf", new Uint8Array([37, 80, 68, 70]))
+    ).json()) as {
+      id: string;
+    };
+
+    // Raw bytes are taken only on the upload route.
+    const raw = await app.request(url(`/api/threads/${threadId}/messages`), {
+      method: "POST",
+      headers: { cookie, origin, "content-type": "application/octet-stream" },
+      body: new Uint8Array([1]),
+    });
+    expect(raw.status).toBe(400);
+
+    const sent = await send("POST", `/api/threads/${threadId}/messages`, {
+      content: "Cut this into a reel",
+      uploads: [clipUpload.id, pdf.id],
+    });
+    expect(sent.status).toBe(201);
+    const { message } = sendMessageResponseSchema.parse(await sent.json());
+    expect(message.content).toContain("Cut this into a reel");
+    expect(message.content).toContain(
+      `[Attached: beach day.mp4 · video/mp4 · 3.0 MB · upload://${clipUpload.id}]`,
+    );
+    expect(message.content).toContain(`upload://${pdf.id}]`);
+    // Once sent, a file can't go out again with another message.
+    const again = await send("POST", `/api/threads/${threadId}/messages`, {
+      content: "And again",
+      uploads: [clipUpload.id],
+    });
+    expect(again.status).toBe(400);
+
+    // A video plays in place and seeks by range; a PDF is only ever a download.
+    const played = await get(`/api/uploads/${clipUpload.id}/content?view=1`, {
+      range: "bytes=0-9",
+    });
+    expect(played.status).toBe(206);
+    expect(played.headers.get("content-type")).toBe("video/mp4");
+    expect(played.headers.get("content-disposition")).toMatch(/^inline/);
+    expect(played.headers.get("content-security-policy")).toBe("sandbox; default-src 'none'");
+    expect([...new Uint8Array(await played.arrayBuffer())]).toEqual([...video.slice(0, 10)]);
+    const doc = await get(`/api/uploads/${pdf.id}/content?view=1`);
+    expect(doc.headers.get("content-type")).toBe("application/octet-stream");
+    expect(doc.headers.get("content-disposition")).toMatch(/^attachment/);
   });
 
   it("stores the model key encrypted and only ever shows its last four characters", async () => {

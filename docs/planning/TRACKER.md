@@ -27,7 +27,7 @@ The single place to see what is done, what is in progress and what comes next. A
 | | |
 |---|---|
 | **Current milestone** | Enhancements (before M6) |
-| **Next task** | EN.09 uploads and streaming files into and out of the agent's computer (then EN.01) |
+| **Next task** | EN.01 several providers and a model per agent (then EN.16, the video edit agent's sandbox image) |
 | **Blockers** | None. Dev services must be running (`pnpm infra:up`) for integration tests |
 | **Decisions pending** | License (see [ARCHITECTURE.md §19](../architecture/ARCHITECTURE.md#19-open-questions)); needed before first public push, not before M1 work |
 
@@ -47,7 +47,7 @@ The single place to see what is done, what is in progress and what comes next. A
 | [Desktop](#desktop) | Watch an agent work on its own desktop; it makes Word and Excel files | ✅ Done | 14 / 14 |
 | [Teams and continuity](#teams-and-continuity) | "Continue" continues; a coordinator routes by capability | ✅ Done | 11 / 11 |
 | [Site and docs](#site-and-docs) | A public landing page and docs for what is built | ✅ Done | 7 / 7 |
-| [Enhancements](#enhancements) | Your own model per agent; images and video; teams that discuss; email triggers | 🟨 In progress | 2 / 30 |
+| [Enhancements](#enhancements) | Your own model per agent; images and video; teams that discuss; email triggers | 🟨 In progress | 9 / 30 |
 | [M6 Everywhere](#m6-everywhere) | Approve from the phone; chat on Telegram and Slack | ⬜ Not started | 0 / 8 |
 | [M7 Hardening](#m7-hardening) | Evals gate CI; backups; E2B and cloud adapters | ⬜ Not started | 0 / 11 |
 
@@ -335,15 +335,15 @@ Stays where it is: the approval card (M4.09), the file card (M3.06) and the comp
 **Media storage**
 - [x] EN.07 → ADR-0047: Garage (6 MiB idle, 99 MB image, arm64) over SeaweedFS (80 MiB) and RustFS (109 MiB), measured side by side; set up through its admin API in six calls, checked; ARCHITECTURE.md §4, §7, §14.1, §17 and L9; ADR-0042 amended. Original task: ADR: object storage for media. MinIO's community edition is archived (no images since 2025-10), so compare Garage, SeaweedFS and a plain volume; a `BlobStore` port in `@ofa/core` with an S3 adapter, chosen in `container.ts`; which artifacts move (over a size threshold), signed short-lived downloads through the API, backups, the ~3 GB and arm64 targets; amends ADR-0042
 - [x] EN.08 → `BlobStore` and `BlobSweeper` ports in core (streams as `AsyncIterable`, so core stays platform-free); `packages/blobs`: S3 adapter on `aws4fetch` (streamed uploads, ranged reads), in-memory store, `setUpGarage`, `sweepOrphans`; migration 0018 (`content` or `blob_key`, never both; 2 GB in the store); artifacts over 1 MB stored there; `GET /api/artifacts/:id/content` streams and serves `Range` (206/416); the hourly `blob-sweep` function (re-register Inngest); Garage in both Compose files, secrets from `init-env.sh`, `BLOB_S3_*`/`GARAGE_*` with dev defaults. Tests: blobs unit 2 and integration 3 against Garage, API integration (2 MB artifact in the store, ranges, sweep), config. Original task: The chosen store in `docker-compose.dev.yml` and the self-host bundle (internal network only, credentials from `init-env.sh`), the `BlobStore` S3 adapter, large artifacts written there with metadata in Postgres, streamed downloads, existing rows left as they are — **Deps:** EN.07
-- [ ] EN.09 Uploads from the web app: chunked upload of footage and images into a chat, stored as an artifact and copied into the agent's computer on request — **Deps:** EN.08
+- [x] EN.09 → the `upload` table (migration 0019, RLS) kept like artifacts; `POST /api/threads/:id/uploads` streams the raw body (octet-stream only on that route, no body limit there), up to 10 per message, sent once and only by the person who uploaded; `[Attached: … · upload://<id>]` lines in the message; `files.receive` copies one into the computer only in a run of its chat; the sandbox service streams `GET`/`PUT /files/raw` up to 2 GB, so `files.send` has no 10 MB limit; uploads served with `Range`, inline only for allowlisted media under a sandbox CSP. Found and fixed: `secureHeaders` overwrote the routes' own CSP, so artifacts never had the sandbox CSP. Web: attach, drop and paste in the agent chat with progress, attachments in sent messages. Original task: Uploads from the web app: chunked upload of footage and images into a chat, stored as an artifact and copied into the agent's computer on request — **Deps:** EN.08
 
 **Images and video**
-- [ ] EN.10 ADR: media generation through catalog apps (Runway, Higgsfield MCP), long jobs, results as artifacts, and spend: a generation shows its estimated cost on the approval card, and a workspace monthly cap stops it
-- [ ] EN.11 Runway and Higgsfield in the catalog: review each per `catalog-review.md` (auth, tools and annotations, models, what costs credits), pinned URLs and auth origins — **Deps:** EN.10
-- [ ] EN.12 Long-running tool calls: an MCP call that returns a job is polled inside durable steps until it finishes, fails or times out, with progress in the run log — **Deps:** EN.10
-- [ ] EN.13 Media results kept: generated images and videos downloaded into the blob store as artifacts (never left only at the provider's URL) — **Deps:** EN.08, EN.12
-- [ ] EN.14 Media in the chat: images in a grid and videos in a player inside replies, thumbnails from pages the agent read, full-size view, download — **Deps:** EN.13
-- [ ] EN.15 Spend control: the cost estimate on the card, the monthly cap in Settings, spend per agent in Activity — **Deps:** EN.11
+- [x] EN.10 → ADR-0048; ARCHITECTURE.md §9.2, §9.3, §10.2, §10.5 and the ADR table; `catalog-review.md` step 9 for media apps. Original task: ADR: media generation through catalog apps (Runway, Higgsfield MCP), long jobs, results as artifacts, and spend: a generation shows its estimated cost on the approval card, and a workspace monthly cap stops it
+- [x] EN.11 → `runway.json` (`mcp.runwayml.com`, scopes `openid api:read_write`) and `higgsfield.json` (`mcp.higgsfield.ai`, sign-in at `clerk.higgsfield.ai`, `openid email offline_access`), both with automatic registration, checked against their published OAuth metadata; a `media` block in the catalog schema (call timeout, cost per call, what the estimate assumes). Not yet signed in with real accounts, so the tool list and the $0.50 estimates are unchecked (see Open). Original task: Runway and Higgsfield in the catalog: review each per `catalog-review.md` (auth, tools and annotations, models, what costs credits), pinned URLs and auth origins — **Deps:** EN.10
+- [x] EN.12 → the agent polls the app's own status tool and calls `wait` (5–600 s, a platform tool) between checks; the harness then sleeps in `step.sleep`, so no process is held and no model call is spent; media apps' calls get the catalog's timeout (10 min by default), passed to the MCP client too (ADR-0048 says why not polling inside the executor). Original task: Long-running tool calls: an MCP call that returns a job is polled inside durable steps until it finishes, fails or times out, with progress in the run log — **Deps:** EN.10
+- [x] EN.13 → MCP results keep inline images and audio, media resource blobs, `resource_link`s and (for media apps) media links in the text, up to 8 per call, as the run's files; downloads through `safeDownload` (no private addresses, redirects checked, 1 GB) streamed into the store; "Kept …" lines in the result; `web.save_file` for files on pages. Original task: Media results kept: generated images and videos downloaded into the blob store as artifacts (never left only at the provider's URL) — **Deps:** EN.08, EN.12
+- [x] EN.14 → `MediaGrid` in replies for any kept picture, video or sound (grid, player, a `<dialog>` full-size view, download), the same for a person's attachments; thumbnails from pages through `web.save_file`. Group chats have no attach button yet (Backlog). Original task: Media in the chat: images in a grid and videos in a player inside replies, thumbnails from pages the agent read, full-size view, download — **Deps:** EN.13
+- [x] EN.15 → `costUsd` on a media app's tools that make something (not ones that only look, so polling never asks); policy holds a paid call for approval whatever the grant, and its card says "Uses Runway credits: about $0.50 (estimate: …)"; the `spend` ledger (migration 0020, RLS), written once per call when it starts; a monthly cap (`workspace.spend_cap_cents`) checked before asking, so nobody approves a refused call; `GET`/`PUT /api/settings/spend`; a Paid app credits card in Settings and a spend line per agent in Activity. Original task: Spend control: the cost estimate on the card, the monthly cap in Settings, spend per agent in Activity — **Deps:** EN.11
 
 **Our video edit agent**
 - [ ] EN.16 Sandbox image: ffmpeg and local transcription (whisper.cpp or faster-whisper, small model), checked on arm64 with image size and memory noted; amends ADR-0025
@@ -422,6 +422,7 @@ Stays where it is: the approval card (M4.09), the file card (M3.06) and the comp
 - Teach a task by demonstration (record a browser workflow → draft skill)
 - LLM action reviewer as an extra policy verdict source
 - Email channel through a relay
+- Attachments in group chats: the composer in `groups.$threadId.tsx` has no attach button yet (EN.09 added it to agent chats). Found in EN.14
 - Edit nested text on an approval card: Notion's `create_pages` puts the page text inside `pages[].content`, so its card shows the text but offers nothing to change (ADR-0030 edits top-level text only). Found in the M4 end-to-end check
 - Desktop app (Tauri wrapper around the SPA)
 - Team agents: one agent many users talk to, acting as the person asking
@@ -439,6 +440,12 @@ Stays where it is: the approval card (M4.09), the file card (M3.06) and the comp
 ## Session log
 
 Newest first. Keep entries short.
+
+### 2026-10-19 (session 26, media)
+- **Done:** EN.09–EN.15: uploads and streamed files both ways, ADR-0048, Runway and Higgsfield in the catalog, `wait` with durable sleep, media from apps and pages kept as files, media in the chat, paid calls asking with an estimate under a monthly cap. Found and fixed: `secureHeaders` replaced every route's own CSP (artifacts were served without the sandbox CSP). The sandbox image was rebuilt for streaming.
+- **Checks:** unit tests in all 21 packages, all 7 integration suites (API 81, db 37 with RLS on `upload` and `spend`, sandbox 21, blobs 3), typecheck, lint (no errors), format; migrations 0019 and 0020 are on the dev database.
+- **Next:** EN.01.
+- **Open:** sign in to Runway and Higgsfield with real accounts: check their tool names and hints (which tools spend, that status tools read as free), how they return results, and set `costPerCallUsd` from real prices (both are $0.50 guesses). Self-host bundle not rebuilt for this session's changes.
 
 ### 2026-10-19 (session 26, media storage)
 - **Done:** CI fix: the consolidation test now expects the new fact to stay unverified (fix 5), and the sandbox's own `open` refuses only `javascript:` (its tests open `data:` pages; agents' `browser.open` stays http(s) only). Enhancements phase added; EN.07 (ADR-0047, Garage) and EN.08 (object store for artifacts over 1 MB).

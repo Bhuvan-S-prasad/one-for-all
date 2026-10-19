@@ -161,8 +161,8 @@ describe.skipIf(!hasDb)("checks, unread and agent files (integration)", async ()
     // What the agent sees, and its quiet answer.
     const ctx: RunContext = { ...tenant, agentId: asId(watcherId), runId: asId(run.id) };
     const tools = await container.harness.tools.listTools(ctx, { readOnly: true });
-    // Only what reads: its granted recall and the platform's artifacts.read.
-    expect(tools.map((t) => t.name).sort()).toEqual(["artifacts.read", "recall"]);
+    // Only what reads: its granted recall and the platform's artifacts.read and wait.
+    expect(tools.map((t) => t.name).sort()).toEqual(["artifacts.read", "recall", "wait"]);
     const refused = await container.harness.tools.execute(
       {
         name: "remember",

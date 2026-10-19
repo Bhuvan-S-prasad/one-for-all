@@ -77,6 +77,16 @@ describe("policy engine", () => {
     );
   });
 
+  it("holds a paid call for a person whatever the grant, naming the estimate (EN.15)", async () => {
+    const e = engine([{ tool: "runway.generate_video", mode: "auto" }]);
+    const paid = tool("runway.generate_video", { costUsd: 0.5 });
+    const held = await e.evaluate({ ctx, tool: paid, args: {}, tainted: false });
+    expect(held.verdict).toBe("approve");
+    expect(held.reasons.join(" ")).toContain("about $0.50 a call");
+    const free = tool("runway.generate_video", { costUsd: 0 });
+    expect((await e.evaluate({ ctx, tool: free, args: {}, tainted: false })).verdict).toBe("auto");
+  });
+
   it("in a tainted run, opens only addresses the run was given", async () => {
     const e = engine([{ tool: "browser.*", mode: "auto" }]);
     const open = tool("browser.open", { readOnly: true, opensUrl: "url" });

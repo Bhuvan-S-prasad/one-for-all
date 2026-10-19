@@ -21,7 +21,8 @@ export interface FakeTool {
   readonly description: string;
   readonly inputSchema: Record<string, unknown>;
   readonly annotations?: Record<string, boolean>;
-  run(args: Record<string, unknown>): string;
+  /** Text, or MCP content parts as they are (pictures, links). */
+  run(args: Record<string, unknown>): string | { readonly content: readonly unknown[] };
 }
 
 export interface FakeMcpServer {
@@ -144,7 +145,8 @@ export async function startFakeMcpServer(
           return reply({ content: [{ type: "text", text: "No such tool" }], isError: true });
         }
         const args = (message.params?.arguments ?? {}) as Record<string, unknown>;
-        return reply({ content: [{ type: "text", text: tool.run(args) }] });
+        const out = tool.run(args);
+        return reply(typeof out === "string" ? { content: [{ type: "text", text: out }] } : out);
       }
       default:
         return {

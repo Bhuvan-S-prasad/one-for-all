@@ -18,3 +18,4 @@ export * from "./policy";
 export * from "./schedules";
 export * from "./skills";
 export * from "./uploads";
+export * from "./spend";

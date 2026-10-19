@@ -64,6 +64,33 @@ export const usageTodaySchema = z.object({
 });
 export type UsageToday = z.infer<typeof usageTodaySchema>;
 
+/**
+ * Paid app credits this month (EN.15, ADR-0048): estimates from the catalog,
+ * against the workspace's monthly cap, per agent for Activity.
+ */
+export const spendSummarySchema = z.object({
+  /** Start of the month counted (UTC). */
+  since: timestampSchema,
+  spentUsd: z.number().min(0),
+  /** Most the workspace allows a month; null: no limit. */
+  capUsd: z.number().min(0).nullable(),
+  byAgent: z.array(
+    z.object({
+      agentId: idSchema,
+      /** Null when the agent has since been removed. */
+      name: z.string().nullable(),
+      calls: z.number().int().min(0),
+      spentUsd: z.number().min(0),
+    }),
+  ),
+});
+export type SpendSummary = z.infer<typeof spendSummarySchema>;
+
+export const setSpendCapRequestSchema = z.object({
+  capUsd: z.number().min(0).max(100_000).nullable(),
+});
+export type SetSpendCapRequest = z.infer<typeof setSpendCapRequestSchema>;
+
 /** Per agent, for the Agents page (UX.12). */
 export const agentStatsSchema = z.object({
   agentId: idSchema,

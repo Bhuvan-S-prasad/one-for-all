@@ -87,7 +87,12 @@ export function createDockerSandbox(options: DockerSandboxOptions): SandboxProvi
   }
 
   /** A raw-bytes request to `/files/raw` (ADR-0047). */
-  async function raw(method: "GET" | "PUT", agentId: AgentId, path: string, init: RequestInit = {}) {
+  async function raw(
+    method: "GET" | "PUT",
+    agentId: AgentId,
+    path: string,
+    init: RequestInit = {},
+  ) {
     const url = new URL(`${base}/files/raw`);
     url.searchParams.set("agent", agentId);
     url.searchParams.set("path", path);

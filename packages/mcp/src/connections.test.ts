@@ -195,7 +195,12 @@ describe("the catalog", () => {
       "gmail",
       "google_calendar",
       "google_drive",
+      "runway",
+      "higgsfield",
     ]);
+    // Media apps run long and say what a call costs (ADR-0048).
+    expect(catalogEntry("runway")?.media).toMatchObject({ callTimeoutSeconds: 600 });
+    expect(catalogEntry("higgsfield")?.media?.costPerCallUsd).toBeGreaterThan(0);
     for (const entry of CATALOG) {
       expect(entry.url.startsWith("https://")).toBe(true);
       expect(entry.setup === "automatic" || entry.guide).toBeTruthy();

@@ -180,6 +180,7 @@ export function createCdpBrowser(endpoint: () => Promise<string>): AgentBrowser 
         // Page.navigate runs a javascript: address inside the open page, with
         // its cookies; never that. (Agents' browser.open takes http(s) only.)
         // Browsers skip leading spaces and control characters in an address.
+        // eslint-disable-next-line no-control-regex -- matching them is the point
         if (/^javascript:/i.test(url.replace(/^[\s\u0000-\u001f]+/, ""))) {
           throw new SandboxError("navigation_failed", `Couldn't open ${url}: scripts don't open.`);
         }

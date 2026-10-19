@@ -103,11 +103,20 @@ export function inngestSteps(
       id: string,
       opts: { event: string; timeout: number; if: string },
     ) => Promise<{ data?: unknown } | null>;
+    sleep?: (id: string, duration: number) => Promise<unknown>;
   },
   invoke?: InvokeChildRun,
 ): StepRunner {
   const waitForEvent = step.waitForEvent?.bind(step);
+  const sleep = step.sleep?.bind(step);
   return {
+    ...(sleep
+      ? {
+          async sleep(id: string, ms: number) {
+            await sleep(id, Math.max(1_000, ms));
+          },
+        }
+      : {}),
     ...(invoke
       ? {
           async invokeRun(id, child, { timeoutMs }) {

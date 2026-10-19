@@ -66,6 +66,8 @@ export {
   useUpdateAgent,
   useUpdateThread,
   useUsageToday,
+  useSpend,
+  useSetSpendCap,
   useCancelSchedule,
   useCreateRoutine,
   useDeleteRoutine,

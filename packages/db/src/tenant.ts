@@ -29,6 +29,7 @@ export const TENANT_TABLES = [
   "audit_log",
   "artifact",
   "upload",
+  "spend",
   "approval",
   "mcp_server",
   "connection",

@@ -62,7 +62,9 @@ function memoryArtifacts(sent: SentFile[]): ArtifactStore {
       const size =
         typeof input.content === "string"
           ? new TextEncoder().encode(input.content).length
-          : input.content.length;
+          : "body" in input.content
+            ? input.content.size
+            : input.content.length;
       const row: ArtifactRecord = {
         id: asId<ArtifactId>(`00000000-0000-4000-8000-${String(rows.size + 1).padStart(12, "0")}`),
         runId: c.runId,

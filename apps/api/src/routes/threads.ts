@@ -159,7 +159,10 @@ export function threadRoutes(
       if (!thread) throw new NotFoundError("Thread");
       // Attached files become lines in the message (EN.09): the agent reads
       // them in its history and copies one in with files.receive.
-      const uploads = await sendableUploads(db, tenant, { threadId: thread.id, ids: input.uploads });
+      const uploads = await sendableUploads(db, tenant, {
+        threadId: thread.id,
+        ids: input.uploads,
+      });
       if (uploads.length !== input.uploads.length) {
         throw new AppError("bad_request", "An attached file is missing or was already sent");
       }
@@ -179,6 +182,7 @@ export function threadRoutes(
 /** A file name as the person's computer gave it, made safe to show and store. */
 function uploadName(value: string | undefined): string {
   const name = (value ?? "")
+    // eslint-disable-next-line no-control-regex -- control characters are what it removes
     .replace(/[\u0000-\u001f\u007f/\\]+/g, "_")
     .trim()
     .slice(0, 255);

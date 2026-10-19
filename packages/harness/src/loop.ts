@@ -167,6 +167,9 @@ const SCHEDULED = new Set<RunInput["trigger"]>(["routine", "manual", "schedule"]
 
 /** Handing work to another agent (M5.01); the harness runs the handoff itself. */
 const DELEGATE_TASK = "delegate_task";
+/** The platform tool that pauses for a long job (EN.12, `wait` in @ofa/tools), and its limit. */
+const WAIT_TOOL = "wait";
+const MAX_WAIT_SECONDS = 600;
 const DELEGATION_TIMEOUT_MS = 25 * 60 * 60_000;
 /** Of a child's reply, what the delegating model reads. */
 const DELEGATION_ANSWER_CHARS = 8_000;
@@ -985,6 +988,14 @@ ${result.content}`,
         }
         if (result.ok && call.name === DELEGATE_TASK) {
           handoffs.push({ toolCallId, turn: turns.length, args: ran.args });
+        }
+        // A pause for a long job (EN.12): slept durably, here, between steps,
+        // holding no process and spending no model calls.
+        if (result.ok && call.name === WAIT_TOOL && steps.sleep) {
+          const seconds = Number((call.args as { seconds?: unknown }).seconds);
+          if (Number.isFinite(seconds) && seconds > 0) {
+            await steps.sleep(`${toolCallId}-wait`, Math.min(seconds, MAX_WAIT_SECONDS) * 1000);
+          }
         }
         if (result.image) {
           // Only the latest screenshot stays (DT.11): older ones leave the

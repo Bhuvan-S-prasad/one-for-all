@@ -71,7 +71,8 @@ export function originCheck(allowedOrigins: readonly string[]): MiddlewareHandle
       const type = c.req.header("content-type")?.split(";")[0]?.trim().toLowerCase();
       // A file upload is raw bytes (EN.09); still same-origin, and a
       // cross-site page can't send this type without a preflight we never answer.
-      const rawUpload = type === "application/octet-stream" && isUploadRequest(c.req.method, c.req.path);
+      const rawUpload =
+        type === "application/octet-stream" && isUploadRequest(c.req.method, c.req.path);
       if (type !== "application/json" && !rawUpload) {
         throw new AppError("bad_request", "Send request bodies as application/json");
       }

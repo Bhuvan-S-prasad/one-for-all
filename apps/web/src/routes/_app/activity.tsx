@@ -1,4 +1,12 @@
-import { moodFor, useAgents, useApiClient, useRun, useRunSearch, useStopRun } from "@ofa/client";
+import {
+  moodFor,
+  useAgents,
+  useApiClient,
+  useRun,
+  useRunSearch,
+  useSpend,
+  useStopRun,
+} from "@ofa/client";
 import type { Agent, Run, RunEvent, RunStatus } from "@ofa/contracts";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import {
@@ -167,6 +175,7 @@ function ActivityPage() {
   return (
     <div className="flex h-full flex-col">
       <Filters search={search} agents={agents ?? []} onChange={setSearch} />
+      <SpendStrip onAgent={(agent) => setSearch({ agent, run: undefined })} />
       <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(340px,440px)_minmax(0,1fr)]">
         <div className={cn("min-h-0 overflow-y-auto border-r", search.run && "hidden lg:block")}>
           <RunList
@@ -195,6 +204,46 @@ function ActivityPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+const usd = (n: number) => `$${n.toFixed(2)}`;
+
+/**
+ * Paid app credits this month (EN.15), per agent: estimates from the
+ * catalog, against the workspace's limit. Hidden until something is spent.
+ */
+function SpendStrip({ onAgent }: { onAgent: (agentId: string) => void }) {
+  const { data } = useSpend();
+  if (!data || (data.spentUsd === 0 && data.capUsd === null)) return null;
+  const over = data.capUsd !== null && data.spentUsd >= data.capUsd;
+  return (
+    <section
+      aria-label="Paid app credits this month"
+      className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b px-4 py-2.5 text-sm md:px-6"
+    >
+      <span className="eyebrow text-muted-foreground">Paid credits this month</span>
+      <span className="font-semibold tabular-nums">
+        {usd(data.spentUsd)}
+        {data.capUsd !== null && (
+          <span className="font-normal text-muted-foreground"> of {usd(data.capUsd)}</span>
+        )}
+        {over && <span className="ml-1.5 text-warning">· limit reached</span>}
+      </span>
+      {data.byAgent.map((a) => (
+        <button
+          key={a.agentId}
+          type="button"
+          disabled={!a.name}
+          onClick={() => onAgent(a.agentId)}
+          className="rounded-sm text-muted-foreground tabular-nums outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:hover:text-muted-foreground"
+        >
+          {a.name ?? "Removed agent"} {usd(a.spentUsd)}{" "}
+          <span className="text-xs">({count(a.calls, "call")})</span>
+        </button>
+      ))}
+      <span className="text-xs text-muted-foreground">Estimates; your app's bill is exact.</span>
+    </section>
   );
 }
 

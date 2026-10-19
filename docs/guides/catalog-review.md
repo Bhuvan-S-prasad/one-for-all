@@ -16,7 +16,8 @@ You need the server's published address and its documentation from the vendor's 
 6. **The description is honest.** Say what the server can do in one plain sentence, and say what it can't do when people would expect it (for example, Gmail's server writes drafts but can't send).
 7. **Look at the tools.** Sign in with a test account and list the tools (`GET /api/mcp-servers/:id/tools`). Check that destructive tools carry `destructiveHint` and read-only ones `readOnlyHint`, because grant defaults come from these hints. Check that payments, deletions, permission changes and sharing would land on the always-human list (ADR-0028). If any wouldn't, note it for M4.05 to set `humanOnly`.
 8. **Extra sign-in parameters only when needed.** `authorizationParams` exists for providers that need one to work properly (Google issues refresh tokens only with `access_type=offline`). Say why in the pull request.
-9. **Date it.** Set `reviewed` to today. Re-review an entry when the vendor changes its server or sign-in, or within a year.
+9. **Media apps** (ADR-0048). For an app that makes pictures, video or sound with paid credits, add a `media` block: `callTimeoutSeconds` for its slowest call, `costPerCallUsd` from the vendor's published prices for a typical generation (round up), and `costNote` saying what that assumes. Check which tools spend credits: every tool that isn't read-only is priced unless its action only looks (`get`, `list`, `status`, `check`…), so a spending tool with such a name needs `humanOnly` or a rename noted for review. Check how it returns results (inline, `resource_link`, or links in text) so they are kept.
+10. **Date it.** Set `reviewed` to today. Re-review an entry when the vendor changes its server or sign-in, or within a year.
 
 ## After it merges
 

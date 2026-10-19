@@ -8,6 +8,8 @@ import type {
 } from "@ofa/core";
 import type { ToolDefinition } from "../define";
 import { artifactsReadTool } from "./artifacts";
+import { saveFileTool } from "./media";
+import { waitTool } from "./wait";
 import { browserTools, fileTools, shellTool, useSavedLoginTool } from "./computer";
 import { desktopTools } from "./desktop";
 import { recallTool, rememberTool, todoTool } from "./memory";
@@ -47,6 +49,7 @@ export function builtinTools(deps: BuiltinToolDeps): ToolDefinition<never>[] {
   return [
     webSearchTool(deps.search),
     readUrlTool(deps.fetcher),
+    saveFileTool(),
     rememberTool(deps.memory),
     recallTool(deps.memory),
     todoTool(),
@@ -57,6 +60,7 @@ export function builtinTools(deps: BuiltinToolDeps): ToolDefinition<never>[] {
     ...desktopTools(deps.sandbox ?? null, deps.vision),
     artifactsReadTool(),
     loadToolkitTool(),
+    waitTool(),
     delegateTaskTool(deps.team ?? null),
     messageAgentTool(deps.team ?? null),
     scheduleTaskTool(deps.scheduler ?? null),

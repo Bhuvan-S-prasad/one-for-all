@@ -142,6 +142,33 @@ describe.skipIf(!up)("Docker sandbox (integration)", { timeout: 60_000 }, () => 
     });
   });
 
+  it("streams large files in and out as the agent (ADR-0047)", async () => {
+    const name = `stream-${Date.now()}.bin`;
+    const size = 12 * 1024 * 1024; // past the 10 MB of /files/read
+    const chunk = new Uint8Array(1024 * 1024).fill(9);
+    async function* body() {
+      for (let i = 0; i < size / chunk.length; i += 1) yield chunk;
+    }
+    await handle.writeFileStream!(alice, name, body(), size);
+    const read = await handle.readFileStream!(alice, name);
+    expect(read.size).toBe(size);
+    let total = 0;
+    let nines = true;
+    for await (const part of read.body) {
+      total += part.length;
+      nines &&= part.every((b) => b === 9);
+    }
+    expect(total).toBe(size);
+    expect(nines).toBe(true);
+    // Another agent's home stays closed, streamed or not.
+    await handle.writeFileStream!(alice, `~/${name}`, body(), size);
+    const aliceHome = (await handle.exec(alice, "echo $HOME")).stdout.trim();
+    expect((await handle.readFileStream!(alice, `${aliceHome}/${name}`)).size).toBe(size);
+    await expect(handle.readFileStream!(bob, `${aliceHome}/${name}`)).rejects.toBeInstanceOf(
+      SandboxError,
+    );
+  });
+
   it("can't write outside what the agent owns", async () => {
     await expect(handle.writeFile(alice, "/etc/evil", "x")).rejects.toBeInstanceOf(SandboxError);
     expect((await handle.exec(alice, "touch /opt/sandbox/x")).exitCode).not.toBe(0);

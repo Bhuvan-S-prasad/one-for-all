@@ -61,24 +61,33 @@ export function createApp(container: Container): App {
   app.use(requestContext(logger));
   app.use(hostCheck(config.server.allowedHosts));
   app.use(originCheck(config.server.allowedOrigins));
-  app.use(
-    secureHeaders({
-      contentSecurityPolicy: {
-        defaultSrc: ["'self'"],
-        scriptSrc: ["'self'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", "data:", "blob:"],
-        fontSrc: ["'self'", "data:"],
-        connectSrc: ["'self'"],
-        objectSrc: ["'none'"],
-        baseUri: ["'self'"],
-        formAction: ["'self'"],
-        frameAncestors: ["'none'"],
-      },
-      // Plain http on localhost; HSTS would break it.
-      strictTransportSecurity: false,
-    }),
-  );
+  const secure = secureHeaders({
+    contentSecurityPolicy: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "blob:"],
+      fontSrc: ["'self'", "data:"],
+      connectSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'none'"],
+    },
+    // Plain http on localhost; HSTS would break it.
+    strictTransportSecurity: false,
+  });
+  // The app's policy, unless a route set a stricter one of its own: stored
+  // files carry `sandbox; default-src 'none'` (lib/content.ts), which
+  // secureHeaders would otherwise replace on the way out.
+  app.use(async (c, next) => {
+    let own: string | null = null;
+    await secure(c, async () => {
+      await next();
+      own = c.res.headers.get("content-security-policy");
+    });
+    if (own) c.res.headers.set("content-security-policy", own);
+  });
 
   // ── API ──────────────────────────────────────────────────────────────────
   // JSON bodies stay small; a file upload streams to storage under its own limit (EN.09).

@@ -600,6 +600,7 @@ describe("team.coordinator-routes", () => {
       "artifacts.read",
       "delegate_task",
       "todo.write",
+      "wait",
     ]);
     expect(String(first.messages[0]?.content)).toContain(
       "- researcher (Researcher): Research\n  can: web: search, read pages",

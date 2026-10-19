@@ -34,6 +34,18 @@ export interface ToolRunContext extends RunContext {
   readonly toolkits?: {
     list(): Promise<readonly ToolkitSummary[]>;
   };
+  /**
+   * Files the person attached in this run's chat (EN.09); absent when the
+   * server keeps none. Only uploads from the run's own chat open.
+   */
+  readonly uploads?: {
+    open(id: string): Promise<{
+      readonly name: string;
+      readonly mimeType: string;
+      readonly size: number;
+      readonly body: AsyncIterable<Uint8Array>;
+    } | null>;
+  };
   /** This run's artifacts (M3.06); absent when the server keeps none. Reads see only this agent's. */
   readonly artifacts?: {
     put(input: ArtifactInput): Promise<ArtifactRecord>;
@@ -118,6 +130,8 @@ export interface ToolDefinition<Input = unknown> {
   readonly editable?: readonly string[];
   /** The approval card lists the arguments, because `describe` doesn't say them. */
   readonly showArgs?: boolean;
+  /** Longest a call may take, when it is longer than the executor's default (large files). */
+  readonly timeoutMs?: number;
   /**
    * Called when a run's tool list is made: the description for this run,
    * naming what is there now (the agents it can hand work to), or null to

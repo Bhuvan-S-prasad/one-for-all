@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { SecretInput } from "@/components/secret-input";
 import { NotificationsCard } from "@/components/settings/notifications-card";
 import { RulesCard } from "@/components/settings/rules-card";
+import { SpendCard } from "@/components/settings/spend-card";
 import { Card, CardTitle } from "@/components/ui/card";
 import { roleLabel, timeAgo } from "@/lib/format";
 import { toast } from "@/lib/toast";
@@ -77,6 +78,10 @@ function SettingsPage() {
       </Card>
 
       <ModelCard
+        canEdit={session.workspace?.role === "owner" || session.workspace?.role === "admin"}
+      />
+
+      <SpendCard
         canEdit={session.workspace?.role === "owner" || session.workspace?.role === "admin"}
       />
 

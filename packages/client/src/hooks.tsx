@@ -341,9 +341,10 @@ export function useSendMessage(threadId: string | undefined) {
   const api = useApiClient();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (content: string) => {
+    mutationFn: (message: string | { content: string; uploads?: readonly string[] }) => {
       if (!threadId) throw new Error("No thread yet");
-      return api.sendMessage(threadId, content);
+      const { content, uploads } = typeof message === "string" ? { content: message } : message;
+      return api.sendMessage(threadId, content, uploads);
     },
     onSuccess: (turn) => rememberTurn(queryClient, turn),
   });
@@ -776,6 +777,21 @@ export function useShareLogin(agentId: string) {
 /** Model requests today against the daily free quota (UX.11). */
 export function useUsageToday() {
   return useQuery(usageQuery(useApiClient()));
+}
+
+/** Paid app credits this month (EN.15). */
+export function useSpend() {
+  const api = useApiClient();
+  return useQuery({ queryKey: queryKeys.spend, queryFn: () => api.spend() });
+}
+
+export function useSetSpendCap() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (capUsd: number | null) => api.setSpendCap(capUsd),
+    onSuccess: (summary) => queryClient.setQueryData(queryKeys.spend, summary),
+  });
 }
 
 export function useLlmSettings() {

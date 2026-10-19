@@ -4,7 +4,9 @@ import gmail from "../catalog/gmail.json";
 import googleCalendar from "../catalog/google_calendar.json";
 import googleDrive from "../catalog/google_drive.json";
 import linear from "../catalog/linear.json";
+import higgsfield from "../catalog/higgsfield.json";
 import notion from "../catalog/notion.json";
+import runway from "../catalog/runway.json";
 import slack from "../catalog/slack.json";
 
 // The reviewed catalog (ADR-0018): official remote MCP servers with pinned
@@ -50,6 +52,21 @@ export const catalogEntrySchema = z.object({
         ),
     )
     .optional(),
+  /**
+   * An app that makes pictures, video or sound (ADR-0048): its calls may run
+   * for minutes, what they make is kept as the run's files, and calls that
+   * aren't read-only use paid credits, so they ask first with this estimate.
+   */
+  media: z
+    .object({
+      /** Longest one call may take before it is given up. */
+      callTimeoutSeconds: z.number().int().min(30).max(1_800).default(600),
+      /** A rough price of one call that makes something, in US dollars. */
+      costPerCallUsd: z.number().min(0).max(100),
+      /** What the estimate is based on, shown with it. */
+      costNote: z.string().min(1).max(200),
+    })
+    .optional(),
   /** How to set it up, for `own_client` entries. */
   guide: z.string().optional(),
   /** When the entry was last checked against the server's published metadata. */
@@ -65,6 +82,8 @@ export const CATALOG: readonly CatalogEntry[] = [
   gmail,
   googleCalendar,
   googleDrive,
+  runway,
+  higgsfield,
 ].map((entry) => catalogEntrySchema.parse(entry));
 
 export function catalogEntry(id: string | null | undefined): CatalogEntry | undefined {

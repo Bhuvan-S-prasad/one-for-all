@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   annotationsFor,
   CATALOG,
+  costFor,
   createMcpConnections,
   createMcpToolkits,
   createMemoryConnectionStore,
@@ -279,5 +280,107 @@ describe("connected apps as toolkits", () => {
         reason: "unavailable",
       },
     );
+  });
+});
+
+describe("media apps (EN.13, EN.15)", () => {
+  const PNG = Buffer.from("fake png bytes");
+  let fake: FakeMcpServer;
+  beforeEach(async () => {
+    fake = await startFakeMcpServer({
+      tools: [
+        {
+          name: "generate_image",
+          description: "Make a picture",
+          inputSchema: { type: "object", properties: { prompt: { type: "string" } } },
+          annotations: { destructiveHint: false },
+          run: () => ({
+            content: [
+              { type: "text", text: "Here is your picture." },
+              { type: "image", mimeType: "image/png", data: PNG.toString("base64") },
+              // A private address: refused like any download (no SSRF through an app).
+              { type: "resource_link", uri: "https://127.0.0.1/out.mp4", name: "clip" },
+            ],
+          }),
+        },
+        {
+          name: "get_task",
+          description: "Check a job",
+          inputSchema: { type: "object", properties: { id: { type: "string" } } },
+          run: () => "Still rendering.",
+        },
+      ],
+    });
+  });
+  afterEach(() => fake.close());
+
+  it("keeps what the app made as the run's files, and makes only paid calls ask with an estimate", async () => {
+    const store = createMemoryConnectionStore();
+    const entry = {
+      ...CATALOG[0]!,
+      id: "studio",
+      name: "Studio",
+      url: fake.mcpUrl,
+      authOrigin: fake.url,
+      media: { callTimeoutSeconds: 120, costPerCallUsd: 0.4, costNote: "one picture" },
+    };
+    const mcp = createMcpConnections({
+      store,
+      cipher: testCipher,
+      redirectUrl: REDIRECT,
+      catalog: [entry],
+    });
+    const server = await mcp.install(ctx, "studio");
+    const start = await mcp.startSignIn(ctx, server.id);
+    if (start.status !== "redirect") throw new Error("expected a sign-in address");
+    const back = new URL(
+      (await fetch(start.authorizationUrl, { redirect: "manual" })).headers.get("location") ?? "",
+    );
+    await mcp.finishSignIn(ctx, {
+      code: back.searchParams.get("code") ?? "",
+      state: back.searchParams.get("state") ?? "",
+      issuer: back.searchParams.get("iss") ?? "",
+    });
+    const toolkits = createMcpToolkits({ connections: store, mcp, catalog: [entry] });
+    await toolkits.refresh(ctx, server.id);
+    const kit = await toolkits.forServer(ctx, server.id);
+    const generate = kit!.tools.find((t) => t.name === "studio.generate_image")!;
+    const check = kit!.tools.find((t) => t.name === "studio.get_task")!;
+    expect(generate.annotations.costUsd).toBe(0.4);
+    expect(generate.timeoutMs).toBe(120_000);
+    expect(check.annotations.costUsd).toBeUndefined();
+    expect(costFor(entry, "get_task", { readOnly: false })).toBeUndefined();
+    expect(costFor(CATALOG[0], "create_page", { readOnly: false })).toBeUndefined();
+
+    const kept: { key: string; name: string; mimeType: string; content: unknown }[] = [];
+    const runCtx = {
+      ...ctx,
+      toolCallId: "t1",
+      idempotencyKey: "run:t1",
+      artifacts: {
+        async put(input: { key: string; name: string; mimeType: string; content: unknown }) {
+          kept.push(input);
+          return { id: `art-${kept.length}`, name: input.name, mimeType: input.mimeType };
+        },
+        get: async () => null,
+        read: async () => null,
+      },
+    };
+    expect(await generate.describe!({ prompt: "a fox" } as never, runCtx as never)).toBe(
+      "Use Studio: Generate image\nUses Studio credits: about $0.40 (estimate: one picture)",
+    );
+    const out = await generate.run({ prompt: "a fox" } as never, runCtx as never);
+    expect(out.artifactId).toBe("art-1");
+    expect(kept).toHaveLength(1);
+    expect(kept[0]).toMatchObject({
+      key: "run:t1:media:0",
+      name: "media-1.png",
+      mimeType: "image/png",
+    });
+    expect(Buffer.from(kept[0]!.content as Uint8Array).equals(PNG)).toBe(true);
+    const text = String(out.content);
+    expect(text).toContain("Here is your picture.");
+    expect(text).toContain("Kept media-1.png (image/png)");
+    expect(text).toMatch(/Couldn't keep https:\/\/127\.0\.0\.1\/out\.mp4/);
   });
 });
