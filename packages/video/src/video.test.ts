@@ -312,6 +312,7 @@ describe("the MCP front door", () => {
       "music",
       "transcribe",
       "plan_beats",
+      "cut_to_music",
       "render",
       "verify",
       "contact_sheet",

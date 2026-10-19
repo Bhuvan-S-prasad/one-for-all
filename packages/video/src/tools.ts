@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { autoCut, momentsFrom } from "./autocut";
 import type { VideoEngine } from "./engine";
 import { STYLES, styleById } from "./styles";
 import { FORMATS, formatNameSchema, inFormat, timelineSchema, type Timeline } from "./timeline";
@@ -184,6 +185,83 @@ export function videoTools(read: (path: string) => Promise<string>): VideoTool[]
         }));
         return {
           text: `${slots.length} slots, ${total} frames at ${args.fps} fps (${s(total / args.fps)} s), from ${s(args.from ?? 0)} s in the song. Set the timeline's music.from to that start.\n${JSON.stringify(compact)}`,
+        };
+      },
+    }),
+    define({
+      name: "cut_to_music",
+      description:
+        "Build the whole timeline for a cut to a song, in one call, and save it as a file: slots on the beats for the style, filled from the sources' shots (the strongest on the drop and the hits, calm shots in calm sections, each started just before its motion peak, no shot twice in a row), with the style's effects, ramps and grade. Then read the summary, and render with timeline_file. Use this instead of writing the timeline by hand, which is too long to write. Run video.scan on the sources first if you want to choose them.",
+      input: z.object({
+        music: path.describe("The song"),
+        sources: z
+          .array(path)
+          .min(1)
+          .max(12)
+          .describe("The video files to cut from; their shots are found for you"),
+        style: z.enum(STYLES.map((x) => x.id) as [string, ...string[]]),
+        from: z.number().min(0).describe("Start in the song, seconds"),
+        to: z.number().min(0).describe("End in the song, seconds"),
+        fps: z.number().int().min(12).max(60).default(30),
+        format: formatNameSchema.default("16:9").describe("The shape of the main export"),
+        credit: z
+          .string()
+          .max(200)
+          .optional()
+          .describe("A credit line shown for the first four seconds"),
+        timeline_out: path
+          .default("~/edits/timeline.json")
+          .describe("Where to save the timeline (JSON)"),
+        min_motion: z
+          .number()
+          .min(0)
+          .max(100)
+          .optional()
+          .describe("Leave out shots that move less than this; default 0.3"),
+      }),
+      readOnly: false,
+      timeoutMs: 30 * 60_000,
+      async run(engine, args) {
+        if (args.to <= args.from) throw new Error("to must be after from");
+        const map = await engine.music(args.music);
+        const slots = engine.plan(map, args.style, { fps: args.fps, from: args.from, to: args.to });
+        const moments = [];
+        for (const src of args.sources) {
+          const { shots } = await engine.scan(src);
+          moments.push(
+            ...momentsFrom(
+              src,
+              shots,
+              args.min_motion !== undefined ? { minMotion: args.min_motion } : {},
+            ),
+          );
+        }
+        const { timeline, picks } = autoCut({
+          slots,
+          moments,
+          fps: args.fps,
+          output: FORMATS[args.format],
+          styleId: args.style,
+          music: { src: args.music, from: args.from },
+          ...(args.credit ? { credit: args.credit } : {}),
+        });
+        await engine.write(args.timeline_out, JSON.stringify(timeline));
+        const distinct = new Set(picks.map((p) => `${p.moment.src}@${p.moment.start}`)).size;
+        const frames = timeline.clips.reduce((n, c) => n + c.frames, 0);
+        const rows = picks.slice(0, 12).map((p, i) => {
+          const c = timeline.clips[i]!;
+          const fx = c.effects.map((e) => e.type).join("+");
+          return `${i}: ${p.moment.src.split("/").pop()} from ${s(p.from)} s, ${c.frames} fr${c.ramp ? ` ramp ${c.ramp[0]}→${c.ramp[1]}` : ""}${fx ? ` [${fx}]` : ""} (${p.note})`;
+        });
+        return {
+          text: [
+            `Timeline saved to ${args.timeline_out}: ${timeline.clips.length} clips, ${frames} frames at ${args.fps} fps (${s(frames / args.fps)} s), ${FORMATS[args.format].width}×${FORMATS[args.format].height}, music from ${s(args.from)} s, grade ${timeline.grade.preset}.`,
+            `Uses ${distinct} different shots from ${moments.length} found in ${args.sources.length} source(s).${distinct < 8 ? " Few shots: expect repeats; add more footage if it matters." : ""}`,
+            "First slots:",
+            ...rows,
+            `Render it with video.render (timeline_file: ${args.timeline_out}, output: ~/edits/<name>.mp4, formats for the other shapes).`,
+          ].join("\n"),
+          files: [args.timeline_out],
         };
       },
     }),

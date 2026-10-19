@@ -61,6 +61,7 @@ describe("video tools in the agent's computer", () => {
       "video.music",
       "video.transcribe",
       "video.plan_beats",
+      "video.cut_to_music",
       "video.render",
       "video.verify",
       "video.contact_sheet",

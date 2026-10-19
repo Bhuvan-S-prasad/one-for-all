@@ -202,6 +202,15 @@ export function createVideoEngine(options: VideoEngineOptions) {
   const engine = {
     probe,
 
+    /** Write a text file (a timeline) where the media is; `~/` is the runner's home. */
+    async write(path: string, text: string): Promise<string> {
+      const target = await resolve(path);
+      const slash = target.lastIndexOf("/");
+      if (slash > 0) await mkdir(target.slice(0, slash));
+      await runner.writeFile(target, text);
+      return path;
+    },
+
     /** Shots and how much each moves, from scene detection on a small, slowed copy. */
     async scan(path: string, opts: { readonly threshold?: number } = {}): Promise<Scan> {
       const info = await probe(path);

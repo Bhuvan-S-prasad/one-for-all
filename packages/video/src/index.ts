@@ -2,6 +2,7 @@
 // One-for-All: One-for-All uses it through `video.*` tools, and it runs on its
 // own as a CLI and an MCP server.
 
+export { autoCut, momentsFrom, type AutoCutOptions, type Moment } from "./autocut";
 export { speechCaptions, type Word } from "./captions";
 export {
   createVideoEngine,

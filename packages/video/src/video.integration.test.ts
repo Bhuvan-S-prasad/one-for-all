@@ -170,6 +170,50 @@ describe("the video engine on the sandbox image", () => {
     expect((await runner.readFile("/work/out/cuts.jpg")).length).toBeGreaterThan(1_000);
   }, 900_000);
 
+  it("cuts to music in one call: a saved timeline that renders on the beat", async () => {
+    const tools = videoTools(async (p) => new TextDecoder().decode(await runner.readFile(p)));
+    const cut = tools.find((t) => t.name === "cut_to_music")!;
+    const made = await cut.run(
+      engine,
+      cut.input.parse({
+        music: "/work/in/song.mp3",
+        sources: ["/work/in/a.mp4", "/work/in/b.mp4"],
+        style: "amv",
+        from: 2,
+        to: 14,
+        format: "9:16",
+        credit: "Test credit",
+        timeline_out: "/work/out/auto.timeline.json",
+      }),
+    );
+    expect(made.text).toMatch(
+      /Timeline saved to \/work\/out\/auto\.timeline\.json: \d+ clips, 360 frames/,
+    );
+    expect(made.text).toContain("1080×1920");
+
+    const render = tools.find((t) => t.name === "render")!;
+    const done = await render.run(
+      engine,
+      render.input.parse({
+        timeline_file: "/work/out/auto.timeline.json",
+        output: "/work/out/auto.mp4",
+      }),
+    );
+    expect(done.text).toMatch(/Rendered \/work\/out\/auto\.mp4: 1080×1920, 30 fps, 360 frames/);
+
+    const verify = tools.find((t) => t.name === "verify")!;
+    const checked = await verify.run(
+      engine,
+      verify.input.parse({
+        timeline_file: "/work/out/auto.timeline.json",
+        output: "/work/out/auto.mp4",
+        music: "/work/in/song.mp3",
+      }),
+    );
+    expect(checked.text).toMatch(/^OK: no problems\./);
+    expect(checked.text).toMatch(/furthest from a beat: [01] frames/);
+  }, 900_000);
+
   it("transcribes speech and captions it where the clip sits in the edit", async () => {
     const words = await engine.transcribe("/work/in/talk.mp4", { language: "en" });
     const said = words.words.map((w) => w.text.toLowerCase().replace(/[^a-z]/g, ""));
