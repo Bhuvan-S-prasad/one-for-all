@@ -6,10 +6,13 @@ import {
   type ArtifactRecord,
   type ArtifactStore,
   type ChildRunResult,
+  type DiscussionPlan,
   type LLMGateway,
+  type MessageId,
   type RunContext,
   type RunId,
   type TeamDirectory,
+  type TenantContext,
   type StepRunner,
   type ThreadId,
   type ToolCallRecord,
@@ -18,9 +21,11 @@ import {
 import {
   createMemoryApprovals,
   createMemoryChatRecords,
+  createMemoryDiscussions,
   createMemoryRuntime,
   createMemoStepRunner,
   runAgent,
+  runDiscussion,
 } from "@ofa/harness";
 import { createPolicyEngine } from "@ofa/policy";
 import { builtinTools, createToolExecutor, createToolRegistry } from "@ofa/tools";
@@ -28,7 +33,13 @@ import { fixtureMailbox } from "../fixtures/mailbox";
 import { fixtureBrowser, fixtureComputer } from "../fixtures/site";
 import { fixtureFetcher, fixtureSearch } from "../fixtures/web";
 import { EVAL_COMPUTER_AGENT, type EvalComputer, type SavedFile } from "./computer";
-import type { ChildTranscript, EvalCase, SentFile, Transcript } from "./types";
+import type {
+  ChildTranscript,
+  DiscussionTurnTranscript,
+  EvalCase,
+  SentFile,
+  Transcript,
+} from "./types";
 
 // One attempt at a case: a fresh, in-memory world around the real harness,
 // tool executor and policy engine. Only the model is live; the web comes from
@@ -119,6 +130,7 @@ export interface AttemptOptions {
 }
 
 export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): Promise<Transcript> {
+  if (evalCase.discussion) return runDiscussionAttempt(evalCase, options);
   const ctx: RunContext = {
     workspaceId: asId("ws_eval"),
     userId: asId("usr_eval"),
@@ -418,7 +430,157 @@ export async function runAttempt(evalCase: EvalCase, options: AttemptOptions): P
     sent,
     approvals: [...approvals.records],
     children,
+    discussion: null,
     before,
+    durationMs: Date.now() - started,
+  };
+}
+
+/**
+ * A discussion case (ADR-0050): the person's question to the whole group, the
+ * members' turns in order as the orchestrator runs them, and the close by the
+ * agent under test, the coordinator. Each turn is a run of its own on the same
+ * harness, tools and policy; the transcript's run is the close.
+ */
+async function runDiscussionAttempt(
+  evalCase: EvalCase,
+  options: AttemptOptions,
+): Promise<Transcript> {
+  const setup = evalCase.discussion!;
+  const tenant: TenantContext = { workspaceId: asId("ws_eval"), userId: asId("usr_eval") };
+  const threadId = asId<ThreadId>("thread_eval");
+  const runtime = createMemoryRuntime();
+  const lead = { ...evalCase.agent, id: asId<AgentId>(`agent_${evalCase.agent.slug}`) };
+  const members = setup.members.map((m) => ({ ...m, id: asId<AgentId>(`agent_${m.slug}`) }));
+  for (const p of [lead, ...members]) runtime.agents.profiles.set(p.id, p);
+  const slugOf = new Map([lead, ...members].map((p) => [p.id as string, p.slug]));
+  runtime.threads.messages.set(threadId, [
+    {
+      id: asId<MessageId>("msg_prompt"),
+      author: "user",
+      agentId: null,
+      content: evalCase.prompt,
+      createdAt: new Date(),
+    },
+  ]);
+  const plan: DiscussionPlan = {
+    id: "discussion_eval",
+    threadId,
+    questionMessageId: asId<MessageId>("msg_prompt"),
+    coordinator: { id: lead.id, name: lead.name },
+    members: members.map((m) => ({ id: m.id, name: m.name })),
+    rounds: setup.rounds ?? 2,
+    status: "active",
+    tainted: false,
+  };
+  const discussions = createMemoryDiscussions(runtime, [plan]);
+  const tools = createToolExecutor({
+    registry: createToolRegistry(
+      builtinTools({
+        memory: runtime.memory,
+        search: fixtureSearch(evalCase.web),
+        fetcher: fixtureFetcher(evalCase.web),
+      }),
+    ),
+    policy: createPolicyEngine({ agents: runtime.agents }),
+    calls: memoryToolCalls(),
+    agents: runtime.agents,
+    artifacts: memoryArtifacts([]),
+  });
+  const approvals = createMemoryApprovals();
+  const deps = {
+    llm: options.llm,
+    tools,
+    runs: runtime.runs,
+    agents: runtime.agents,
+    threads: runtime.threads,
+    memory: runtime.memory,
+    approvals,
+    chats: createMemoryChatRecords(),
+    ...(evalCase.harness ? { options: evalCase.harness } : {}),
+  };
+
+  const turns: (DiscussionTurnTranscript & { runId: string })[] = [];
+  let close: Awaited<ReturnType<typeof runAgent>> | null = null;
+  const steps = createMemoStepRunner({
+    // What `discussion-run` does with step.invoke: each turn, to the end.
+    onInvoke: async (_id, child): Promise<ChildRunResult | null> => {
+      const result = await runAgent(
+        {
+          ctx: { ...tenant, agentId: child.agentId, runId: child.runId },
+          threadId: child.threadId,
+          trigger: "discussion",
+          requestId: child.messageId,
+          ...(child.discussion ? { discussion: child.discussion } : {}),
+        },
+        deps,
+        patientSteps(createMemoStepRunner(), options.wait ?? sleep),
+      ).catch(() => null);
+      const isClose = child.discussion?.close ?? false;
+      if (isClose) close = result;
+      turns.push({
+        runId: child.runId,
+        agent: slugOf.get(child.agentId) ?? child.agentId,
+        round: child.discussion?.round ?? 0,
+        close: isClose,
+        reply: result?.passed ? null : (result?.reply ?? null),
+        passed: result?.passed ?? false,
+        toolCalls: runtime.runs.events
+          .filter((e) => e.runId === child.runId && e.type === "tool.called")
+          .map((e) => ({ name: String(e.payload.tool), args: e.payload.args })),
+      });
+      if (!result) return null;
+      return {
+        status: result.status,
+        stopReason: result.stopReason,
+        reply: result.reply,
+        tainted: result.tainted,
+        messageId: result.messageId,
+        ...(result.passed ? { passed: true } : {}),
+      };
+    },
+  });
+
+  const started = Date.now();
+  let error: string | null = null;
+  let outcome: Awaited<ReturnType<typeof runDiscussion>> | null = null;
+  try {
+    outcome = await runDiscussion({ ctx: tenant, discussionId: plan.id }, { discussions }, steps);
+  } catch (thrown) {
+    error = thrown instanceof Error ? thrown.message : String(thrown);
+  }
+  // Every turn's log, so the report counts the whole discussion's model calls;
+  // the tool calls are the close's.
+  const closeRun = turns.find((turn) => turn.close)?.runId;
+  const ran = new Set(turns.map((turn) => turn.runId));
+  const events = runtime.runs.events
+    .filter((e) => ran.has(e.runId))
+    .map((e) => ({ type: e.type, payload: e.payload }));
+  const finished = close as Awaited<ReturnType<typeof runAgent>> | null;
+  return {
+    reply: finished?.reply ?? null,
+    result: finished,
+    error:
+      error ?? (outcome?.status === "done" ? null : `discussion ${outcome?.status ?? "failed"}`),
+    events,
+    toolCalls: runtime.runs.events
+      .filter((e) => e.runId === closeRun && e.type === "tool.called")
+      .map((e) => ({ name: String(e.payload.tool), args: e.payload.args })),
+    memories: [...runtime.memory.records],
+    site: null,
+    mail: null,
+    files: null,
+    sent: [],
+    approvals: [...approvals.records],
+    children: [],
+    discussion: {
+      status: outcome?.status ?? "failed",
+      rounds: outcome?.rounds ?? 0,
+      members: members.map((m) => m.slug),
+      coordinator: lead.slug,
+      turns: turns.map(({ runId: _runId, ...turn }) => turn),
+    },
+    before: null,
     durationMs: Date.now() - started,
   };
 }

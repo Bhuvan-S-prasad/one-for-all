@@ -9,7 +9,8 @@ import { idSchema, timestampSchema } from "./common";
 
 /**
  * `routine`: on a routine's schedule; `manual`: a routine's test run (M5.06);
- * `schedule`: a task an agent set for later (M5.07).
+ * `schedule`: a task an agent set for later (M5.07); `discussion`: a turn in
+ * a group discussion, started by the orchestrator (ADR-0050).
  */
 export const RUN_TRIGGERS = [
   "message",
@@ -18,6 +19,7 @@ export const RUN_TRIGGERS = [
   "event",
   "manual",
   "schedule",
+  "discussion",
 ] as const;
 export const runTriggerSchema = z.enum(RUN_TRIGGERS);
 
@@ -134,6 +136,8 @@ const RUN_EVENT_PAYLOADS = {
   "run.steered": z.object({ messageIds: z.array(idSchema).min(1).max(20), preview }),
   /** A proactive check found nothing that needs the person, and posted nothing (M5.10). */
   "check.quiet": z.object({}),
+  /** A discussion turn had nothing new to add, and posted nothing (ADR-0050). */
+  "discussion.passed": z.object({}),
   "run.ended": z.object({
     status: z.enum(["succeeded", "failed", "cancelled"]),
     stopReason: runStopReasonSchema,
@@ -241,6 +245,7 @@ export const runEventInputSchema = z.discriminatedUnion("type", [
   body("run.compacted"),
   body("run.steered"),
   body("check.quiet"),
+  body("discussion.passed"),
   body("run.ended"),
   body("model.called"),
   body("model.failed"),

@@ -11,6 +11,7 @@ import {
   ListChecks,
   Mail,
   MessageSquare,
+  MessagesSquare,
   Monitor,
   Search,
   Send,
@@ -48,6 +49,7 @@ const ICONS: [prefix: string, icon: LucideIcon][] = [
   ["todo.write", ListChecks],
   ["delegate_task", UserRound],
   ["message_agent", MessageSquare],
+  ["ask_group", MessagesSquare],
   ["schedule_task", Clock],
   ["remind_me", Clock],
   ["run_skill", Sparkles],
@@ -97,7 +99,7 @@ function StepMark({ row }: { row: StepGroup }) {
 }
 
 /** Targets that read better as plain text than as code. */
-const PROSE = new Set(["delegate_task", "message_agent", "todo.write", "remember"]);
+const PROSE = new Set(["delegate_task", "message_agent", "ask_group", "todo.write", "remember"]);
 
 function StepRow({ row, last }: { row: StepGroup; last: boolean }) {
   const [all, setAll] = useState(false);

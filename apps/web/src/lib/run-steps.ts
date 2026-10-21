@@ -83,6 +83,7 @@ function labelsFor(
     const who = agentName(a.agent ?? a.to, names);
     return [`Messaging ${who}`, `Messaged ${who}`, `message ${who}`];
   }
+  if (tool === "ask_group") return ["Asking the group", "Asked the group", "ask the group"];
   const known = TOOL_LABELS[tool];
   if (known) return known;
   // App tools (gmail.create_draft): the action in words, under the app's name.
@@ -121,6 +122,7 @@ function detailFor(tool: string, args: unknown): string | null {
   }
   if (tool === "delegate_task" && typeof a.brief === "string") return oneLine(a.brief, 140);
   if (tool === "message_agent" && typeof a.message === "string") return oneLine(a.message, 140);
+  if (tool === "ask_group" && typeof a.question === "string") return oneLine(a.question, 140);
   if (tool === "todo.write" && Array.isArray(a.items)) {
     const items = a.items as { done?: unknown }[];
     const done = items.filter((x) => x?.done === true).length;

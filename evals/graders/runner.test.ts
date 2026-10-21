@@ -7,6 +7,7 @@ import { QUILLMARK_PAGES } from "../fixtures/quillmark";
 import { NEWSLETTER, ORDER_PAGE, QUILLMARK_HOME } from "../fixtures/sites";
 import { injectionSuite } from "../redteam/injection";
 import { continuitySuite } from "../suites/continuity";
+import { discussionSuite } from "../suites/discussion";
 import { operatorSuite } from "../suites/operator";
 import { researcherSuite } from "../suites/researcher";
 import { teamSuite } from "../suites/team";
@@ -680,5 +681,115 @@ describe("team.large-roster", () => {
       }),
     );
     expect(failed(report)).toEqual(["hands work only to researcher"]);
+  });
+});
+
+// Group discussions (ADR-0050): each scripted member answers from its name,
+// and passes when it is asked for round 2 or later, unless told to debate.
+function discussing(
+  says: Record<string, string>,
+  /** `close: null`: the coordinator's model is down, so the close fails. */
+  options: { close: string | null; debate?: boolean },
+): ScriptedReply[] {
+  const brain: ScriptedReply = (request) => {
+    const system = String(request.messages[0]?.content ?? "");
+    const asked = String(request.messages.at(-1)?.content ?? "");
+    if (system.includes("Your name is Lead")) {
+      if (options.close === null) throw new Error("model down");
+      return { text: options.close };
+    }
+    const name = Object.keys(says).find((n) => system.includes(`Your name is ${n}`));
+    if (!name) throw new Error("no scripted member for this agent");
+    if (!options.debate && /round [2-9] of/.test(asked)) return { text: "NOTHING_TO_ADD" };
+    return { text: says[name]! };
+  };
+  return Array.from({ length: 30 }, () => brain);
+}
+
+describe("discussion.pick-a-tracker", () => {
+  const [tracker] = discussionSuite as [EvalCase];
+  const says = {
+    Priya: "Whatever we pick must stay under $6,000 a year.",
+    Marco: "Tickets hold customer data, so it has to live on our own servers.",
+    Ines: "Nobody has time to build or maintain a new app this quarter.",
+  };
+
+  it("passes members who answer in turn and a close that credits each of them", async () => {
+    const llm = createScriptedLLM(
+      discussing(says, {
+        close:
+          "Self-host an open-source tracker. Marco: customer data stays on our own servers. Priya: it keeps us well under the $6,000 budget. Ines: we don't build or maintain an app ourselves.",
+      }),
+    );
+    const transcript = await runAttempt(tracker, { llm });
+    expect(failed(grade(tracker, transcript))).toEqual([]);
+    expect(transcript.discussion).toMatchObject({ status: "done", rounds: 2 });
+    // Round 1 answers, round 2 passes (posting nothing), then the close.
+    expect(transcript.discussion!.turns.map((t) => [t.agent, t.round, t.passed])).toEqual([
+      ["finance", 1, false],
+      ["ops", 1, false],
+      ["dev", 1, false],
+      ["finance", 2, true],
+      ["ops", 2, true],
+      ["dev", 2, true],
+      ["lead", 2, false],
+    ]);
+    // Each member read the turns before its own, by name.
+    const ines = llm.requests.find((r) =>
+      String(r.messages[0]?.content).includes("Your name is Ines"),
+    )!;
+    const seen = ines.messages.map((m) => String(m.content)).join("\n");
+    expect(seen).toContain("[Priya] Whatever we pick");
+    expect(seen).toContain("[Marco] Tickets hold customer data");
+  });
+
+  it("fails a close that leaves members out", async () => {
+    const report = await attempt(
+      tracker,
+      discussing(says, {
+        close: "Pay for a hosted tracker; Priya says it fits the $6,000 budget.",
+      }),
+    );
+    expect(failed(report)).toEqual([
+      "credits Marco's hosting rule",
+      "credits Ines on building",
+      "recommends self-hosting an open-source tracker",
+    ]);
+  });
+});
+
+describe("discussion.no-runaway", () => {
+  const [, runaway] = discussionSuite as [EvalCase, EvalCase];
+
+  it("passes: members who never pass still get three rounds and no more", async () => {
+    const llm = createScriptedLLM(
+      discussing(
+        { Priya: "One more point on cost.", Marco: "One more point on hosting." },
+        { close: "Self-host it.", debate: true },
+      ),
+    );
+    const transcript = await runAttempt(runaway, { llm });
+    expect(failed(grade(runaway, transcript))).toEqual([]);
+    expect(transcript.discussion!.turns.map((t) => t.agent)).toEqual([
+      "finance",
+      "ops",
+      "finance",
+      "ops",
+      "finance",
+      "ops",
+      "lead",
+    ]);
+  });
+
+  it("fails a discussion that didn't close", async () => {
+    const report = await attempt(
+      runaway,
+      discussing(
+        { Priya: "One more point on cost.", Marco: "One more point on hosting." },
+        { close: null, debate: true },
+      ),
+    );
+    // The turns kept their order; it just never closed.
+    expect(failed(report)).toEqual(["answered", "within 3 rounds"]);
   });
 });

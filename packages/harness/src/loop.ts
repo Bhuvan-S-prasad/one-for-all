@@ -12,6 +12,8 @@ import {
   type ChatRecord,
   type ChatRecordStore,
   type ChildRunResult,
+  DISCUSSION_TURN_STEPS,
+  type DiscussionTurn,
   type LLMGateway,
   type LLMRequest,
   type MemoryStore,
@@ -55,8 +57,11 @@ import { modelCallEvents, runEvent } from "./events";
 import { MiddlewareChain, type HarnessMiddleware, type RunHookContext } from "./middleware";
 import {
   AGENT_MESSAGE,
+  DISCUSSION_CLOSE,
+  DISCUSSION_TURN,
   FINAL_ANSWER,
   HANDOFF_BRIEF,
+  NOTHING_TO_ADD,
   NOTHING_TO_REPORT,
   PROACTIVE_CHECK,
   promptRef,
@@ -127,13 +132,17 @@ export interface HarnessDeps {
 export interface RunInput {
   readonly ctx: RunContext;
   readonly threadId: ThreadId | null;
-  readonly trigger: "message" | "routine" | "delegation" | "event" | "manual" | "schedule";
+  readonly trigger:
+    "message" | "routine" | "delegation" | "event" | "manual" | "schedule" | "discussion";
   /**
    * The message that started the run. For a run woken by another agent's
    * message (`event`, M5.03), that message is its request; so is a
-   * routine's or a scheduled task's request note (M5.06–07).
+   * routine's or a scheduled task's request note (M5.06–07). For a
+   * discussion turn, the question (ADR-0050).
    */
   readonly requestId?: string;
+  /** A turn in a group discussion, or its close (`trigger: discussion`). */
+  readonly discussion?: DiscussionTurn;
 }
 
 export interface RunResult {
@@ -150,6 +159,8 @@ export interface RunResult {
    * function, so the agent is free for the next message as soon as it replies.
    */
   readonly learn: boolean;
+  /** A discussion turn with nothing new to add: it posted nothing (ADR-0050). */
+  readonly passed?: boolean;
 }
 
 const EMPTY_USAGE: RunUsageTotals = {
@@ -223,6 +234,12 @@ interface CoordinatorTeam {
 
 /** Messages wake an agent that answers later (M5.03). */
 const MESSAGE_AGENT = "message_agent";
+
+/**
+ * Tools that bring other agents in: none in a discussion turn (ADR-0050), so
+ * only the orchestrator starts the next one.
+ */
+const TEAM_TOOLS = new Set([MESSAGE_AGENT, DELEGATE_TASK, "ask_group"]);
 
 /**
  * A coordinator's tool list (ADR-0044): without the tools a teammate has, and
@@ -524,10 +541,27 @@ export async function runAgent(
           scheduled: "check",
         });
       }
-      const tools: ToolDescriptor[] = await deps.tools.listTools(
+      // A discussion turn (ADR-0050): the question and the turns before it are
+      // in the conversation; what to do with them comes last, as the request.
+      const turn = input.discussion;
+      if (turn) {
+        const vars = { question: request, ...turn };
+        history.push({
+          author: "user",
+          agentId: null,
+          content: turn.close
+            ? DISCUSSION_CLOSE.render(vars)
+            : DISCUSSION_TURN.render({ ...vars, position: turn.position ?? 0 }),
+          discussion: turn.close ? "close" : "turn",
+        });
+      }
+      const listed: ToolDescriptor[] = await deps.tools.listTools(
         ctx,
         start.proactive ? { readOnly: true } : undefined,
       );
+      // No agent brings in another during a discussion: the orchestrator
+      // starts each turn (ADR-0050).
+      const tools = turn ? listed.filter((t) => !TEAM_TOOLS.has(t.name)) : listed;
       const model = await deps.llm.modelFor(agent.modelTier, ctx);
       // What this agent already did in this chat (ADR-0045). A record that
       // quotes outside content (a tainted child's answer) taints this run too.
@@ -538,7 +572,7 @@ export async function runAgent(
       // chat. A run handed work or woken by another agent has no team (one
       // level, one hop), so it works as itself.
       let team: CoordinatorTeam | null = null;
-      if (deps.team && !start.proactive && input.trigger !== "delegation") {
+      if (deps.team && !start.proactive && input.trigger !== "delegation" && !turn) {
         const leadsGroup =
           !!input.threadId &&
           !!deps.threads.coordinatorOf &&
@@ -603,6 +637,8 @@ export async function runAgent(
       // outside content (so this one starts tainted), addresses in it were
       // not given by a person and must not open freely here (ADR-0027).
       if ((message.handoff || message.agentMessage || message.scheduled) && start.tainted) continue;
+      // So were the other members' turns in a tainted discussion (ADR-0050).
+      if (input.discussion && start.tainted && message.agentName) continue;
       learnUrls(message.content);
     }
     // So were the record's, unless a run that wrote it had read outside content.
@@ -658,11 +694,15 @@ export async function runAgent(
     // Searches this run made, so the same one again reuses its result (ADR-0045).
     const searches = new Map<string, { toolCallId: string; content: string; untrusted: boolean }>();
 
-    for (let i = 0; i < agent.budgets.steps; i += 1) {
+    // A discussion turn is a short answer, whatever the agent's own budget (ADR-0050).
+    const maxSteps = input.discussion
+      ? Math.min(agent.budgets.steps, DISCUSSION_TURN_STEPS)
+      : agent.budgets.steps;
+    for (let i = 0; i < maxSteps; i += 1) {
       // Most of the budget spent: the task block says to finish (ADR-0045).
       const wrapUp =
         usage.inputTokens + usage.outputTokens >= agent.budgets.tokens * WRAP_UP_AT ||
-        (i + 1) / agent.budgets.steps >= WRAP_UP_AT;
+        (i + 1) / maxSteps >= WRAP_UP_AT;
       // Steering (§6.3, M5.05): what the person wrote here while the run
       // worked joins it at this step boundary, instead of waiting its turn.
       if (input.threadId && deps.runs.claimFollowUps) {
@@ -984,6 +1024,7 @@ ${result.content}`,
               }),
             );
             if (context.team) tools = forCoordinator(tools, context.team);
+            if (input.discussion) tools = tools.filter((t) => !TEAM_TOOLS.has(t.name));
           }
         }
         if (result.ok && call.name === DELEGATE_TASK) {
@@ -1118,8 +1159,20 @@ ${result.content}`,
         return true;
       });
     }
+    // So does a discussion turn with nothing new to add (ADR-0050).
+    const passed =
+      !!input.discussion &&
+      !input.discussion.close &&
+      stopReason === "final_answer" &&
+      NOTHING_TO_ADD.test(finalText ?? "");
+    if (passed) {
+      await steps.run("pass", async () => {
+        await log([runEvent("pass", "discussion.passed", {})]);
+        return true;
+      });
+    }
     const posted =
-      input.threadId && !quiet
+      input.threadId && !quiet && !passed
         ? await steps.run("reply", async () => {
             const content = await redact(ctx, replyText);
             const id = await deps.threads.addAgentMessage(ctx, {
@@ -1149,6 +1202,7 @@ ${result.content}`,
       tainted,
       request: context.request,
       progress: stopReason === "final_answer" ? null : progressLine(thisRun, plan),
+      ...(passed ? { passed } : {}),
     });
   } catch (error) {
     await chain.error(hook, error);
@@ -1534,6 +1588,7 @@ ${result.content}`,
     request?: string;
     /** A stopped run's progress from its record, for the episode (ADR-0045). */
     progress?: string | null;
+    passed?: boolean;
   }): Promise<RunResult> {
     await steps.run("finish", async () => {
       if (hook) await chain.runEnd(hook, { status: result.status, stopReason: result.stopReason });
@@ -1590,6 +1645,7 @@ ${result.content}`,
         result.messageId !== null &&
         !!deps.memory &&
         (options.extractMemories ?? true),
+      ...(result.passed ? { passed: true } : {}),
     };
   }
 }

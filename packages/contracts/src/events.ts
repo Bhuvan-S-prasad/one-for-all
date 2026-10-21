@@ -1,3 +1,4 @@
+import { MAX_DISCUSSION_ROUNDS } from "@ofa/core";
 import { z } from "zod";
 import { idSchema, timestampSchema } from "./common";
 import { runTriggerSchema } from "./runs";
@@ -22,7 +23,27 @@ export const INNGEST_EVENTS = {
   scheduleCancelled: "schedule/item.cancelled",
   /** Consolidate a workspace's memory now, not at 3 at night (M5.09). */
   memoryConsolidationRequested: "memory/consolidation.requested",
+  /** A group discussion was asked for (ADR-0050); its turns run one at a time. */
+  discussionStarted: "group/discussion.started",
+  /** A person stopped a discussion; no further turn starts. */
+  discussionStopped: "group/discussion.stopped",
 } as const;
+
+/** Where a discussion turn stands, as the run taking it reads it (ADR-0050). */
+export const discussionTurnSchema = z.object({
+  discussionId: idSchema,
+  /** 1-based. */
+  round: z.number().int().min(1).max(MAX_DISCUSSION_ROUNDS),
+  rounds: z.number().int().min(1).max(MAX_DISCUSSION_ROUNDS),
+  /** This member's place in the order, 0-based; the close has none. */
+  position: z.number().int().min(0).max(5).nullable(),
+  /** Everyone taking part, by name, in order. */
+  members: z.array(z.string().max(80)).min(1).max(6),
+  /** The coordinator, who closes. */
+  coordinator: z.string().max(80),
+  /** The closing turn: one agreed answer. */
+  close: z.boolean(),
+});
 
 export const messageReceivedEventSchema = z.object({
   ...tenant,
@@ -31,6 +52,8 @@ export const messageReceivedEventSchema = z.object({
   messageId: idSchema,
   runId: idSchema,
   trigger: runTriggerSchema,
+  /** For `trigger: discussion`: which turn this is. */
+  discussion: discussionTurnSchema.optional(),
 });
 export type MessageReceivedEvent = z.infer<typeof messageReceivedEventSchema>;
 
@@ -75,6 +98,16 @@ export const scheduleCancelledEventSchema = z.object({ ...tenant, scheduleId: id
 export type ScheduleCancelledEvent = z.infer<typeof scheduleCancelledEventSchema>;
 
 export const memoryConsolidationRequestedEventSchema = z.object({ ...tenant });
+
+export const discussionStartedEventSchema = z.object({
+  ...tenant,
+  discussionId: idSchema,
+  threadId: idSchema,
+});
+export type DiscussionStartedEvent = z.infer<typeof discussionStartedEventSchema>;
+
+export const discussionStoppedEventSchema = z.object({ ...tenant, discussionId: idSchema });
+export type DiscussionStoppedEvent = z.infer<typeof discussionStoppedEventSchema>;
 export type MemoryConsolidationRequestedEvent = z.infer<
   typeof memoryConsolidationRequestedEventSchema
 >;

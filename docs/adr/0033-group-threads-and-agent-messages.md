@@ -1,6 +1,6 @@
 # ADR-0033: Group threads give each message one responder; agents message each other one hop
 
-- **Status:** Accepted
+- **Status:** Accepted; amended by ADR-0050 (a message to the whole group starts a discussion in turns)
 - **Date:** 2026-10-10
 - **Area:** Runtime
 - **Related:** ADR-0013 (taint escalation), ADR-0027 (address provenance), ADR-0032 (delegation), ARCHITECTURE.md §6.3

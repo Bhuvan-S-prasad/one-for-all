@@ -5,6 +5,8 @@ import {
   AGENT_MESSAGE,
   AGENT_VOICE,
   CHAT_RECORD,
+  DISCUSSION_CLOSE,
+  DISCUSSION_TURN,
   HANDOFF_BRIEF,
   PLATFORM_RULES,
   PROACTIVE_CHECK,
@@ -46,6 +48,8 @@ export interface HistoryMessage {
    * `SCHEDULED_TASK` and shown as the request (M5.06–07).
    */
   readonly scheduled?: "routine" | "task" | "check";
+  /** The instructions for a discussion turn or its close (ADR-0050), shown last as the request. */
+  readonly discussion?: "turn" | "close";
 }
 
 export interface ToolCallTurn {
@@ -362,6 +366,8 @@ export function assembleContext(input: ContextInput, budget: ContextBudget): Ass
       ...(input.history.some((m) => m.scheduled === "routine") ? [ROUTINE_RUN] : []),
       ...(input.history.some((m) => m.scheduled === "task") ? [SCHEDULED_TASK] : []),
       ...(input.history.some((m) => m.scheduled === "check") ? [PROACTIVE_CHECK] : []),
+      ...(input.history.some((m) => m.discussion === "turn") ? [DISCUSSION_TURN] : []),
+      ...(input.history.some((m) => m.discussion === "close") ? [DISCUSSION_CLOSE] : []),
       ...(input.turns.some((t) => t.kind === "user") ? [STEERING] : []),
       ...(input.turns.some((t) => t.kind === "tool" && t.image) ? [SCREENSHOT] : []),
       ...(input.skill ? [SKILL_IN_USE] : []),

@@ -29,6 +29,8 @@ export interface Transcript {
   readonly sent: readonly SentFile[];
   /** Work handed to teammates (M5.13), one entry per handoff, in order. */
   readonly children: readonly ChildTranscript[];
+  /** For a discussion case (ADR-0050): every turn in the order it ran; null otherwise. */
+  readonly discussion: DiscussionTranscript | null;
   /**
    * For a case that continues (`continueWith`): the first run, which the rest
    * of the transcript follows. Null otherwise.
@@ -39,6 +41,30 @@ export interface Transcript {
     readonly toolCalls: readonly { readonly name: string; readonly args: unknown }[];
   } | null;
   readonly durationMs: number;
+}
+
+/** A group discussion as it ran (ADR-0050). */
+export interface DiscussionTranscript {
+  readonly status: "done" | "stopped" | "failed" | "skipped";
+  /** Rounds that ran. */
+  readonly rounds: number;
+  /** Members' handles, in the order they were asked to answer. */
+  readonly members: readonly string[];
+  /** The coordinator's handle (the agent under test). */
+  readonly coordinator: string;
+  readonly turns: readonly DiscussionTurnTranscript[];
+}
+
+export interface DiscussionTurnTranscript {
+  /** The handle of who took it. */
+  readonly agent: string;
+  readonly round: number;
+  /** The coordinator's close. */
+  readonly close: boolean;
+  /** What it posted; null for a pass or a failed turn. */
+  readonly reply: string | null;
+  readonly passed: boolean;
+  readonly toolCalls: readonly { readonly name: string; readonly args: unknown }[];
 }
 
 /** One handoff: who did it, from what brief, and what came back. */
@@ -116,5 +142,15 @@ export interface EvalCase {
   readonly continueWith?: {
     readonly prompt: string;
     readonly agent?: Partial<Omit<AgentProfile, "id">>;
+  };
+  /**
+   * A group discussion (ADR-0050): the prompt is the person's question to the
+   * whole group, these members answer in turn in this order, and the agent
+   * under test, the group's coordinator, closes. The reply is its close.
+   */
+  readonly discussion?: {
+    readonly members: readonly Omit<AgentProfile, "id">[];
+    /** Rounds asked for; 2 by default. */
+    readonly rounds?: number;
   };
 }

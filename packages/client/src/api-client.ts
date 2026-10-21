@@ -36,6 +36,8 @@ import {
   agentStatsListSchema,
   teamRosterSchema,
   handoffListSchema,
+  discussionListSchema,
+  type DiscussionList,
   type HandoffList,
   type TeamRoster,
   approvalListSchema,
@@ -334,6 +336,9 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request("POST", `/api/threads/${encodeURIComponent(id)}/read`, null),
     getThread: (id: string): Promise<Thread> =>
       request("GET", `/api/threads/${encodeURIComponent(id)}`, threadSchema),
+    /** A group's discussions, newest first, with their turns (ADR-0050). */
+    threadDiscussions: (id: string): Promise<DiscussionList> =>
+      request("GET", `/api/threads/${encodeURIComponent(id)}/discussions`, discussionListSchema),
     updateThread: (id: string, patch: UpdateThreadRequest): Promise<Thread> =>
       request("PATCH", `/api/threads/${encodeURIComponent(id)}`, threadSchema, patch),
     listMessages: (

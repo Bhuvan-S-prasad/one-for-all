@@ -5,6 +5,7 @@ import {
   groupThreadListQuerySchema,
   MAX_UPLOAD_BYTES,
   updateThreadRequestSchema,
+  type DiscussionList,
   type MessagePage,
   type ThreadList,
   type UnreadList,
@@ -17,6 +18,7 @@ import {
   createUpload,
   getThread,
   listAgents,
+  listDiscussions,
   listGroupThreads,
   listMessages,
   markThreadRead,
@@ -27,7 +29,7 @@ import {
 } from "@ofa/db";
 import { Hono } from "hono";
 import type { Container } from "../container";
-import { toMessage, toThread, toUpload } from "../lib/mappers";
+import { toDiscussion, toMessage, toThread, toUpload } from "../lib/mappers";
 import { startAgentTurn } from "../lib/turns";
 import { readJson, readQuery } from "../lib/validate";
 import { requireSession, requireTenant } from "../middleware/session";
@@ -44,12 +46,16 @@ import type { AppEnv } from "../types";
  *   GET   /api/threads/:id/messages   newest page first, oldest-first within a page
  *   POST  /api/threads/:id/uploads    attach a file (raw bytes; ?name=&type=), sent with the next message (EN.09)
  *   POST  /api/threads/:id/messages   write to the agent; starts a run and returns at once
+ *   GET   /api/threads/:id/discussions  a group's discussions, newest first, with their turns (ADR-0050)
  *
  * The API never runs the agent (hard rule 1): it stores the message and the
  * run, emits `agent/message.received`, and the orchestrator takes it from there.
  */
 export function threadRoutes(
-  deps: Pick<Container, "db" | "blobs" | "sessions" | "bus" | "dispatcher" | "runs" | "logger">,
+  deps: Pick<
+    Container,
+    "db" | "blobs" | "sessions" | "bus" | "dispatcher" | "runs" | "logger" | "discussions"
+  >,
 ) {
   const { db } = deps;
 
@@ -101,6 +107,13 @@ export function threadRoutes(
       const thread = await getThread(db, c.get("tenant"), c.req.param("id"));
       if (!thread) throw new NotFoundError("Thread");
       return c.json(toThread(thread));
+    })
+    .get("/:id/discussions", async (c) => {
+      const tenant = c.get("tenant");
+      const thread = await getThread(db, tenant, c.req.param("id"));
+      if (!thread) throw new NotFoundError("Thread");
+      const rows = await listDiscussions(db, tenant, thread.id);
+      return c.json({ items: rows.map(toDiscussion) } satisfies DiscussionList);
     })
     .patch("/:id", async (c) => {
       const patch = await readJson(c, updateThreadRequestSchema);

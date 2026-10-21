@@ -128,6 +128,7 @@ const TRIGGERS: Record<Run["trigger"], string> = {
   event: "Messaged by another agent",
   manual: "Routine test run",
   schedule: "Task it set for later",
+  discussion: "Turn in a group discussion",
 };
 
 function ActivityPage() {

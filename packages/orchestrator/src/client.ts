@@ -1,5 +1,7 @@
 import {
   approvalDecidedEventSchema,
+  discussionStartedEventSchema,
+  discussionStoppedEventSchema,
   INNGEST_EVENTS,
   messageReceivedEventSchema,
   runCancelledEventSchema,
@@ -7,6 +9,8 @@ import {
   scheduleCancelledEventSchema,
   scheduleCreatedEventSchema,
   type ApprovalDecidedEvent,
+  type DiscussionStartedEvent,
+  type DiscussionStoppedEvent,
   type MemoryConsolidationRequestedEvent,
   type MessageReceivedEvent,
   type RunCancelledEvent,
@@ -43,6 +47,10 @@ export interface RunDispatcher {
   scheduleCancelled(event: ScheduleCancelledEvent): Promise<void>;
   /** Consolidate a workspace's memory now (M5.09). */
   consolidateMemory(event: MemoryConsolidationRequestedEvent): Promise<void>;
+  /** Run a group discussion's turns (ADR-0050). */
+  discussionStarted(event: DiscussionStartedEvent): Promise<void>;
+  /** End it between turns: a person said stop. */
+  discussionStopped(event: DiscussionStoppedEvent): Promise<void>;
 }
 
 export function createRunDispatcher(inngest: Inngest): RunDispatcher {
@@ -87,6 +95,20 @@ export function createRunDispatcher(inngest: Inngest): RunDispatcher {
       await inngest.send({
         name: INNGEST_EVENTS.memoryConsolidationRequested,
         data: memoryConsolidationRequestedEventSchema.parse(event),
+      });
+    },
+    async discussionStarted(event) {
+      await inngest.send({
+        name: INNGEST_EVENTS.discussionStarted,
+        data: discussionStartedEventSchema.parse(event),
+        id: `discussion-started-${event.discussionId}`,
+      });
+    },
+    async discussionStopped(event) {
+      await inngest.send({
+        name: INNGEST_EVENTS.discussionStopped,
+        data: discussionStoppedEventSchema.parse(event),
+        id: `discussion-stopped-${event.discussionId}`,
       });
     },
   };

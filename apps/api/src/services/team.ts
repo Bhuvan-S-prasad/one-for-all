@@ -16,10 +16,12 @@ import {
   getRun,
   getThread,
   listAgents,
+  openDiscussionIn,
   postAgentMessage,
   startHandoff,
   type Database,
 } from "@ofa/db";
+import type { OpenDiscussionInput } from "./discussions";
 import { createHash } from "node:crypto";
 
 // The workspace's agents as a team (ARCHITECTURE.md §6.3, M5.01), for the
@@ -55,6 +57,16 @@ export interface TeamOptions {
     ctx: RunContext,
     agentIds: readonly AgentId[],
   ) => Promise<ReadonlyMap<string, readonly AgentCapability[]>>;
+  /** Open a group discussion and start it (ADR-0050, `ask_group`). */
+  readonly openDiscussion?: (
+    ctx: RunContext,
+    input: OpenDiscussionInput,
+  ) => Promise<{ readonly discussionId: string }>;
+}
+
+/** Runs another agent started, or the orchestrator for a discussion turn: they bring nobody in. */
+function startedByAnother(run: { parentRunId: string | null; trigger: string } | null): boolean {
+  return !!run && (!!run.parentRunId || run.trigger === "discussion");
 }
 
 export function createTeamDirectory(db: Database, options: TeamOptions = {}): TeamDirectory {
@@ -70,9 +82,10 @@ export function createTeamDirectory(db: Database, options: TeamOptions = {}): Te
 
   const team: TeamDirectory = {
     async members(ctx) {
-      // One level deep: a run that is itself a handoff hands nothing on.
+      // One level deep: a run that is itself a handoff hands nothing on, and
+      // neither does a discussion turn (ADR-0050).
       const current = await getRun(db, ctx, ctx.runId);
-      if (current?.parentRunId) return [];
+      if (startedByAnother(current)) return [];
       return withCards(
         ctx,
         (await listAgents(db, ctx))
@@ -123,7 +136,7 @@ export function createTeamDirectory(db: Database, options: TeamOptions = {}): Te
     async contacts(ctx) {
       // One hop: a run started by another agent messages nobody.
       const current = await getRun(db, ctx, ctx.runId);
-      if (!current?.threadId || current.parentRunId) return [];
+      if (!current?.threadId || startedByAnother(current)) return [];
       const thread = await getThread(db, ctx, current.threadId);
       if (!thread || thread.kind === "handoff") return [];
       const inThread = new Set(
@@ -159,6 +172,13 @@ export function createTeamDirectory(db: Database, options: TeamOptions = {}): Te
       const current = await getRun(db, ctx, ctx.runId);
       const threadId = current?.threadId;
       if (!threadId) throw new AppError("bad_request", "This run has no conversation to post in");
+      // During a discussion only the orchestrator starts turns (ADR-0050).
+      if (await openDiscussionIn(db, ctx, threadId)) {
+        throw new AppError(
+          "conflict",
+          "The group is in a discussion right now; messages to members wait until it closes.",
+        );
+      }
       const runId = stableUuid(`${ctx.workspaceId}:${input.key}:message`);
       // Addressed in the chat, so everyone sees who it went to (§6.3: handoffs are visible).
       const addressed = input.content.trimStart().startsWith("@")
@@ -193,6 +213,89 @@ export function createTeamDirectory(db: Database, options: TeamOptions = {}): Te
         agentName: member.name,
       };
     },
+
+    async discussants(ctx) {
+      const lead = await leading(ctx);
+      if (!lead) return [];
+      return withCards(ctx, lead.members);
+    },
+
+    async discuss(ctx, input) {
+      const lead = await leading(ctx);
+      if (!lead || !options.openDiscussion) {
+        throw new AppError(
+          "bad_request",
+          "Only a group's coordinator, answering the person, can ask the group.",
+        );
+      }
+      // Named members in that order (the coordinator too, if named), else everyone but it.
+      let members = lead.members;
+      if (input.order?.length) {
+        const everyone = [...lead.members, lead.self];
+        const picked: TeamMember[] = [];
+        for (const name of input.order) {
+          const member = findMember(everyone, name);
+          if (!member) {
+            throw new AppError(
+              "not_found",
+              `${name} isn't in this group. Its members: ${lead.members.map((m) => m.slug).join(", ")}.`,
+            );
+          }
+          if (!picked.some((p) => p.id === member.id)) picked.push(member);
+        }
+        members = picked;
+      }
+      const { discussionId } = await options.openDiscussion(ctx, {
+        key: input.key,
+        threadId: lead.threadId,
+        question: { agentId: ctx.agentId, content: input.question },
+        startedByRunId: ctx.runId,
+        coordinatorAgentId: ctx.agentId,
+        memberIds: members.map((m) => m.id),
+        ...(input.rounds !== undefined ? { rounds: input.rounds } : {}),
+        // Asked after outside content: every turn starts tainted (ADR-0013).
+        tainted: lead.tainted,
+      });
+      return { discussionId, members: members.map((m) => m.name) };
+    },
   };
+
+  /**
+   * This run, if it may ask its group (ADR-0050): the coordinator's run for a
+   * person's message in a group it leads. Its members in roster order, but
+   * itself, and the coordinator as a member, for an order that names it.
+   */
+  async function leading(ctx: RunContext) {
+    const current = await getRun(db, ctx, ctx.runId);
+    if (!current?.threadId || current.trigger !== "message") return null;
+    const thread = await getThread(db, ctx, current.threadId);
+    if (!thread || thread.kind !== "group" || thread.coordinatorAgentId !== ctx.agentId) {
+      return null;
+    }
+    const agents = new Map(
+      (await listAgents(db, ctx)).filter((a) => a.status === "active").map((a) => [a.id, a]),
+    );
+    const asMember = (a: Awaited<ReturnType<typeof listAgents>>[number]): TeamMember => ({
+      id: asId<AgentId>(a.id),
+      slug: a.slug,
+      name: a.name,
+      job: agentSpecSchema.safeParse(a.spec).data?.job ?? "General",
+    });
+    const self = agents.get(ctx.agentId);
+    if (!self) return null;
+    const members = thread.members
+      .flatMap((m) => (m.type === "agent" && m.agentId !== ctx.agentId ? [m.agentId] : []))
+      .flatMap((id) => {
+        const a = agents.get(id);
+        return a ? [asMember(a)] : [];
+      });
+    return {
+      threadId: current.threadId,
+      tainted: current.tainted,
+      members,
+      self: asMember(self),
+    };
+  }
+
   return team;
 }

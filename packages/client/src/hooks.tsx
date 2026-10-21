@@ -42,6 +42,7 @@ import {
   queryKeys,
   runArtifactsQuery,
   runHandoffsQuery,
+  discussionsQuery,
   runEventsQuery,
   runQuery,
   runSearchQuery,
@@ -266,6 +267,12 @@ export function useThread(threadId: string | undefined) {
     queryFn: () => api.getThread(threadId!),
     enabled: !!threadId,
   });
+}
+
+/** A group chat's discussions (ADR-0050), newest first; kept live over the socket. */
+export function useDiscussions(threadId: string | undefined) {
+  const api = useApiClient();
+  return useQuery({ ...discussionsQuery(api, threadId ?? ""), enabled: !!threadId });
 }
 
 /** Start a chat: with one agent a new direct chat, with two to six a group chat. */

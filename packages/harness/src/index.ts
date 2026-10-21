@@ -23,6 +23,12 @@ export {
   type HistoryMessage,
   type Turn,
 } from "./context";
+export {
+  runDiscussion,
+  type DiscussionDeps,
+  type DiscussionInput,
+  type DiscussionResult,
+} from "./discussion";
 export { modelCallEvents, runEvent } from "./events";
 export { learnFromRun, type LearnInput, type LearnResult } from "./learn";
 export {
@@ -56,6 +62,7 @@ export {
   createFakeToolExecutor,
   createMemoryApprovals,
   createMemoryChatRecords,
+  createMemoryDiscussions,
   createMemoryRuntime,
   createMemoStepRunner,
   createScriptedLLM,

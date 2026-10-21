@@ -19,3 +19,4 @@ export * from "./schedules";
 export * from "./skills";
 export * from "./uploads";
 export * from "./spend";
+export * from "./discussions";

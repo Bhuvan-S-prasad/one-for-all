@@ -115,6 +115,7 @@ const NOT_A_CAPABILITY = new Set([
   "schedule_task",
   "delegate_task",
   "message_agent",
+  "ask_group",
 ]);
 
 const AREAS: Record<string, string> = {

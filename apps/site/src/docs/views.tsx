@@ -158,6 +158,7 @@ const EVENT_NOTES: Record<string, string> = {
   "run.compacted": "Older turns were turned into notes to make room: tokens before and after.",
   "run.steered": "A message the person sent while the run worked joined it at a step boundary.",
   "check.quiet": "A quiet check found nothing to report, so nothing was posted.",
+  "discussion.passed": "A discussion turn had nothing new to add, so nothing was posted.",
   "run.ended": "The run ended: how (an answer, a budget, a loop, a stop) and its usage.",
   "model.called":
     "A model call: the model, the prompt versions, tokens in and out, and how long it took.",

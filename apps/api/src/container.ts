@@ -91,6 +91,7 @@ import {
 import type { Inngest } from "inngest";
 import { createAuth, type Auth } from "./auth/auth";
 import { createLogger, type Logger } from "./lib/logger";
+import { createDiscussionService, type DiscussionService } from "./services/discussions";
 import { createRoutineService, type RoutineService } from "./services/routines";
 import { createScheduler } from "./services/schedules";
 import { createSessionService, type SessionService } from "./services/sessions";
@@ -154,6 +155,8 @@ export interface Container {
   readonly dispatcher: RunDispatcher;
   /** Routines on the clock and their test runs (M5.06). */
   readonly routines: RoutineService;
+  /** Group discussions (ADR-0050). */
+  readonly discussions: DiscussionService;
   /** Tasks and reminders agents set for later (M5.07). */
   readonly scheduler: Scheduler & ScheduleRunner;
   readonly inngest: Inngest;
@@ -385,9 +388,17 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     publish(workspaceId, { kind: "message.created", threadId, messageId });
   // The other agents a run can hand work to (M5.01) or message (M5.03). A
   // message wakes its agent through the dispatcher, made with Inngest below.
+  // Group discussions (ADR-0050): opened here, their turns run by the orchestrator.
+  const discussions = createDiscussionService(db, {
+    start: (event) => dispatcher.discussionStarted(event),
+    stop: (event) => dispatcher.discussionStopped(event),
+    cancelRun: (event) => dispatcher.cancelRun(event),
+    publish,
+  });
   const team = createTeamDirectory(db, {
     wake: (event) => dispatcher.messageReceived(event),
     announce: announceMessage,
+    openDiscussion: (ctx, input) => discussions.open(ctx, input),
     // Capability cards from grants (ADR-0044); the executor is made below.
     capabilities: (ctx, agentIds) =>
       tools.capabilities ? tools.capabilities(ctx, agentIds) : Promise.resolve(new Map()),
@@ -511,6 +522,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     routines,
     schedules: scheduler,
     memory: memoryMaintenance,
+    discussions,
     // Rows of every workspace are checked, so the owner connection (ADR-0047).
     ...(blobs
       ? {
@@ -556,6 +568,7 @@ export function createContainer(config: Config, overrides: ContainerOverrides = 
     toolkits,
     dispatcher,
     routines,
+    discussions,
     scheduler,
     inngest,
     functions,

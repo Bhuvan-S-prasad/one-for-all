@@ -38,6 +38,7 @@ const transcript = (over: Partial<Transcript>): Transcript =>
     files: [],
     sent: [],
     children: [],
+    discussion: null,
     before: null,
     durationMs: 1,
     ...over,

@@ -21,6 +21,7 @@ export const queryKeys = {
   usage: ["settings", "usage"] as const,
   logins: ["settings", "logins"] as const,
   messages: (threadId: string) => ["threads", threadId, "messages"] as const,
+  discussions: (threadId: string) => ["threads", threadId, "discussions"] as const,
   runs: (agentId?: string) => ["runs", "list", agentId ?? "all"] as const,
   runLists: ["runs", "list"] as const,
   runSearch: (filter: RunFilter) => ["runs", "search", filter] as const,
@@ -162,6 +163,12 @@ export const runArtifactsQuery = (api: ApiClient, id: string) =>
     queryKey: queryKeys.runArtifacts(id),
     queryFn: async () => (await api.runArtifacts(id)).items,
     staleTime: Infinity,
+  });
+
+export const discussionsQuery = (api: ApiClient, threadId: string) =>
+  queryOptions({
+    queryKey: queryKeys.discussions(threadId),
+    queryFn: async () => (await api.threadDiscussions(threadId)).items,
   });
 
 export const runHandoffsQuery = (api: ApiClient, id: string) =>

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { idSchema, timestampSchema } from "./common";
-import { runSchema } from "./runs";
+import { runSchema, runStatusSchema } from "./runs";
 
 // Conversations between people and agents (ARCHITECTURE.md Â§6.3, Â§15).
 
@@ -157,3 +157,48 @@ export type UnreadThread = z.infer<typeof unreadThreadSchema>;
 
 export const unreadListSchema = z.object({ items: z.array(unreadThreadSchema) });
 export type UnreadList = z.infer<typeof unreadListSchema>;
+
+// ── Discussions (ADR-0050) ───────────────────────────────────────────────────
+
+/** `closing`: the coordinator is writing the answer. */
+export const DISCUSSION_STATUSES = ["active", "closing", "done", "stopped", "failed"] as const;
+export const discussionStatusSchema = z.enum(DISCUSSION_STATUSES);
+export type DiscussionStatus = z.infer<typeof discussionStatusSchema>;
+
+/** One turn of a discussion: a member's, or the coordinator's close. */
+export const discussionTurnRecordSchema = z.object({
+  runId: idSchema,
+  agentId: idSchema,
+  round: z.number().int().min(1),
+  /** Its place in the order, 0-based; null for the close. */
+  position: z.number().int().min(0).nullable(),
+  close: z.boolean(),
+  status: runStatusSchema,
+  /** What it posted; null while it works, and for a pass. */
+  messageId: idSchema.nullable(),
+});
+export type DiscussionTurnRecord = z.infer<typeof discussionTurnRecordSchema>;
+
+export const discussionSchema = z.object({
+  id: idSchema,
+  threadId: idSchema,
+  /** The question: the person's message, or the coordinator's. */
+  questionMessageId: idSchema,
+  coordinatorAgentId: idSchema,
+  /** Who takes part, in order. */
+  memberIds: z.array(idSchema),
+  rounds: z.number().int().min(1),
+  /** The round going now (or the last one), 1-based. */
+  round: z.number().int().min(1),
+  status: discussionStatusSchema,
+  /** The coordinator's agreed answer, once it closed. */
+  closingMessageId: idSchema.nullable(),
+  tainted: z.boolean(),
+  createdAt: timestampSchema,
+  endedAt: timestampSchema.nullable(),
+  turns: z.array(discussionTurnRecordSchema),
+});
+export type Discussion = z.infer<typeof discussionSchema>;
+
+export const discussionListSchema = z.object({ items: z.array(discussionSchema) });
+export type DiscussionList = z.infer<typeof discussionListSchema>;

@@ -67,3 +67,4 @@ Each file records one significant decision: the context, what we chose, what we 
 | [0047](0047-object-storage-for-media.md) | Large files go to object storage, Garage in self-host | Platform | Accepted |
 | [0048](0048-media-generation-through-catalog-apps.md) | Media comes from catalog apps, is kept as files, and paid calls ask first under a monthly cap | Integrations | Accepted |
 | [0049](0049-video-engine-as-a-standalone-package.md) | The video engine is a standalone package; One-for-All uses it through a thin adapter | Platform | Accepted |
+| [0050](0050-group-discussions-in-turns.md) | A group discusses in turns, one agent at a time, and the coordinator closes | Runtime | Accepted |

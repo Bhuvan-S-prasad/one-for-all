@@ -26,6 +26,7 @@ export {
   useRetryRun,
   useRunArtifacts,
   useRunHandoffs,
+  useDiscussions,
   useApiClient,
   useCreateAgent,
   useDecideApproval,

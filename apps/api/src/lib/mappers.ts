@@ -3,6 +3,7 @@ import {
   runEventSchema,
   type Agent,
   type AgentSpec,
+  type Discussion,
   type Episode,
   type MemoryItem,
   type Message,
@@ -17,6 +18,7 @@ import {
 } from "@ofa/contracts";
 import type {
   AgentWithGrants,
+  DiscussionWithTurns,
   EpisodeRow,
   MemoryReviewRow,
   MessageRow,
@@ -64,6 +66,32 @@ export function toThread(row: ThreadWithMembers): Thread {
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     archivedAt: row.archivedAt?.toISOString() ?? null,
+  };
+}
+
+export function toDiscussion(row: DiscussionWithTurns): Discussion {
+  return {
+    id: row.id,
+    threadId: row.threadId,
+    questionMessageId: row.questionMessageId,
+    coordinatorAgentId: row.coordinatorAgentId,
+    memberIds: row.memberIds,
+    rounds: row.rounds,
+    round: row.round,
+    status: row.status,
+    closingMessageId: row.closingMessageId,
+    tainted: row.tainted,
+    createdAt: row.createdAt.toISOString(),
+    endedAt: row.endedAt?.toISOString() ?? null,
+    turns: row.turns.map((t) => ({
+      runId: t.runId,
+      agentId: t.agentId,
+      round: t.round,
+      position: t.position,
+      close: t.position === null,
+      status: t.status,
+      messageId: t.messageId,
+    })),
   };
 }
 

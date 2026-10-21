@@ -17,7 +17,7 @@ import { recallTool, rememberTool, todoTool } from "./memory";
 import { remindMeTool, scheduleTaskTool } from "./schedule";
 import { runSkillTool, saveSkillTool } from "./skills";
 import { loadToolkitTool } from "./toolkits";
-import { delegateTaskTool, messageAgentTool } from "./team";
+import { askGroupTool, delegateTaskTool, messageAgentTool } from "./team";
 import { readUrlTool, webSearchTool, type Fetcher, type WebSearchProvider } from "./web";
 
 export interface BuiltinToolDeps {
@@ -28,7 +28,7 @@ export interface BuiltinToolDeps {
   readonly sandbox?: SandboxProvider | null;
   /**
    * The other agents a run can hand work to (M5.01) or message (M5.03);
-   * without it, `delegate_task` and `message_agent` are never listed.
+   * without it, `delegate_task`, `message_agent` and `ask_group` are never listed.
    */
   readonly team?: TeamDirectory | null;
   /** Tasks and reminders for later (M5.07); without it, those tools are never listed. */
@@ -66,6 +66,7 @@ export function builtinTools(deps: BuiltinToolDeps): ToolDefinition<never>[] {
     waitTool(),
     delegateTaskTool(deps.team ?? null),
     messageAgentTool(deps.team ?? null),
+    askGroupTool(deps.team ?? null),
     scheduleTaskTool(deps.scheduler ?? null),
     remindMeTool(deps.scheduler ?? null),
     runSkillTool(deps.skills ?? null),

@@ -88,6 +88,8 @@ describe.skipIf(!hasDb)("skills and memory (integration)", async () => {
     approvalDecided: async () => {},
     scheduleCreated: async () => {},
     consolidateMemory: async () => {},
+    discussionStarted: async () => {},
+    discussionStopped: async () => {},
     scheduleCancelled: async () => {},
   };
   const container = createContainer(config, {

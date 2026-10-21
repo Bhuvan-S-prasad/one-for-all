@@ -192,6 +192,18 @@ export {
   type UploadRow,
 } from "./repos/uploads";
 export {
+  activeDiscussionRuns,
+  getDiscussion,
+  listDiscussions,
+  openDiscussion,
+  openDiscussionIn,
+  startDiscussionTurn,
+  updateDiscussion,
+  type DiscussionRow,
+  type DiscussionTurnRow,
+  type DiscussionWithTurns,
+} from "./repos/discussions";
+export {
   createSpendLedger,
   setSpendCap,
   spendByAgentSince,

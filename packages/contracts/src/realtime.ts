@@ -14,5 +14,11 @@ export const realtimeMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("run.updated"), run: runSchema }),
   z.object({ type: z.literal("message.created"), message: messageSchema }),
   z.object({ type: z.literal("agent.updated"), agent: agentSchema }),
+  /** A group discussion moved on (ADR-0050); clients reload that thread's discussions. */
+  z.object({
+    type: z.literal("discussion.updated"),
+    threadId: z.string(),
+    discussionId: z.string(),
+  }),
 ]);
 export type RealtimeMessage = z.infer<typeof realtimeMessageSchema>;

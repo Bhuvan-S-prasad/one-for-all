@@ -103,6 +103,10 @@ export function applyRealtime(queryClient: QueryClient, message: RealtimeMessage
       void queryClient.invalidateQueries({ queryKey: queryKeys.threadLists });
       return;
     }
+    case "discussion.updated":
+      // Whose turn it is, and the answer once it closes (ADR-0050).
+      void queryClient.invalidateQueries({ queryKey: queryKeys.discussions(message.threadId) });
+      return;
     case "agent.updated": {
       const agent = message.agent;
       queryClient.setQueryData<Agent>(queryKeys.agent(agent.id), agent);

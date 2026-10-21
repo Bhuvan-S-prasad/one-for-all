@@ -175,6 +175,12 @@ export const BUILTIN_TOOLS = [
     starter: false,
   },
   {
+    name: "ask_group",
+    label: "Ask the group",
+    hint: "As a group's coordinator, ask every member a question in turn, then close with one agreed answer. You can also start one yourself with @all.",
+    starter: false,
+  },
+  {
     name: "schedule_task",
     label: "Do tasks later",
     hint: "Set itself a task for a later time, then wake up in the same chat to do it.",
