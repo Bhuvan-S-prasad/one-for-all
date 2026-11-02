@@ -49,7 +49,7 @@ Follow ARCHITECTURE.md §17 exactly. Key points:
 
 - `apps/` holds deployables (`api`, `worker`, `web`, `site`, `mobile`); `packages/` holds libraries; `tooling/`, `infra/`, `evals/`, `docs/` each have one job.
 - The root holds workspace config only. A new top-level folder needs an ADR in `docs/adr/`.
-- Web, mobile and the public site may import only `core`, `contracts` and `client`.
+- Web, mobile, the public site and `apps/learn` may import only `core`, `contracts` and `client`.
 - Each package exposes one `index.ts` via `exports`; no deep imports.
 - Unit tests sit beside code as `*.test.ts`; agent behavior is tested in `evals/`.
 - `graft/` is a local code-index cache, not project code. Keep it git-ignored. Once code exists, use the graft tools for navigation before grepping.
@@ -84,6 +84,7 @@ The UI follows the design canvas "One-for-All M1 Screens" (https://claude.ai/art
 
 - When a decision changes, update ARCHITECTURE.md and add or supersede an ADR in `docs/adr/` in the same change.
 - When a milestone completes, update the **Status** line above, ARCHITECTURE.md §18 and the tracker's status table.
+- `apps/learn` (ADR-0051) explains the code: when a feature or a function it covers changes, update its page in `apps/learn/content`. Its build fails on references to code that no longer exists.
 
 ## Commands
 

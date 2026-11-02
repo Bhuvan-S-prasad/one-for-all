@@ -27,7 +27,7 @@ The single place to see what is done, what is in progress and what comes next. A
 | | |
 |---|---|
 | **Current milestone** | Enhancements (before M6) |
-| **Next task** | EN.01 several providers and a model per agent (or EN.23 triggers); open from EN.18: rerun the video evals once OpenRouter is reachable |
+| **Next task** | Learn: LN.03 chapters 2–8. Enhancements: EN.01 several providers and a model per agent; open from EN.18: rerun the video evals once OpenRouter is reachable |
 | **Blockers** | None. Dev services must be running (`pnpm infra:up`) for integration tests |
 | **Decisions pending** | License (see [ARCHITECTURE.md §19](../architecture/ARCHITECTURE.md#19-open-questions)); needed before first public push, not before M1 work |
 
@@ -48,6 +48,7 @@ The single place to see what is done, what is in progress and what comes next. A
 | [Teams and continuity](#teams-and-continuity) | "Continue" continues; a coordinator routes by capability | ✅ Done | 11 / 11 |
 | [Site and docs](#site-and-docs) | A public landing page and docs for what is built | ✅ Done | 7 / 7 |
 | [Enhancements](#enhancements) | Your own model per agent; images and video; teams that discuss; email triggers | 🟨 In progress | 16 / 30 |
+| [Learn](#learn) | The codebase explained: guided path, features, walkthroughs, code explorer | 🟨 In progress | 2 / 8 |
 | [M6 Everywhere](#m6-everywhere) | Approve from the phone; chat on Telegram and Slack | ⬜ Not started | 0 / 8 |
 | [M7 Hardening](#m7-hardening) | Evals gate CI; backups; E2B and cloud adapters | ⬜ Not started | 0 / 11 |
 
@@ -371,6 +372,21 @@ Stays where it is: the approval card (M4.09), the file card (M3.06) and the comp
 **Close**
 - [ ] EN.30 Docs and site pages for providers, media, the video edit agent, discussion and triggers; end-to-end check of the done-when; tracker and Status line
 
+## Learn
+
+**Goal:** one place where developers (including early-career ones) learn how One-for-All is built: the architecture, each feature with its flow, data and endpoints, and every function with what calls what; agreed 2026-10-21.
+**Done when:** `apps/learn` has the guided path (16 chapters), a page for every feature, the main walkthroughs and the generated reference, its build fails on stale references, and it is deployed with a link from the site.
+**ADRs:** 0051
+
+- [x] LN.01 → ADR-0051; ARCHITECTURE.md §16, §17 and R3; CLAUDE.md (boundary and "keep apps/learn current"). `apps/learn` (Vite, React, TanStack Router, the shared tokens; `dev:learn` on :5181). `scripts/index-repo.ts` reads every TypeScript file under apps and packages (and evals) with the TypeScript compiler as one program and writes `src/generated` (git-ignored): 22 packages, 402 files, about 5,700 symbols with signatures and doc comments, about 2,800 call and render edges resolved by the type checker, imports both ways, 32 tables with columns, foreign keys and constraints from the Drizzle schema, 93 endpoints from the Hono routers with their descriptions, 9 Inngest jobs and their events, 37 tools; about 6 s. Generated pages: system map (home), code explorer (packages with "most used from outside", files, symbols with callers, callees and highlighted source whose call names link), data model, API, jobs and events, tools, decisions, search. Original task: ADR, the app, the code index and the generated reference
+- [x] LN.02 → Written pages in `apps/learn/content` with references checked at build time (`code`, `calls`, `table`, `endpoints` blocks; `code:`, `table:`, `api:`, `adr:`, `page:`, `pkg:` links; `from:`/`to:` anchors narrow an excerpt) and `flow`, `layers`, `sequence` diagrams: chapter 1 "The big picture", the walkthrough "Send a message" (composer to reply, 7 stops), the feature "Group discussions" (architecture, flow, data, API, key functions, tests). Checked in headless Chrome at 1440 and 390 px. Found while checking: call lines inside chained calls (Hono routers) pointed at the chain's start; names merged with punctuation in the highlighter so they couldn't link. Tests: 8 unit — **Deps:** LN.01. Original task: the first chapter, walkthrough and feature page
+- [ ] LN.03 Chapters 2–8: the repository and its tools, contracts and core, the database, the API, the web app, durable work, the agent harness — **Deps:** LN.02
+- [ ] LN.04 Chapters 9–16: models, tools and policy, memory and skills, the computer, apps and secrets, teams, testing and evals, shipping it — **Deps:** LN.02
+- [ ] LN.05 Feature pages: sign-in and setup, approvals, handoffs and coordinators, memory, routines and reminders, the computer and desktop, apps over MCP, uploads and media, spend control, the video edit agent — **Deps:** LN.02
+- [ ] LN.06 Walkthroughs: first setup and sign-in, an approval, a handoff, learning after a run, a routine firing — **Deps:** LN.02
+- [ ] LN.07 Coverage page (much-called functions no page explains), search by doc text, the glossary on hover — **Deps:** LN.02
+- [ ] LN.08 Deploy (Vercel project for `apps/learn`), a link from `apps/site`, the index check in CI — **Deps:** LN.03
+
 ## M6 Everywhere
 
 **Goal:** reach agents from the phone and chat apps.
@@ -440,6 +456,12 @@ Stays where it is: the approval card (M4.09), the file card (M3.06) and the comp
 ## Session log
 
 Newest first. Keep entries short.
+
+### 2026-10-21 (session 27, Learn)
+- **Done:** LN.01–LN.02: ADR-0051 and `apps/learn`, a guide to the codebase whose facts come from an index of the source built at build time; the generated reference (code explorer with call graph, data model, API, jobs and events, tools, decisions, search) and the first written pages (the big picture, send a message, group discussions).
+- **Checks:** the learn app's typecheck, lint, unit tests and build; the index check passes on all pages and failed, as it should, on a link to a page not yet written; pages looked at in headless Chrome at desktop and phone widths.
+- **Next:** LN.03.
+- **Open:** `src/generated` holds the source of every indexed file (about 3.4 MB of index plus 2.4 MB of source chunks, loaded on demand); fine for a guide, worth watching. Not deployed yet.
 
 ### 2026-10-20 (session 27, teams that discuss)
 - **Done:** EN.19–EN.22: ADR-0050, group discussions in turns (`@all`, `/discuss`, `ask_group`), `runDiscussion` and `discussion-run`, one active run per thread, migration 0021, the discussions API and live updates, the turn bar, folded turns and the pinned answer, discussion evals. The live test of the video agent ran on Claude through shell-only `LLM_MODELS_*` settings; nothing in the repo named Claude, so the dev stack is back on the free tiers.

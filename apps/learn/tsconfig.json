@@ -1,0 +1,8 @@
+{
+  "extends": "@ofa/tsconfig/react.json",
+  "compilerOptions": {
+    "types": ["vite/client"],
+    "paths": { "@/*": ["./src/*"] }
+  },
+  "include": ["src"]
+}

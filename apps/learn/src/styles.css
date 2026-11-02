@@ -1,0 +1,72 @@
+@import "tailwindcss";
+@import "@ofa/tailwind-config/theme.css";
+
+/* Learn (ADR-0051) is dark only, like the public site: the app's dark tokens on <html class="dark">. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  html {
+    color-scheme: dark;
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-size: 16px;
+    line-height: 1.6;
+    text-rendering: optimizeLegibility;
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply font-display;
+    letter-spacing: -0.03em;
+    text-wrap: balance;
+  }
+  ::selection {
+    background: var(--primary);
+    color: var(--primary-foreground);
+  }
+  :focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 3px;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 9999px;
+    background-clip: content-box;
+    background-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent);
+  }
+}
+
+/* Source code: one token class per kind (src/lib/highlight.ts). */
+.tok-comment {
+  color: color-mix(in oklab, var(--muted-foreground) 85%, transparent);
+  font-style: italic;
+}
+.tok-string {
+  color: oklch(0.82 0.11 150);
+}
+.tok-keyword {
+  color: oklch(0.78 0.12 300);
+}
+.tok-number {
+  color: oklch(0.82 0.12 60);
+}
+.tok-type {
+  color: oklch(0.82 0.09 220);
+}
+
+@utility eyebrow {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 500;
+}

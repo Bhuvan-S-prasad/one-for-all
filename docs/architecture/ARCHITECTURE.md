@@ -613,6 +613,7 @@ Summary only. Full records (context, decision, alternatives, consequences) are i
 | [0044](../adr/0044-team-roster-from-grants-coordinators-delegate.md) | Runtime | Capability cards from grants in every roster; coordinators plan, delegate first and lose the tools a teammate covers | A chief of staff did the research itself; a prompt rule per agent was ignored and doesn't scale |
 | [0045](../adr/0045-a-chat-keeps-its-working-state.md) | Runtime | Each agent keeps a working record per chat (plan, ledger, notes), saved as the run goes and shown to the next run | "Continue" after a budget stop started over: nothing but chat text reached the next run |
 | [0046](../adr/0046-public-site-and-docs-as-their-own-app.md) | Clients | The landing page and docs are `apps/site`, a static Vite app on Vercel that reads the decision records at build time | Docs that can't drift; the real familiars and routing on the page; no server code in public |
+| [0051](../adr/0051-learn-app-explains-the-codebase.md) | Clients | `apps/learn` explains the codebase; its facts come from an index of the source built at build time, and written pages' references to code are checked then | Learning the repository from one place; guides that quote code go stale silently |
 | [0047](../adr/0047-object-storage-for-media.md) | Platform | Files over 1 MB in an S3-compatible store behind `BlobStore`; Garage in self-host | Images and video don't belong in Postgres; MinIO's community edition is gone |
 | [0048](../adr/0048-media-generation-through-catalog-apps.md) | Integrations | Media from catalog apps (Runway, Higgsfield), kept as files, `wait` for long jobs, paid calls ask first under a monthly cap | Generations are slow, their links expire, and they spend the person's money |
 | [0049](../adr/0049-video-engine-as-a-standalone-package.md) | Platform | The video engine is `packages/video`, importing nothing from One-for-All; `video.*` tools adapt it, and it runs alone as a CLI and an MCP server | Our own video edit agent, usable outside One-for-All without a second project |
@@ -650,6 +651,7 @@ one-for-all/
 │   │       ├── components/ui/    shadcn/ui primitives
 │   │       └── lib/              client instance, WS hook, formatters
 │   ├── site/                     public landing page and docs: static Vite app on Vercel (ADR-0046)
+│   ├── learn/                    the codebase explained: guided path, features, code explorer from a build-time index (ADR-0051)
 │   └── mobile/                   Expo app (iOS/Android)
 │       ├── app/                  Expo Router screens
 │       └── src/
@@ -708,7 +710,7 @@ one-for-all/
 |---|---|
 | R1 | Apps depend on packages. Packages never import from apps; apps never import from each other. |
 | R2 | `core` imports nothing internal. Every other package may import `core`. |
-| R3 | Web, mobile and the public site import only browser-safe packages: `core`, `contracts`, `client`. Server imports are a lint error. |
+| R3 | Web, mobile, the public site and `apps/learn` import only browser-safe packages: `core`, `contracts`, `client`. Server imports are a lint error. (`apps/learn` reads the rest of the repository as text at build time, never as imports.) |
 | R4 | Adapters implement a `core` interface and are chosen only in a composition root (`container.ts`). |
 | R5 | Each package exposes one public `index.ts` through its `exports` field. Deep imports are lint errors. |
 | R6 | Unit tests sit next to the code as `*.test.ts`. Cross-package agent behavior is tested in `evals/`. |
