@@ -489,7 +489,9 @@ describe.skipIf(!hasDb)("M2 API (integration)", async () => {
     }
     expect(await container.blobs!.get(stray)).toBeNull();
     expect((await container.blobs!.get(blobKey))?.totalSize).toBe(bytes.length);
-  });
+    // A real object store round trip (2 MB up, three ranged reads, a sweep):
+    // on a fresh CI runner Garage's first requests take several seconds.
+  }, 30_000);
 
   it("lists waiting approvals, settles one once, and wakes the run", async () => {
     const runCtx = { ...tenant(), agentId: asId<AgentId>(agentId), runId: asId<RunId>(retryRunId) };
