@@ -72,6 +72,8 @@ It is modelled on the "AI teammate" products that appeared in 2026 (OpenAI Dots,
 
 Nine layers, each with one responsibility. A layer only calls the layers below it.
 
+The whole system as built, with the harness and the agents' computer drawn out in detail, is in [system-architecture.excalidraw](system-architecture.excalidraw): open it at excalidraw.com or with VS Code's Excalidraw extension, and keep it current when the layers change. A rendered copy is [docs/images/system-architecture.png](../images/system-architecture.png).
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ L1  CHANNELS & CLIENTS   Web SPA · Expo app · Telegram · Slack · email   │  EDGE

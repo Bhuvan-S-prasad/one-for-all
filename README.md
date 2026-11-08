@@ -42,23 +42,11 @@ Each agent has one job, its own sandboxed computer (browser, terminal, files and
 
 ## What it does
 
-### Nothing leaves without you
-
 Agents work on their own computer and stop for your OK before they buy, send or sign in. You see exactly what will happen, and you can take over the screen at any time.
-
-<img alt="The Operator has the order ready and asks before it places it, with its screen live beside the chat" src="docs/images/demo-approval.png" width="100%" />
-
-### A team, not a chatbot
 
 Ask the group, and a chief of staff plans, hands each part to the agent whose job it is, ticks the plan off as answers come back, and pins one agreed answer.
 
-<img alt="A group chat: the chief of staff plans, hands work to the Researcher and the Writer, and posts the agreed answer" src="docs/images/demo-team.png" width="100%" />
-
-### Work on a clock
-
 Routines and quiet checks run while you sleep and post only what needs you, with drafts you can edit before they go.
-
-<img alt="The Gmail agent's morning sweep, with a reply drafted for you to edit and approve" src="docs/images/demo-inbox.png" width="100%" />
 
 ## Install (self-host)
 
