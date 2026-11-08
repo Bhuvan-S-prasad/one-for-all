@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 import { Wordmark } from "@/components/wordmark";
-import { gsap, scrollToTarget, ScrollTrigger } from "@/lib/motion";
+import { gsap, ScrollTrigger } from "@/lib/motion";
 import { REPO_URL } from "@/lib/site";
 
 // A plain bar that steps out of the way while you scroll down and comes back
@@ -41,20 +41,6 @@ export function Nav() {
         aria-label="Main"
         className="flex items-center gap-1 rounded-full bg-[#0e0e0f]/90 p-1.5 text-[15px] text-foreground"
       >
-        <button
-          type="button"
-          onClick={() => scrollToTarget("#demo")}
-          className="hidden rounded-full px-4 py-2 transition-colors hover:bg-[#222225] sm:block"
-        >
-          Try it
-        </button>
-        <button
-          type="button"
-          onClick={() => scrollToTarget("#day")}
-          className="hidden rounded-full px-4 py-2 transition-colors hover:bg-[#222225] md:block"
-        >
-          A day
-        </button>
         <Link to="/docs" className="rounded-full px-4 py-2 transition-colors hover:bg-[#222225]">
           Docs
         </Link>
