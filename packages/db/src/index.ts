@@ -36,6 +36,8 @@ export {
   markThreadRead,
   unreadThreads,
   type UnreadRow,
+  listConversations,
+  type ConversationRow,
   startHandoff,
   startTurn,
   updateThread,

@@ -13,6 +13,8 @@ export const queryKeys = {
   groupThreads: (archived: boolean) => ["threads", "list", "groups", archived] as const,
   /** Under the chat lists, so a new message refreshes it. */
   unread: ["threads", "list", "unread"] as const,
+  /** The sidebar (ADR-0052); under the chat lists too. */
+  conversations: ["threads", "list", "conversations"] as const,
   thread: (id: string) => ["threads", id] as const,
   agentStats: ["agents-stats"] as const,
   teamRoster: ["agents-team"] as const,

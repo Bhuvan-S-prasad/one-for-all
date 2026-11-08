@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ScrollTrigger, useEyes, useMagnetic, useRise, useSmoothScroll } from "@/lib/motion";
 import { Cursor } from "./cursor";
 import { Day } from "./day";
+import { Demo } from "./demo/demo";
 import { Finale } from "./finale";
 import { Hatchery } from "./hatchery";
 import { Install } from "./install";
@@ -13,7 +14,8 @@ import { Routing } from "./routing";
 import { Stack } from "./stack";
 import { Taint } from "./taint";
 
-// The landing page: a hatchery of familiars, what it is read word by word, a
+// The landing page: a hatchery of familiars, the app itself to try (the
+// Operator needs you to sign in), what it is read word by word, a
 // day with the team scrolled sideways, taint played out, the routing you can
 // try, a deck of what every agent gets, what it is built on, three commands,
 // and a lime close. The familiars' eyes follow the pointer throughout.
@@ -60,6 +62,7 @@ export function Landing() {
       <Nav />
       <main>
         <Hatchery ready={ready} />
+        <Demo />
         <Manifesto />
         <Day />
         <Taint />

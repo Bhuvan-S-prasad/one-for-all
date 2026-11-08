@@ -1,6 +1,6 @@
 # ADR-0039: Agents travel as JSON files and arrive held for review; unread is per person and per chat
 
-- **Status:** Accepted
+- **Status:** Accepted; where unread and attention show in the sidebar is amended by ADR-0052
 - **Date:** 2026-10-10
 - **Area:** Product
 - **Related:** ADR-0018 (curated catalog; skills are instructions only), ADR-0036 (skills), ARCHITECTURE.md §6.1, §13

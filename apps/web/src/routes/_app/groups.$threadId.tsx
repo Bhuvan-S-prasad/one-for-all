@@ -10,10 +10,20 @@ import {
   useStopRun,
   useThread,
   useThreadMessages,
+  useUpdateThread,
 } from "@ofa/client";
 import type { Agent, Discussion, Message, Run } from "@ofa/contracts";
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { ArrowLeft, ArrowUp, Crown, Pin, Square } from "lucide-react";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import {
+  Archive,
+  ArrowLeft,
+  ArrowUp,
+  Crown,
+  MessageCircle,
+  Pin,
+  Square,
+  Users,
+} from "lucide-react";
 import {
   useEffect,
   useLayoutEffect,
@@ -22,6 +32,7 @@ import {
   type FormEvent,
   type KeyboardEvent,
 } from "react";
+import { ChatMenu } from "@/components/chat/chat-menu";
 import { DiscussionBar, FoldedTurns, PinnedAnswer } from "@/components/chat/discussion";
 import { LiveRun } from "@/components/chat/live-run";
 import { Reply } from "@/components/chat/reply";
@@ -36,6 +47,7 @@ import {
 } from "@/lib/discussions";
 import { shortTime } from "@/lib/format";
 import { insertMention, mentionQuery } from "@/lib/mentions";
+import { toast } from "@/lib/toast";
 import { useNow } from "@/lib/use-now";
 import { cn } from "@/lib/utils";
 
@@ -63,6 +75,8 @@ function GroupChat() {
   const { data: discussions } = useDiscussions(threadId);
   const send = useSendMessage(threadId);
   const stop = useStopRun();
+  const archive = useUpdateThread();
+  const navigate = useNavigate();
   const now = useNow(true);
   useMarkRead(threadId, messages?.at(-1)?.id);
 
@@ -95,27 +109,65 @@ function GroupChat() {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex h-16 shrink-0 items-center gap-3 border-b px-4 md:px-6">
+      <header className="flex h-16 shrink-0 items-center gap-2.5 border-b px-2 md:gap-3 md:px-6">
         <Link
           to="/"
-          aria-label="Back to Home"
-          className="flex size-9 items-center justify-center rounded-full outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring md:hidden"
+          aria-label="Back to chats"
+          className="press flex size-10 items-center justify-center rounded-full outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring md:hidden"
         >
-          <ArrowLeft className="size-[18px]" aria-hidden />
+          <ArrowLeft className="size-5" aria-hidden />
         </Link>
         <div className="flex -space-x-2" aria-hidden>
-          {members.slice(0, 6).map((a) => (
-            <Familiar key={a.id} look={a.spec.avatar} size={30} ring="var(--background)" />
+          {members.slice(0, 4).map((a) => (
+            <Familiar key={a.id} look={a.spec.avatar} size={28} ring="var(--background)" />
           ))}
         </div>
-        <div className="flex min-w-0 flex-col">
-          <h1 className="truncate text-[16px] font-bold">{title}</h1>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <h1 className="truncate text-[17px] leading-tight font-semibold">{title}</h1>
           <p className="truncate text-[12px] text-muted-foreground">
             {members
               .map((a) => (a.id === thread?.coordinatorAgentId ? `${a.name} (leads)` : a.name))
               .join(" · ")}
           </p>
         </div>
+        <ChatMenu
+          label={`${title}: more`}
+          items={[
+            ...members.map((a) => ({
+              kind: "link" as const,
+              label: `Chat with ${a.name}`,
+              icon: MessageCircle,
+              to: "/agents/$agentId",
+              params: { agentId: a.id },
+            })),
+            { kind: "divider" as const },
+            { kind: "link" as const, label: "New group chat", icon: Users, to: "/groups/new" },
+            {
+              kind: "action" as const,
+              label: "Archive this chat",
+              icon: Archive,
+              disabled: !thread || archive.isPending,
+              onSelect: () =>
+                archive.mutate(
+                  { id: threadId, patch: { archived: true } },
+                  {
+                    onSuccess: () => {
+                      toast({
+                        message: "Chat archived",
+                        action: {
+                          label: "Undo",
+                          onClick: () =>
+                            archive.mutate({ id: threadId, patch: { archived: false } }),
+                        },
+                      });
+                      void navigate({ to: "/" });
+                    },
+                    onError: (e) => toast({ message: e.message, tone: "error" }),
+                  },
+                ),
+            },
+          ]}
+        />
       </header>
 
       {pinnedMessage && (

@@ -302,6 +302,38 @@ html.lenis body {
   }
 }
 
+/* The demo window: each message rises in as it arrives, and a "You" pointer
+   nudges toward the button to press. */
+.demo-in {
+  animation: demo-in 380ms var(--ease-out-expo) both;
+}
+@keyframes demo-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0);
+  }
+}
+.demo-hint {
+  animation:
+    demo-in 300ms var(--ease-out-expo) both,
+    demo-nudge 1.4s ease-in-out 300ms infinite;
+}
+@keyframes demo-nudge {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  50% {
+    transform: translate(-5px, -6px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .demo-in,
+  .demo-hint {
+    animation: none;
+  }
+}
+
 /* A soft fade for content that swaps in place (the stages). */
 @keyframes fade {
   from {

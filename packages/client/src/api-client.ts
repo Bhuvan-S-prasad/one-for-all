@@ -9,6 +9,8 @@ import {
   type ImportAgentResponse,
   unreadListSchema,
   type UnreadList,
+  conversationListSchema,
+  type ConversationList,
   episodeListSchema,
   skillListSchema,
   skillSchema,
@@ -332,6 +334,9 @@ export function createApiClient(options: ApiClientOptions = {}) {
     /** Chats with agent messages not yet seen (M5.11). */
     unreadThreads: (): Promise<UnreadList> =>
       request("GET", "/api/threads/unread", unreadListSchema),
+    /** The sidebar: each agent's latest chat and each group, with the last message (ADR-0052). */
+    conversations: (): Promise<ConversationList> =>
+      request("GET", "/api/threads/conversations", conversationListSchema),
     markThreadRead: (id: string): Promise<void> =>
       request("POST", `/api/threads/${encodeURIComponent(id)}/read`, null),
     getThread: (id: string): Promise<Thread> =>

@@ -83,6 +83,7 @@ export {
   useThread,
   useImportAgent,
   useUnread,
+  useConversations,
   useCreateSkill,
   useDeleteSkill,
   useEpisodes,

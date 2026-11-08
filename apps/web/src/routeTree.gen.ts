@@ -17,6 +17,7 @@ import { Route as AppActivityRouteImport } from './routes/_app/activity'
 import { Route as AppApprovalsRouteImport } from './routes/_app/approvals'
 import { Route as AppConnectionsRouteImport } from './routes/_app/connections'
 import { Route as AppMemoryRouteImport } from './routes/_app/memory'
+import { Route as AppOverviewRouteImport } from './routes/_app/overview'
 import { Route as AppRoutinesRouteImport } from './routes/_app/routines'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
 import { Route as AppSkillsRouteImport } from './routes/_app/skills'
@@ -66,6 +67,11 @@ const AppConnectionsRoute = AppConnectionsRouteImport.update({
 const AppMemoryRoute = AppMemoryRouteImport.update({
   id: '/memory',
   path: '/memory',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppOverviewRoute = AppOverviewRouteImport.update({
+  id: '/overview',
+  path: '/overview',
   getParentRoute: () => AppRoute,
 } as any)
 const AppRoutinesRoute = AppRoutinesRouteImport.update({
@@ -132,6 +138,7 @@ export interface FileRoutesByFullPath {
   '/approvals': typeof AppApprovalsRoute
   '/connections': typeof AppConnectionsRoute
   '/memory': typeof AppMemoryRoute
+  '/overview': typeof AppOverviewRoute
   '/routines': typeof AppRoutinesRoute
   '/settings': typeof AppSettingsRoute
   '/skills': typeof AppSkillsRoute
@@ -151,6 +158,7 @@ export interface FileRoutesByTo {
   '/approvals': typeof AppApprovalsRoute
   '/connections': typeof AppConnectionsRoute
   '/memory': typeof AppMemoryRoute
+  '/overview': typeof AppOverviewRoute
   '/routines': typeof AppRoutinesRoute
   '/settings': typeof AppSettingsRoute
   '/skills': typeof AppSkillsRoute
@@ -173,6 +181,7 @@ export interface FileRoutesById {
   '/_app/approvals': typeof AppApprovalsRoute
   '/_app/connections': typeof AppConnectionsRoute
   '/_app/memory': typeof AppMemoryRoute
+  '/_app/overview': typeof AppOverviewRoute
   '/_app/routines': typeof AppRoutinesRoute
   '/_app/settings': typeof AppSettingsRoute
   '/_app/skills': typeof AppSkillsRoute
@@ -196,6 +205,7 @@ export interface FileRouteTypes {
     | '/approvals'
     | '/connections'
     | '/memory'
+    | '/overview'
     | '/routines'
     | '/settings'
     | '/skills'
@@ -215,6 +225,7 @@ export interface FileRouteTypes {
     | '/approvals'
     | '/connections'
     | '/memory'
+    | '/overview'
     | '/routines'
     | '/settings'
     | '/skills'
@@ -236,6 +247,7 @@ export interface FileRouteTypes {
     | '/_app/approvals'
     | '/_app/connections'
     | '/_app/memory'
+    | '/_app/overview'
     | '/_app/routines'
     | '/_app/settings'
     | '/_app/skills'
@@ -312,6 +324,13 @@ declare module '@tanstack/react-router' {
       path: '/memory'
       fullPath: '/memory'
       preLoaderRoute: typeof AppMemoryRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/overview': {
+      id: '/_app/overview'
+      path: '/overview'
+      fullPath: '/overview'
+      preLoaderRoute: typeof AppOverviewRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/routines': {
@@ -399,6 +418,7 @@ interface AppRouteChildren {
   AppApprovalsRoute: typeof AppApprovalsRoute
   AppConnectionsRoute: typeof AppConnectionsRoute
   AppMemoryRoute: typeof AppMemoryRoute
+  AppOverviewRoute: typeof AppOverviewRoute
   AppRoutinesRoute: typeof AppRoutinesRoute
   AppSettingsRoute: typeof AppSettingsRoute
   AppSkillsRoute: typeof AppSkillsRoute
@@ -418,6 +438,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppApprovalsRoute: AppApprovalsRoute,
   AppConnectionsRoute: AppConnectionsRoute,
   AppMemoryRoute: AppMemoryRoute,
+  AppOverviewRoute: AppOverviewRoute,
   AppRoutinesRoute: AppRoutinesRoute,
   AppSettingsRoute: AppSettingsRoute,
   AppSkillsRoute: AppSkillsRoute,

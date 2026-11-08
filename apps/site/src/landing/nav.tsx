@@ -43,8 +43,15 @@ export function Nav() {
       >
         <button
           type="button"
-          onClick={() => scrollToTarget("#day")}
+          onClick={() => scrollToTarget("#demo")}
           className="hidden rounded-full px-4 py-2 transition-colors hover:bg-[#222225] sm:block"
+        >
+          Try it
+        </button>
+        <button
+          type="button"
+          onClick={() => scrollToTarget("#day")}
+          className="hidden rounded-full px-4 py-2 transition-colors hover:bg-[#222225] md:block"
         >
           A day
         </button>

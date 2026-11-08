@@ -1,123 +1,35 @@
-import {
-  useAgents,
-  useApprovals,
-  useGroupThreads,
-  useHealth,
-  useSkills,
-  useUnread,
-} from "@ofa/client";
-import type { Agent, FamiliarMood, SessionResponse, Thread } from "@ofa/contracts";
-import { Link, useMatches, useNavigate } from "@tanstack/react-router";
-import {
-  Activity,
-  AlertTriangle,
-  BookOpen,
-  Brain,
-  ChevronsUpDown,
-  Ghost,
-  House,
-  Keyboard,
-  LogOut,
-  MessageCircle,
-  Monitor,
-  Moon,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Plug,
-  Plus,
-  Repeat,
-  Users,
-  Search,
-  ShieldCheck,
-  SlidersHorizontal,
-  Sun,
-  type LucideIcon,
-} from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { BrandMark, Wordmark } from "@/components/brand-mark";
+import { useAgents, useApprovals, useHealth } from "@ofa/client";
+import type { SessionResponse } from "@ofa/contracts";
+import { Link, useMatches, useNavigate, useRouterState } from "@tanstack/react-router";
+import { AlertTriangle, ChevronsUpDown, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Wordmark } from "@/components/brand-mark";
 import { CommandPalette } from "@/components/command-palette";
-import { Familiar } from "@/components/familiar";
+import { ConversationList } from "@/components/conversation-list";
+import { NewChatMenu } from "@/components/new-chat-menu";
 import { Toaster } from "@/components/toaster";
-import { MOOD_WORDS, shouldAnimate, useAgentMoods } from "@/lib/agents";
-import { roleLabel } from "@/lib/format";
+import { PopoverPanel, useDismiss } from "@/components/ui/popover";
+import { useWorkspaceCounts, WorkspaceMenuItems, WorkspaceNav } from "@/components/workspace-menu";
+import { useAgentMoods } from "@/lib/agents";
+import { isWorkspacePath } from "@/lib/conversations";
 import { useApprovalAlerts } from "@/lib/notifications";
 import { isTyping, MOD_K, useGlobalShortcuts, useStoredFlag } from "@/lib/shortcuts";
-import { setThemePreference, useTheme, type ThemePreference } from "@/lib/theme";
-import { useSignOut } from "@/lib/use-sign-out";
 import { cn } from "@/lib/utils";
 
-// The signed-in layout (UX.03): a sidebar that folds to an icon rail, with the
-// agents in it; a palette on ⌘K / Ctrl K; on phones, a top bar and labelled
-// tabs. Pages that set `fullBleed` (the chat) fill the space and scroll on
-// their own.
-
-interface NavItem {
-  readonly to:
-    | "/"
-    | "/agents"
-    | "/activity"
-    | "/approvals"
-    | "/routines"
-    | "/skills"
-    | "/memory"
-    | "/connections"
-    | "/settings";
-  readonly label: string;
-  readonly icon: LucideIcon;
-  readonly exact?: boolean;
-  /** Shown in the tooltip. */
-  readonly keys?: string;
-  /** Not built yet: dimmed and tagged, so nobody clicks into a dead end. */
-  readonly soon?: boolean;
-}
-
-const NAV: readonly NavItem[] = [
-  { to: "/", label: "Home", icon: House, exact: true, keys: "G H" },
-  { to: "/agents", label: "Agents", icon: Ghost, keys: "G A" },
-  { to: "/activity", label: "Activity", icon: Activity, keys: "G R" },
-  { to: "/approvals", label: "Approvals", icon: ShieldCheck },
-  { to: "/routines", label: "Routines", icon: Repeat },
-  { to: "/skills", label: "Skills", icon: BookOpen },
-  { to: "/memory", label: "Memory", icon: Brain },
-  { to: "/connections", label: "Connections", icon: Plug, soon: true },
-  { to: "/settings", label: "Settings", icon: SlidersHorizontal, keys: "G S" },
-];
-
-/**
- * What needs someone (M5.11 attention states): agents stuck now, requests
- * waiting for an answer, skills waiting for review, and unread replies per
- * agent (its direct chats) and per group chat. Working shows as each agent's mood.
- */
-function useAttention(agents: readonly Agent[] | undefined) {
-  const moods = useAgentMoods(agents);
-  const stuck = (agents ?? []).filter((a) => moods.get(a.id)?.mood === "error").length;
-  const { data: approvals } = useApprovals();
-  const { data: skills } = useSkills();
-  const { data: unread } = useUnread();
-  const unreadByAgent = new Map<string, number>();
-  const unreadByThread = new Map<string, number>();
-  for (const t of unread ?? []) {
-    unreadByThread.set(t.threadId, t.unread);
-    if (t.kind === "direct" && t.agentIds[0]) {
-      unreadByAgent.set(t.agentIds[0], (unreadByAgent.get(t.agentIds[0]) ?? 0) + t.unread);
-    }
-  }
-  return {
-    moods,
-    stuck,
-    waiting: approvals?.length ?? 0,
-    toReview: (skills ?? []).filter((s) => s.status === "proposed").length,
-    unreadByAgent,
-    unreadByThread,
-  };
-}
+// The signed-in layout (ADR-0052): conversation first. On wide screens a
+// sidebar lists the conversations, or the workspace's sections on those
+// pages, with the person's menu at the bottom; `[` hides it. On phones the
+// conversation list is the home screen and each page has a slim top bar. The
+// ⌘K palette reaches everything. Pages that set `fullBleed` (the chats) fill
+// the space and scroll on their own.
 
 export function AppShell({ session, children }: { session: SessionResponse; children: ReactNode }) {
   const matches = useMatches();
   const navigate = useNavigate();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
   const fullBleed = matches.some((m) => m.staticData.fullBleed);
   const title = [...matches].reverse().find((m) => m.staticData.title)?.staticData.title;
-  const [collapsed, setCollapsed] = useStoredFlag("ofa-sidebar-folded", false);
+  const [hidden, setHidden] = useStoredFlag("ofa-sidebar-hidden", false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
   const openPalette = (query = "") => {
@@ -125,17 +37,19 @@ export function AppShell({ session, children }: { session: SessionResponse; chil
     setPaletteOpen(true);
   };
   const { data: agents } = useAgents();
-  const attention = useAttention(agents);
-  const { moods, stuck, waiting } = attention;
+  const moods = useAgentMoods(agents);
+  const { data: approvals } = useApprovals();
+  const stuck = (agents ?? []).filter((a) => moods.get(a.id)?.mood === "error").length;
+  const waiting = approvals?.length ?? 0;
   useApprovalAlerts(agents);
 
   useGlobalShortcuts({
     openPalette: () => openPalette(),
-    toggleSidebar: () => setCollapsed(!collapsed),
+    toggleSidebar: () => setHidden(!hidden),
     go: (to) => void navigate({ to }),
   });
 
-  // "Keyboard shortcuts" in the user menu, and "?" anywhere, open the list.
+  // "Keyboard shortcuts" in the menu, and "?" anywhere, open the list.
   useEffect(() => {
     const show = () => openPalette("?");
     const onKey = (event: KeyboardEvent) => {
@@ -157,23 +71,31 @@ export function AppShell({ session, children }: { session: SessionResponse; chil
 
   return (
     <div className="flex h-dvh overflow-hidden">
-      <Sidebar
-        session={session}
-        collapsed={collapsed}
-        onToggle={() => setCollapsed(!collapsed)}
-        onSearch={() => openPalette()}
-        agents={agents ?? []}
-        moods={moods}
-        stuck={stuck}
-        waiting={waiting}
-        toReview={attention.toReview}
-        unreadByAgent={attention.unreadByAgent}
-        unreadByThread={attention.unreadByThread}
-      />
+      {!hidden && (
+        <Sidebar
+          session={session}
+          workspace={isWorkspacePath(pathname)}
+          onHide={() => setHidden(true)}
+          onSearch={() => openPalette()}
+        />
+      )}
+      {hidden && (
+        <button
+          type="button"
+          onClick={() => setHidden(false)}
+          aria-label="Show the sidebar"
+          title="Show the sidebar  ["
+          className="press fixed top-3 left-3 z-40 hidden size-10 items-center justify-center rounded-full border border-sidebar-border bg-sidebar text-sidebar-muted outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-primary md:flex"
+        >
+          <PanelLeftOpen className="size-[18px]" aria-hidden />
+        </button>
+      )}
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className={cn("flex min-w-0 flex-1 flex-col", hidden && "md:pl-14")}>
         <HealthBanner />
-        {!fullBleed && <MobileTopBar session={session} onSearch={() => openPalette()} />}
+        {!fullBleed && (
+          <MobileTopBar session={session} title={title} onSearch={() => openPalette()} />
+        )}
         <main
           id="main"
           data-scroll-restoration-id="main"
@@ -182,22 +104,21 @@ export function AppShell({ session, children }: { session: SessionResponse; chil
           {fullBleed ? (
             children
           ) : (
-            <div className="mx-auto w-full max-w-[1200px] px-4 pt-2 pb-32 md:px-8 md:pt-8 md:pb-12">
+            <div className="mx-auto w-full max-w-[1200px] px-4 pt-2 pb-16 md:px-8 md:pt-8 md:pb-12">
               {children}
             </div>
           )}
         </main>
       </div>
 
-      {!fullBleed && <BottomNav stuck={stuck} onAsk={() => openPalette()} />}
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         agents={agents ?? []}
-        onToggleSidebar={() => setCollapsed(!collapsed)}
+        onToggleSidebar={() => setHidden(!hidden)}
         initialQuery={paletteQuery}
       />
-      <Toaster raised={!fullBleed} />
+      <Toaster raised={false} />
     </div>
   );
 }
@@ -224,362 +145,57 @@ function HealthBanner() {
 
 // ── Sidebar ──────────────────────────────────────────────────────────────────
 
-/** A hover and focus label beside an item of the folded rail. */
-function RailTip({ label, keys }: { label: string; keys?: string }) {
-  return (
-    <span
-      role="tooltip"
-      className="pointer-events-none invisible absolute top-1/2 left-full z-50 ml-3 flex -translate-y-1/2 items-center gap-2 rounded-[10px] bg-[#f4f4f0] px-2.5 py-1.5 text-[13px] font-semibold whitespace-nowrap text-[#0e0e0f] opacity-0 shadow-lg transition-opacity duration-150 group-hover:visible group-hover:opacity-100 group-focus-visible:visible group-focus-visible:opacity-100"
-    >
-      {label}
-      {keys && <span className="font-mono text-[11px] font-normal text-[#5c5c61]">{keys}</span>}
-    </span>
-  );
-}
-
-const navItemClass = (collapsed: boolean) =>
-  cn(
-    "group relative flex h-10 items-center rounded-full text-[14.5px] font-medium text-[#c8c8cc] transition-colors duration-150",
-    "outline-none hover:bg-white/5 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-primary",
-    "data-[status=active]:bg-primary data-[status=active]:font-semibold data-[status=active]:text-primary-foreground",
-    collapsed ? "w-11 justify-center self-center" : "gap-3 px-3",
-  );
-
 function Sidebar(props: {
   session: SessionResponse;
-  collapsed: boolean;
-  onToggle: () => void;
+  /** On the workspace's pages it lists their sections instead of the chats. */
+  workspace: boolean;
+  onHide: () => void;
   onSearch: () => void;
-  agents: readonly Agent[];
-  moods: ReturnType<typeof useAgentMoods>;
-  stuck: number;
-  waiting: number;
-  toReview: number;
-  unreadByAgent: ReadonlyMap<string, number>;
-  unreadByThread: ReadonlyMap<string, number>;
 }) {
-  const { collapsed } = props;
-  const ToggleIcon = collapsed ? PanelLeftOpen : PanelLeftClose;
-  const toggleLabel = collapsed ? "Expand sidebar" : "Collapse sidebar";
-
   return (
     <aside
       aria-label="Sidebar"
-      className={cn(
-        "hidden h-dvh shrink-0 flex-col gap-4 border-r border-sidebar-border bg-sidebar pt-4 pb-3 text-sidebar-foreground transition-[width] duration-200 ease-[cubic-bezier(.2,.8,.2,1)] md:flex",
-        collapsed ? "w-[72px] px-0" : "w-[248px] px-3",
-      )}
+      className="hidden h-dvh w-[264px] shrink-0 lg:w-[300px] flex-col gap-3 border-r border-sidebar-border bg-sidebar px-3 pt-4 pb-3 text-sidebar-foreground md:flex"
     >
-      <div
-        className={cn("flex items-center", collapsed ? "justify-center" : "justify-between pl-2")}
-      >
-        {collapsed ? (
-          <Link
-            to="/"
-            aria-label="Home"
-            className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-primary"
-          >
-            <BrandMark />
-          </Link>
-        ) : (
+      <div className="flex items-center gap-1 pl-2">
+        <Link
+          to="/"
+          aria-label="One-for-All, your chats"
+          className="mr-auto rounded-full outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        >
           <Wordmark />
-        )}
-        {!collapsed && (
-          <button
-            type="button"
-            onClick={props.onToggle}
-            aria-label={toggleLabel}
-            title={`${toggleLabel}  [`}
-            className="flex size-9 items-center justify-center rounded-full text-sidebar-muted outline-none hover:bg-white/5 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-primary"
-          >
-            <ToggleIcon className="size-[18px]" aria-hidden />
-          </button>
-        )}
+        </Link>
+        <NewChatMenu />
+        <button
+          type="button"
+          onClick={props.onHide}
+          aria-label="Hide the sidebar"
+          title="Hide the sidebar  ["
+          className="press flex size-9 items-center justify-center rounded-full text-sidebar-muted outline-none hover:bg-white/5 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-primary"
+        >
+          <PanelLeftClose className="size-[18px]" aria-hidden />
+        </button>
       </div>
 
       <button
         type="button"
         onClick={props.onSearch}
         aria-label={`Search or jump to, ${MOD_K}`}
-        className={cn(
-          "group relative flex h-10 items-center rounded-[12px] border border-sidebar-border bg-white/[0.03] text-sm text-sidebar-muted outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-primary",
-          collapsed ? "w-11 justify-center self-center" : "gap-2.5 px-3",
-        )}
+        className="flex h-10 shrink-0 items-center gap-2.5 rounded-[12px] border border-sidebar-border bg-white/[0.03] px-3 text-sm text-sidebar-muted outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-primary"
       >
         <Search className="size-4 shrink-0" aria-hidden />
-        {collapsed ? (
-          <RailTip label="Search" keys={MOD_K} />
-        ) : (
-          <>
-            <span className="truncate">Search</span>
-            <kbd className="ml-auto rounded-[6px] border border-sidebar-border px-1.5 font-mono text-[11px] whitespace-nowrap">
-              {MOD_K}
-            </kbd>
-          </>
-        )}
+        <span className="truncate">Search</span>
+        <kbd className="ml-auto rounded-[6px] border border-sidebar-border px-1.5 font-mono text-[11px] whitespace-nowrap">
+          {MOD_K}
+        </kbd>
       </button>
 
-      <nav aria-label="Main" className="flex flex-col gap-0.5">
-        {NAV.map((item) => {
-          const Icon = item.icon;
-          const badge =
-            item.to === "/agents" && props.stuck > 0
-              ? { n: props.stuck, label: "stuck", tone: "bg-destructive text-background" }
-              : item.to === "/approvals" && props.waiting > 0
-                ? { n: props.waiting, label: "waiting", tone: "bg-primary text-primary-foreground" }
-                : item.to === "/skills" && props.toReview > 0
-                  ? {
-                      n: props.toReview,
-                      label: "to review",
-                      tone: "bg-primary text-primary-foreground",
-                    }
-                  : null;
-          return (
-            <Link
-              key={item.to}
-              to={item.to}
-              activeOptions={{ exact: item.exact }}
-              aria-label={
-                collapsed ? `${item.label}${item.soon ? ", coming soon" : ""}` : undefined
-              }
-              className={cn(navItemClass(collapsed), item.soon && "text-[#6a6a70]")}
-            >
-              <Icon className="size-[18px] shrink-0" aria-hidden />
-              {!collapsed && <span className="flex-1 truncate">{item.label}</span>}
-              {!collapsed && item.soon && (
-                <span className="eyebrow rounded-full border border-sidebar-border px-1.5 py-px text-[9.5px] text-[#6a6a70]">
-                  Soon
-                </span>
-              )}
-              {badge !== null && (
-                <span
-                  aria-label={`${badge.n} ${badge.label}`}
-                  className={cn(
-                    "flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-[10.5px] font-semibold",
-                    badge.tone,
-                    collapsed && "absolute -top-0.5 -right-0.5",
-                  )}
-                >
-                  {badge.n}
-                </span>
-              )}
-              {collapsed && (
-                <RailTip label={item.soon ? `${item.label} · soon` : item.label} keys={item.keys} />
-              )}
-            </Link>
-          );
-        })}
-      </nav>
-
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-x-hidden overflow-y-auto border-t border-sidebar-border pt-3">
-        <AgentList
-          collapsed={collapsed}
-          agents={props.agents}
-          moods={props.moods}
-          unread={props.unreadByAgent}
-        />
-        <GroupList collapsed={collapsed} agents={props.agents} unread={props.unreadByThread} />
+      <div className="-mx-1 min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-1 pt-1">
+        {props.workspace ? <WorkspaceNav /> : <ConversationList />}
       </div>
 
-      {collapsed && (
-        <button
-          type="button"
-          onClick={props.onToggle}
-          aria-label={toggleLabel}
-          className="group relative flex size-10 items-center justify-center self-center rounded-full text-sidebar-muted outline-none hover:bg-white/5 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-primary"
-        >
-          <ToggleIcon className="size-[18px]" aria-hidden />
-          <RailTip label="Expand sidebar" keys="[" />
-        </button>
-      )}
-      <UserMenu session={props.session} collapsed={collapsed} />
+      <AccountButton session={props.session} />
     </aside>
-  );
-}
-
-/** "3 unread", as a dot on the rail and a count beside a name. */
-function UnreadBadge({ n, collapsed }: { n: number; collapsed: boolean }) {
-  if (n <= 0) return null;
-  return (
-    <span
-      aria-label={`${n} unread`}
-      className={cn(
-        "flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-info px-1 font-mono text-[10.5px] font-semibold text-background",
-        collapsed && "absolute -top-0.5 -right-0.5",
-      )}
-    >
-      {n > 99 ? "99+" : n}
-    </span>
-  );
-}
-
-function AgentList(props: {
-  collapsed: boolean;
-  agents: readonly Agent[];
-  moods: ReturnType<typeof useAgentMoods>;
-  unread: ReadonlyMap<string, number>;
-}) {
-  const { collapsed } = props;
-  const shown = props.agents.slice(0, 8);
-  return (
-    <div className={cn("flex shrink-0 flex-col gap-0.5", collapsed && "mx-4 items-center")}>
-      {!collapsed && (
-        <div className="flex items-center justify-between pr-1 pb-1.5 pl-3">
-          <span className="eyebrow text-[10.5px] text-[#6a6a70]">Agents</span>
-          <Link
-            to="/agents/new"
-            aria-label="Hatch an agent"
-            title="Hatch an agent"
-            className="flex size-7 items-center justify-center rounded-full text-sidebar-muted outline-none hover:bg-white/5 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-primary"
-          >
-            <Plus className="size-4" aria-hidden />
-          </Link>
-        </div>
-      )}
-      {shown.map((agent) => {
-        const mood: FamiliarMood = props.moods.get(agent.id)?.mood ?? "idle";
-        const word = MOOD_WORDS[mood];
-        const unread = props.unread.get(agent.id) ?? 0;
-        return (
-          <Link
-            key={agent.id}
-            to="/agents/$agentId"
-            params={{ agentId: agent.id }}
-            aria-label={`${agent.name}${word ? `, ${word.toLowerCase()}` : ""}${unread ? `, ${unread} unread` : ""}`}
-            className={cn(
-              "group relative flex shrink-0 items-center rounded-[12px] text-sm outline-none hover:bg-white/5 focus-visible:ring-2 focus-visible:ring-primary data-[status=active]:bg-white/[0.07]",
-              collapsed ? "size-11 justify-center" : "h-10 gap-2.5 px-2",
-            )}
-          >
-            <Familiar
-              look={agent.spec.avatar}
-              mood={mood}
-              size={collapsed ? 34 : 30}
-              ring="var(--sidebar)"
-              animate={shouldAnimate(mood)}
-              className={cn(mood === "asleep" && "opacity-70")}
-            />
-            {!collapsed && (
-              <>
-                <span className={cn("flex-1 truncate", mood === "asleep" && "text-sidebar-muted")}>
-                  {agent.name}
-                </span>
-                {word ? (
-                  <span
-                    className={cn(
-                      "font-mono text-[11px]",
-                      mood === "error"
-                        ? "text-destructive"
-                        : mood === "waiting"
-                          ? "text-warning"
-                          : mood === "asleep"
-                            ? "text-[#6a6a70]"
-                            : "text-primary",
-                    )}
-                  >
-                    {word}
-                  </span>
-                ) : (
-                  <UnreadBadge n={unread} collapsed={false} />
-                )}
-              </>
-            )}
-            {collapsed && <UnreadBadge n={unread} collapsed />}
-            {collapsed && <RailTip label={`${agent.name}${word ? ` · ${word}` : ""}`} />}
-          </Link>
-        );
-      })}
-      {props.agents.length > shown.length && !collapsed && (
-        <Link
-          to="/agents"
-          className="px-3 py-2 text-[13px] text-sidebar-muted outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-primary"
-        >
-          All {props.agents.length} agents
-        </Link>
-      )}
-      {collapsed && (
-        <Link
-          to="/agents/new"
-          aria-label="Hatch an agent"
-          className="group relative mt-1 flex size-11 shrink-0 items-center justify-center rounded-full border border-dashed border-sidebar-border text-sidebar-muted outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-primary"
-        >
-          <Plus className="size-4" aria-hidden />
-          <RailTip label="Hatch an agent" />
-        </Link>
-      )}
-      {props.agents.length === 0 && !collapsed && (
-        <Link
-          to="/agents/new"
-          className="mx-1 rounded-[12px] border border-dashed border-sidebar-border px-3 py-3 text-[13px] text-sidebar-muted outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-primary"
-        >
-          No agents yet. Hatch your first one.
-        </Link>
-      )}
-    </div>
-  );
-}
-
-/** Group chats (M5.11), most recent first, with their unread counts. */
-function GroupList(props: {
-  collapsed: boolean;
-  agents: readonly Agent[];
-  unread: ReadonlyMap<string, number>;
-}) {
-  const { collapsed } = props;
-  const { data: groups } = useGroupThreads();
-  const byId = new Map(props.agents.map((a) => [a.id, a]));
-  const label = (g: Thread) =>
-    g.title ??
-    g.members
-      .flatMap((m) => (m.type === "agent" ? [byId.get(m.agentId)?.name ?? "Agent"] : []))
-      .join(", ");
-  if (collapsed && !groups?.length) return null;
-  return (
-    <div className={cn("flex shrink-0 flex-col gap-0.5", collapsed && "mx-4 items-center")}>
-      {!collapsed && (
-        <div className="flex items-center justify-between pr-1 pb-1.5 pl-3">
-          <span className="eyebrow text-[10.5px] text-[#6a6a70]">Groups</span>
-          <Link
-            to="/groups/new"
-            aria-label="New group chat"
-            title="New group chat"
-            className="flex size-7 items-center justify-center rounded-full text-sidebar-muted outline-none hover:bg-white/5 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-primary"
-          >
-            <Plus className="size-4" aria-hidden />
-          </Link>
-        </div>
-      )}
-      {(groups ?? []).slice(0, 6).map((g) => {
-        const unread = props.unread.get(g.id) ?? 0;
-        return (
-          <Link
-            key={g.id}
-            to="/groups/$threadId"
-            params={{ threadId: g.id }}
-            aria-label={`${label(g)}${unread ? `, ${unread} unread` : ""}`}
-            className={cn(
-              "group relative flex shrink-0 items-center rounded-[12px] text-sm outline-none hover:bg-white/5 focus-visible:ring-2 focus-visible:ring-primary data-[status=active]:bg-white/[0.07]",
-              collapsed ? "size-11 justify-center" : "h-10 gap-2.5 px-2",
-            )}
-          >
-            <span className="flex size-[30px] shrink-0 items-center justify-center rounded-full bg-white/[0.06]">
-              <Users className="size-4 text-sidebar-muted" aria-hidden />
-            </span>
-            {!collapsed && <span className="flex-1 truncate">{label(g)}</span>}
-            <UnreadBadge n={unread} collapsed={collapsed} />
-            {collapsed && <RailTip label={label(g)} />}
-          </Link>
-        );
-      })}
-      {!collapsed && !groups?.length && (
-        <Link
-          to="/groups/new"
-          className="mx-1 rounded-[12px] border border-dashed border-sidebar-border px-3 py-2.5 text-[13px] text-sidebar-muted outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-primary"
-        >
-          Start a group chat with several agents.
-        </Link>
-      )}
-    </div>
   );
 }
 
@@ -597,130 +213,44 @@ function UserInitial({ name, className }: { name: string; className?: string }) 
   );
 }
 
-const THEMES: { value: ThemePreference; label: string; icon: LucideIcon }[] = [
-  { value: "dark", label: "Dark", icon: Moon },
-  { value: "light", label: "Light", icon: Sun },
-  { value: "system", label: "Auto", icon: Monitor },
-];
-
-/** Close a popover on Escape or a click outside it. */
-function useDismiss(open: boolean, close: () => void) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") close();
-    };
-    const onPointer = (event: PointerEvent) => {
-      if (!ref.current?.contains(event.target as Node)) close();
-    };
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("pointerdown", onPointer);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("pointerdown", onPointer);
-    };
-  }, [open, close]);
-  return ref;
-}
-
-function UserMenu({ session, collapsed }: { session: SessionResponse; collapsed: boolean }) {
+/** The person, at the bottom of the sidebar; opens the Workspace menu. */
+function AccountButton({ session }: { session: SessionResponse }) {
   const [open, setOpen] = useState(false);
-  const ref = useDismiss(open, () => setOpen(false));
-  const { preference } = useTheme();
-  const { signOut, pending } = useSignOut();
-  const item =
-    "flex h-10 w-full items-center gap-3 rounded-[12px] px-3 text-sm text-popover-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring";
-
+  const close = useCallback(() => setOpen(false), []);
+  const ref = useDismiss(open, close);
+  const counts = useWorkspaceCounts();
+  const needs = Object.keys(counts).length > 0;
   return (
     <div ref={ref} className="relative border-t border-sidebar-border pt-3">
       <button
         type="button"
         aria-expanded={open}
         aria-haspopup="menu"
-        aria-label={`Account: ${session.user.name}`}
+        aria-label={`Workspace and account: ${session.user.name}${needs ? ", something needs you" : ""}`}
         onClick={() => setOpen(!open)}
-        className={cn(
-          "flex w-full items-center gap-2.5 rounded-[12px] text-left outline-none hover:bg-white/5 focus-visible:ring-2 focus-visible:ring-primary",
-          collapsed ? "justify-center py-1" : "p-1.5",
-        )}
+        className="press flex w-full items-center gap-2.5 rounded-[12px] p-1.5 text-left outline-none hover:bg-white/5 focus-visible:ring-2 focus-visible:ring-primary"
       >
-        <UserInitial name={session.user.name} className="size-9 rounded-[12px] text-[15px]" />
-        {!collapsed && (
-          <>
-            <span className="flex min-w-0 flex-1 flex-col">
-              <span className="truncate text-[13.5px] font-semibold">{session.user.name}</span>
-              <span className="truncate text-xs text-sidebar-muted">
-                {session.workspace
-                  ? `${roleLabel(session.workspace.role)} · ${session.workspace.name}`
-                  : session.user.email}
-              </span>
-            </span>
-            <ChevronsUpDown className="size-4 text-sidebar-muted" aria-hidden />
-          </>
-        )}
+        <span className="relative">
+          <UserInitial name={session.user.name} className="size-9 rounded-[12px] text-[15px]" />
+          {needs && (
+            <span
+              aria-hidden
+              className="pip-in absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-primary ring-2 ring-sidebar"
+            />
+          )}
+        </span>
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-[13.5px] font-semibold">{session.user.name}</span>
+          <span className="truncate text-xs text-sidebar-muted">
+            {session.workspace?.name ?? session.user.email}
+          </span>
+        </span>
+        <ChevronsUpDown className="size-4 text-sidebar-muted" aria-hidden />
       </button>
       {open && (
-        <div
-          role="menu"
-          className={cn(
-            "absolute bottom-full z-50 mb-2 flex w-64 flex-col gap-0.5 rounded-[18px] border bg-popover p-2 text-popover-foreground shadow-2xl",
-            collapsed ? "left-2" : "left-0",
-          )}
-        >
-          <div className="flex flex-col px-3 pt-1.5 pb-2">
-            <span className="truncate text-sm font-semibold">{session.user.name}</span>
-            <span className="truncate text-xs text-muted-foreground">{session.user.email}</span>
-          </div>
-          <div
-            role="group"
-            aria-label="Theme"
-            className="mx-1 mb-1 flex gap-1 rounded-full border p-1"
-          >
-            {THEMES.map(({ value, label, icon: Icon }) => (
-              <button
-                key={value}
-                type="button"
-                role="menuitemradio"
-                aria-checked={preference === value}
-                onClick={() => setThemePreference(value)}
-                className={cn(
-                  "flex h-8 flex-1 items-center justify-center gap-1.5 rounded-full text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                  preference === value
-                    ? "bg-foreground text-background"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <Icon className="size-3.5" aria-hidden />
-                {label}
-              </button>
-            ))}
-          </div>
-          <Link to="/settings" role="menuitem" className={item} onClick={() => setOpen(false)}>
-            <SlidersHorizontal className="size-4 text-muted-foreground" aria-hidden /> Settings
-          </Link>
-          <button
-            type="button"
-            role="menuitem"
-            className={item}
-            onClick={() => {
-              setOpen(false);
-              window.dispatchEvent(new CustomEvent("ofa:shortcuts"));
-            }}
-          >
-            <Keyboard className="size-4 text-muted-foreground" aria-hidden /> Keyboard shortcuts
-          </button>
-          <div className="my-1 border-t" />
-          <button
-            type="button"
-            role="menuitem"
-            className={item}
-            disabled={pending}
-            onClick={signOut}
-          >
-            <LogOut className="size-4 text-muted-foreground" aria-hidden /> Sign out
-          </button>
-        </div>
+        <PopoverPanel place="above-start" label="Workspace" className="w-[276px]">
+          <WorkspaceMenuItems session={session} onClose={close} />
+        </PopoverPanel>
       )}
     </div>
   );
@@ -728,126 +258,79 @@ function UserMenu({ session, collapsed }: { session: SessionResponse; collapsed:
 
 // ── Phone ────────────────────────────────────────────────────────────────────
 
-function MobileTopBar({ session, onSearch }: { session: SessionResponse; onSearch: () => void }) {
+/** A slim bar on pages that aren't a chat: the menu, the page's name, search. */
+function MobileTopBar({
+  session,
+  title,
+  onSearch,
+}: {
+  session: SessionResponse;
+  title: string | undefined;
+  onSearch: () => void;
+}) {
   const [open, setOpen] = useState(false);
-  const ref = useDismiss(open, () => setOpen(false));
-  const { dark } = useTheme();
-  const { signOut, pending } = useSignOut();
-  const item =
-    "flex h-12 w-full items-center gap-3 rounded-[14px] px-3.5 text-[15px] font-medium outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring";
+  const close = useCallback(() => setOpen(false), []);
+  const counts = useWorkspaceCounts();
+  const needs = Object.keys(counts).length > 0;
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, close]);
 
   return (
-    <div className="flex items-center justify-between gap-3 px-4 pt-4 pb-2 md:hidden">
-      <div ref={ref} className="relative">
-        <button
-          type="button"
-          aria-expanded={open}
-          aria-controls="workspace-menu"
-          onClick={() => setOpen(!open)}
-          className="flex h-11 items-center gap-2 rounded-full border border-input pr-3.5 pl-1 text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <UserInitial name={session.user.name} className="size-[34px] rounded-full text-[15px]" />
-          <span className="max-w-[180px] truncate">{session.workspace?.name ?? "One-for-All"}</span>
-          <ChevronsUpDown className="size-3.5" aria-hidden />
-        </button>
-        {open && (
-          <div
-            id="workspace-menu"
-            className="absolute top-13 left-0 z-40 flex w-64 flex-col gap-1 rounded-lg border bg-popover p-2 text-popover-foreground shadow-2xl"
-          >
-            <div className="flex flex-col px-3.5 pt-2 pb-2.5">
-              <span className="truncate text-sm font-semibold">{session.user.name}</span>
-              <span className="truncate text-xs text-muted-foreground">{session.user.email}</span>
-            </div>
-            <Link to="/routines" className={item} onClick={() => setOpen(false)}>
-              <Repeat className="size-[18px]" aria-hidden /> Routines
-            </Link>
-            <Link to="/skills" className={item} onClick={() => setOpen(false)}>
-              <BookOpen className="size-[18px]" aria-hidden /> Skills
-            </Link>
-            <Link to="/memory" className={item} onClick={() => setOpen(false)}>
-              <Brain className="size-[18px]" aria-hidden /> Memory
-            </Link>
-            <Link to="/groups/new" className={item} onClick={() => setOpen(false)}>
-              <Users className="size-[18px]" aria-hidden /> New group chat
-            </Link>
-            <Link to="/connections" className={item} onClick={() => setOpen(false)}>
-              <Plug className="size-[18px]" aria-hidden /> Connections
-            </Link>
-            <Link to="/settings" className={item} onClick={() => setOpen(false)}>
-              <SlidersHorizontal className="size-[18px]" aria-hidden /> Settings
-            </Link>
-            <button
-              type="button"
-              className={item}
-              onClick={() => setThemePreference(dark ? "light" : "dark")}
-            >
-              {dark ? (
-                <Sun className="size-[18px]" aria-hidden />
-              ) : (
-                <Moon className="size-[18px]" aria-hidden />
-              )}
-              {dark ? "Light mode" : "Dark mode"}
-            </button>
-            <button type="button" className={item} disabled={pending} onClick={signOut}>
-              <LogOut className="size-[18px]" aria-hidden /> Sign out
-            </button>
-          </div>
+    <div className="flex items-center gap-2 px-3 pt-3 pb-1 md:hidden">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls="workspace-sheet"
+        aria-label={`Workspace and account${needs ? ", something needs you" : ""}`}
+        onClick={() => setOpen(true)}
+        className="press relative flex size-11 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <UserInitial name={session.user.name} className="size-[34px] rounded-full text-[15px]" />
+        {needs && (
+          <span
+            aria-hidden
+            className="absolute top-1 right-1 size-2.5 rounded-full bg-primary ring-2 ring-background"
+          />
         )}
-      </div>
+      </button>
+      {/* Other pages carry their own heading; the list's is the bar's. */}
+      <span className="min-w-0 flex-1 truncate font-display text-[19px] font-bold">
+        {title === "Chats" ? title : null}
+      </span>
       <button
         type="button"
         onClick={onSearch}
         aria-label="Search"
-        className="flex size-11 items-center justify-center rounded-full border border-input outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="press flex size-11 items-center justify-center rounded-full outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <Search className="size-[18px]" aria-hidden />
+        <Search className="size-[19px]" aria-hidden />
       </button>
-    </div>
-  );
-}
+      <NewChatMenu className="[&>button]:size-11 [&>button]:text-foreground" />
 
-const TABS = [
-  { to: "/", label: "Home", icon: House, exact: true },
-  { to: "/agents", label: "Agents", icon: Ghost, exact: false },
-  { to: "/activity", label: "Activity", icon: Activity, exact: false },
-  { to: "/settings", label: "Settings", icon: SlidersHorizontal, exact: false },
-] as const;
-
-function BottomNav({ stuck, onAsk }: { stuck: number; onAsk: () => void }) {
-  return (
-    <nav
-      aria-label="Main"
-      className="fixed inset-x-3 bottom-4 z-30 flex items-center gap-2.5 md:hidden"
-    >
-      <div className="flex h-16 flex-1 items-stretch justify-between rounded-full border border-[#2a2a2e] bg-[#1c1c1f]/95 px-2 backdrop-blur">
-        {TABS.map(({ to, label, icon: Icon, exact }) => (
-          <Link
-            key={to}
-            to={to}
-            activeOptions={{ exact }}
-            className="relative flex flex-1 flex-col items-center justify-center gap-0.5 rounded-full text-[10.5px] font-semibold text-[#8a8a90] outline-none focus-visible:ring-2 focus-visible:ring-primary data-[status=active]:text-[#f4f4f0]"
+      {open && (
+        <div
+          className="fixed inset-0 z-50 flex items-end bg-black/55"
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget) close();
+          }}
+        >
+          <div
+            id="workspace-sheet"
+            role="menu"
+            aria-label="Workspace"
+            className="menu-pop flex max-h-[85dvh] w-full origin-bottom flex-col gap-0.5 overflow-y-auto rounded-t-[24px] border-t bg-popover p-2 pb-[max(env(safe-area-inset-bottom),12px)] text-popover-foreground"
           >
-            <Icon className="size-[21px]" aria-hidden />
-            {label}
-            {to === "/agents" && stuck > 0 && (
-              <span
-                aria-label={`${stuck} stuck`}
-                className="absolute top-2 right-[calc(50%-18px)] size-2 rounded-full bg-destructive ring-2 ring-[#1c1c1f]"
-              />
-            )}
-          </Link>
-        ))}
-      </div>
-      <button
-        type="button"
-        onClick={onAsk}
-        aria-label="Ask an agent"
-        className="flex size-16 shrink-0 flex-col items-center justify-center gap-0.5 rounded-full bg-primary text-[10.5px] font-bold text-primary-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-      >
-        <MessageCircle className="size-[22px]" strokeWidth={2.4} aria-hidden />
-        Ask
-      </button>
-    </nav>
+            <span aria-hidden className="mx-auto mb-1 h-1 w-10 rounded-full bg-border" />
+            <WorkspaceMenuItems session={session} onClose={close} />
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

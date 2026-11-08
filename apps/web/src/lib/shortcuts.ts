@@ -22,8 +22,8 @@ export const GO_KEYS = { h: "/", a: "/agents", r: "/activity", s: "/settings" } 
 
 export const SHORTCUTS: readonly Shortcut[] = [
   { keys: MOD_K, label: "Search and commands" },
-  { keys: "[", label: "Fold or unfold the sidebar" },
-  { keys: "G H", label: "Go to Home" },
+  { keys: "[", label: "Hide or show the sidebar" },
+  { keys: "G H", label: "Go to your latest chat" },
   { keys: "G A", label: "Go to Agents" },
   { keys: "G R", label: "Go to Activity" },
   { keys: "G S", label: "Go to Settings" },

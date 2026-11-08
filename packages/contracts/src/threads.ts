@@ -158,6 +158,43 @@ export type UnreadThread = z.infer<typeof unreadThreadSchema>;
 export const unreadListSchema = z.object({ items: z.array(unreadThreadSchema) });
 export type UnreadList = z.infer<typeof unreadListSchema>;
 
+// ── Conversations (ADR-0052) ─────────────────────────────────────────────────
+
+/** How much of the last message a conversation row carries. */
+export const CONVERSATION_SNIPPET_CHARS = 160;
+
+/**
+ * One row of the sidebar: an agent's latest direct chat (or the agent, when
+ * there is no chat yet, with `threadId` null) or a group chat.
+ */
+export const conversationSchema = z.object({
+  kind: z.enum(["direct", "group"]),
+  threadId: idSchema.nullable(),
+  /** Direct: the agent. Group: its agents, in the order they joined. */
+  agentIds: z.array(idSchema),
+  /** A group's title; null for direct chats and untitled groups. */
+  title: z.string().nullable(),
+  last: z
+    .object({
+      snippet: z.string().max(CONVERSATION_SNIPPET_CHARS),
+      author: z.enum(["user", "agent", "system"]),
+      agentId: idSchema.nullable(),
+      at: timestampSchema,
+    })
+    .nullable(),
+  unread: z.number().int().min(0),
+  /** Requests waiting for this person in this conversation (approvals). */
+  needsYou: z.number().int().min(0),
+  /** The conversation's latest run failed. */
+  stuck: z.boolean(),
+  /** Last activity, for ordering: the last message, else when it was made. */
+  activeAt: timestampSchema,
+});
+export type Conversation = z.infer<typeof conversationSchema>;
+
+export const conversationListSchema = z.object({ items: z.array(conversationSchema) });
+export type ConversationList = z.infer<typeof conversationListSchema>;
+
 // ── Discussions (ADR-0050) ───────────────────────────────────────────────────
 
 /** `closing`: the coordinator is writing the answer. */

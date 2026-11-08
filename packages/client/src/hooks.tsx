@@ -238,6 +238,19 @@ export function useUnread() {
 }
 
 /**
+ * The sidebar's conversations, most recently active first (ADR-0052). Kept
+ * fresh by the realtime socket: new messages, requests and finished runs.
+ */
+export function useConversations() {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: queryKeys.conversations,
+    queryFn: async () => (await api.conversations()).items,
+    staleTime: 10_000,
+  });
+}
+
+/**
  * Mark a chat read while it is on screen: when it opens, and when a new
  * message arrives while the tab is visible.
  */
@@ -250,7 +263,10 @@ export function useMarkRead(threadId: string | undefined, latestMessageId: strin
       if (document.visibilityState !== "visible") return;
       void api
         .markThreadRead(threadId)
-        .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.unread }))
+        .then(() => {
+          void queryClient.invalidateQueries({ queryKey: queryKeys.unread });
+          void queryClient.invalidateQueries({ queryKey: queryKeys.conversations });
+        })
         .catch(() => {});
     };
     mark();

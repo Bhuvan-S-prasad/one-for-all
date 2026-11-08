@@ -5,6 +5,8 @@ import {
   groupThreadListQuerySchema,
   MAX_UPLOAD_BYTES,
   updateThreadRequestSchema,
+  CONVERSATION_SNIPPET_CHARS,
+  type ConversationList,
   type DiscussionList,
   type MessagePage,
   type ThreadList,
@@ -19,6 +21,7 @@ import {
   getThread,
   listAgents,
   listDiscussions,
+  listConversations,
   listGroupThreads,
   listMessages,
   markThreadRead,
@@ -39,6 +42,7 @@ import type { AppEnv } from "../types";
  * Threads and messages (M2.19):
  *   GET   /api/threads                group chats (M5.04), most recent first (?archived=true)
  *   GET   /api/threads/unread         chats with agent messages not yet seen (M5.11)
+ *   GET   /api/threads/conversations  the sidebar: each agent's latest chat and each group, with the last message (ADR-0052)
  *   POST  /api/threads/:id/read       seen up to now
  *   POST  /api/threads                one agent: a new direct chat; two to six: a group chat
  *   GET   /api/threads/:id
@@ -95,6 +99,18 @@ export function threadRoutes(
       return c.json({
         items: rows.map((r) => ({ ...r, lastAt: r.lastAt.toISOString() })),
       } satisfies UnreadList);
+    })
+    .get("/conversations", async (c) => {
+      const rows = await listConversations(db, c.get("tenant"), {
+        snippetChars: CONVERSATION_SNIPPET_CHARS,
+      });
+      return c.json({
+        items: rows.map((r) => ({
+          ...r,
+          last: r.last ? { ...r.last, at: r.last.at.toISOString() } : null,
+          activeAt: r.activeAt.toISOString(),
+        })),
+      } satisfies ConversationList);
     })
     .post("/:id/read", async (c) => {
       const tenant = c.get("tenant");

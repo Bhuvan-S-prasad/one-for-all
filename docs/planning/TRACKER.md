@@ -46,9 +46,10 @@ The single place to see what is done, what is in progress and what comes next. A
 | [M5 The team](#m5-the-team) | Agents delegate to each other; routines run alone | ✅ Done | 13 / 13 |
 | [Desktop](#desktop) | Watch an agent work on its own desktop; it makes Word and Excel files | ✅ Done | 14 / 14 |
 | [Teams and continuity](#teams-and-continuity) | "Continue" continues; a coordinator routes by capability | ✅ Done | 11 / 11 |
-| [Site and docs](#site-and-docs) | A public landing page and docs for what is built | ✅ Done | 7 / 7 |
+| [Site and docs](#site-and-docs) | A public landing page and docs for what is built | ✅ Done | 8 / 8 |
 | [Enhancements](#enhancements) | Your own model per agent; images and video; teams that discuss; email triggers | 🟨 In progress | 16 / 30 |
 | [Learn](#learn) | The codebase explained: guided path, features, walkthroughs, code explorer | 🟨 In progress | 2 / 8 |
+| [Shell](#shell) | A conversation-first web app: one list of conversations, everything else one click away | ✅ Done | 8 / 8 |
 | [M6 Everywhere](#m6-everywhere) | Approve from the phone; chat on Telegram and Slack | ⬜ Not started | 0 / 8 |
 | [M7 Hardening](#m7-hardening) | Evals gate CI; backups; E2B and cloud adapters | ⬜ Not started | 0 / 11 |
 
@@ -318,6 +319,7 @@ Stays where it is: the approval card (M4.09), the file card (M3.06) and the comp
 - [x] SD.05 Docs content: 28 pages in five sections (Start, Using it, How it works, Decisions, Reference), only what is built; the self-host first sign-in and the dev seed's sign-in written out; facts checked against the code (config schema, durable functions, tools, prompt versions, providers)
 - [x] SD.06 Checks: typecheck, lint, build; no personal data in the site (the repository address is the only link to its owner)
 - [x] SD.07 Landing page redone around motion (the first version read as too plain) → a preloader with a count and a lifting curtain; a hatchery hero where the team sits on the letters of "One for all.", every familiar's eyes follow the pointer, and a click hatches a new one that drops and bounces; a manifesto lit word by word with the scroll; "a day with your team" pinned and scrolled sideways through six colour scenes with a screen-sized clock (07:30 routine, 09:12 ask, 09:13 plan, 09:14 handoff lines drawing, 09:31 the lime "needs you", 23:00 asleep); taint played by the scroll (a page with a hidden order, the run turning red, the send held); the routing demo reordering with Flip; a deck of colour cards that stack; two marquees that speed up and lean with the scroll; a terminal that types the install; a lime finale with the team climbing over the name and a spinning seal to the repository. A custom cursor and magnetic buttons on fine pointers; everything off under reduced motion, and phones get stacked scenes. GSAP's SplitText, ScrollTrigger, DrawSVG, ScrambleText, Flip and CustomEase with Lenis
+- [x] SD.08 "Watch them work": the app rebuilt on the landing page as an interactive window (`apps/site/src/landing/demo/`), right after the hero ([plan](SHOWCASE.md), changed from screenshots to an interactive window like Grok Bot's). It has ADR-0052's layout: five conversations of one morning at a fictional roastery, scripted beats that pause where a person is needed.<br>**Operator scene:** a fictional supplier portal on its computer (`portal.greenfield.example`), Take over → you type in → I'm done, the order filled step by step, then an approval to place it (approve or deny change the ending); its screen also live in a side panel on wide screens.<br>**Other scenes:** the Gmail agent's reply with an editable draft; a group discussion whose plan ticks off as teammates report; research with sources; the chief's brief linking to the Operator.<br>**Phones:** list then chat. "Try it" in the nav and hero. README: four 2x captures of the demo in `docs/images/`, a refreshed status (the old one said agents arrive in M2). Checked at 1440, 768 and 390 px; typecheck, lint and build pass
 
 ## Enhancements
 
@@ -386,6 +388,21 @@ Stays where it is: the approval card (M4.09), the file card (M3.06) and the comp
 - [ ] LN.06 Walkthroughs: first setup and sign-in, an approval, a handoff, learning after a run, a routine firing — **Deps:** LN.02
 - [ ] LN.07 Coverage page (much-called functions no page explains), search by doc text, the glossary on hover — **Deps:** LN.02
 - [ ] LN.08 Deploy (Vercel project for `apps/learn`), a link from `apps/site`, the index check in CI — **Deps:** LN.03
+
+## Shell
+
+**Goal:** the web app looks like a messenger: the sidebar lists conversations, the screen shows one, everything else is one click away; agreed 2026-11-08 ([plan](CLEAN-SHELL.md)).
+**Done when:** the sidebar shows only conversations with previews, times and needs-you; every old page is reachable from the Workspace menu, the palette and its old URL; the phone opens on the list; checked at 1440, 768 and 390 px.
+**ADRs:** 0052
+
+- [x] CS.01 → ADR-0052 (amends 0039), ARCHITECTURE.md decision log and §18, this phase, the plan marked built. The canvas artboard is still open (backlog). Original task: ADR, docs, phase; the canvas artboard follows the build
+- [x] CS.02 → `conversationSchema` in contracts; `listConversations` in `repos/conversations.ts` (each agent's current chat, which leaves out routine threads as the chat screen does, with its last message, unread, stuck, and requests waiting across the agent's chats and runs outside a chat; each group the same; one tenant-scoped transaction); `GET /api/threads/conversations`; `useConversations`, refreshed by messages, approval events, failed runs, agent changes and marking a chat read. Integration test in `attention.integration.test.ts` (ordering, an agent without a chat, a request raising and clearing `needsYou`) — **Deps:** CS.01
+- [x] CS.03 → `components/conversation-list.tsx` (rows with familiar or stacked group familiars, name, time, Markdown-free preview, one state: "Needs you" pill, stuck line, unread count; "Working…" while busy), `new-chat-menu.tsx` (fresh chat with an agent, new group, hatch), `ui/popover.tsx`; `app-shell.tsx` rewritten: no nav, no Agents/Groups blocks, no icon rail; `[` hides the sidebar, a button brings it back. Pure helpers in `lib/conversations.ts` with 7 unit tests — **Deps:** CS.02
+- [x] CS.04 → `workspace-menu.tsx`: the menu (Overview, Agents, Activity, Routines, Skills, Memory, Settings, theme, shortcuts, sign out, with waiting/stuck/to-review counts) and the sidebar's workspace mode under "← Chats" — **Deps:** CS.03
+- [x] CS.05 → `chat/chat-menu.tsx`; the agent header is familiar, name, a status line only when there is something to say, the computer and ⋯ (new chat, history, memory with its new count, activity, steps panel, settings, pause); the group header gets ⋯ (chat with a member, new group, archive with Undo) — **Deps:** CS.03
+- [x] CS.06 → Row states and the lime dot on the account button; Home became **Overview** (`routes/_app/overview.tsx`) instead of merging into Activity; `/` opens the latest conversation on wide screens, shows the setup checklist for a new workspace (`components/setup-checklist.tsx`); palette and shortcut labels updated. Original task: home cards into Activity — **Deps:** CS.03
+- [x] CS.07 → The list is the phone's home screen with a slim bar (account, search, new chat); chats get ← back to it; the Workspace menu is a bottom sheet; bottom tabs and the Ask button removed; workspace pages show only their own heading — **Deps:** CS.04
+- [x] CS.08 → Motion: menus scale from their trigger (160 ms, strong ease-out), press feedback, a one-time pulse on "Needs you", none on the palette or `[`, all off under reduced motion. Checked in headless Chrome at 1440 (chat, group, menus, Overview), 768 (light theme) and 390 (list, chat, sheet). Typecheck, lint (no errors), unit tests (23 tasks), the learn build and the API attention integration test pass — **Deps:** CS.07
 
 ## M6 Everywhere
 
@@ -456,6 +473,11 @@ Stays where it is: the approval card (M4.09), the file card (M3.06) and the comp
 ## Session log
 
 Newest first. Keep entries short.
+
+### 2026-11-08 (session 28, shell)
+- **Done:** the Shell phase, CS.01–CS.08 (ADR-0052): the sidebar lists conversations only (last message, time, needs you, stuck, unread) from `GET /api/threads/conversations`; the other pages sit behind a Workspace menu and the palette; chat headers have a ⋯ menu; Home became Overview; on phones the list is home and there are no bottom tabs.
+- **Next:** Learn LN.03; Enhancements EN.01.
+- **Open:** the "Shell v2" artboard on the design canvas; integration tests reuse their database between runs, so run `prepare-test-db` before a second run.
 
 ### 2026-10-21 (session 27, Learn)
 - **Done:** LN.01–LN.02: ADR-0051 and `apps/learn`, a guide to the codebase whose facts come from an index of the source built at build time; the generated reference (code explorer with call graph, data model, API, jobs and events, tools, decisions, search) and the first written pages (the big picture, send a message, group discussions).

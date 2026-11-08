@@ -18,10 +18,12 @@ import {
 import type { Agent, FamiliarMood, Message, Run } from "@ofa/contracts";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import {
+  Activity as ActivityIcon,
   ArrowDown,
   ArrowLeft,
   ArrowUp,
   History,
+  Lightbulb,
   Monitor,
   PanelRight,
   Pause,
@@ -41,7 +43,8 @@ import {
   type FormEvent,
   type KeyboardEvent,
 } from "react";
-import { AgentTabs } from "@/components/agent-tabs";
+import { useUnconfirmedCount } from "@/components/agent-tabs";
+import { ChatMenu, type ChatMenuItem } from "@/components/chat/chat-menu";
 import {
   AttachButton,
   PendingAttachments,
@@ -429,15 +432,6 @@ function useJustFinished(run: Run | undefined): boolean {
 
 // ── Header ───────────────────────────────────────────────────────────────────
 
-const PILL: Record<FamiliarMood, string> = {
-  idle: "bg-accent text-muted-foreground",
-  thinking: "bg-info/15 text-info",
-  working: "bg-primary/15 text-highlight",
-  waiting: "bg-warning/15 text-warning",
-  asleep: "bg-accent text-muted-foreground",
-  error: "bg-destructive-surface text-destructive",
-};
-
 function ChatHeader(props: {
   agent: Agent;
   mood: FamiliarMood;
@@ -459,102 +453,109 @@ function ChatHeader(props: {
   const elapsed =
     active && run ? duration(props.now - Date.parse(run.startedAt ?? run.createdAt)) : null;
   const paused = agent.status !== "active";
+  // Said only when there is something to say: working, paused or stuck.
+  const status = paused
+    ? "Paused"
+    : mood === "idle"
+      ? null
+      : `${MOOD_LABELS[mood]}${elapsed ? ` · ${elapsed}` : ""}`;
+  const params = { agentId: agent.id };
+  const unconfirmed = useUnconfirmedCount(agent.id);
+  const items: ChatMenuItem[] = [
+    {
+      kind: "action",
+      label: "New chat",
+      icon: SquarePen,
+      hint: "N",
+      onSelect: props.onNewChat,
+      disabled: !props.canStartNew,
+    },
+    { kind: "link", label: "Chat history", icon: History, to: "/agents/$agentId/history", params },
+    {
+      kind: "link",
+      label: unconfirmed > 0 ? `Memory · ${unconfirmed} new` : "Memory",
+      icon: Lightbulb,
+      to: "/agents/$agentId/memory",
+      params,
+    },
+    {
+      kind: "link",
+      label: "Activity",
+      icon: ActivityIcon,
+      to: "/activity",
+      search: { agent: agent.id },
+    },
+    ...(props.onTogglePanel
+      ? [
+          {
+            kind: "action" as const,
+            label: props.panelOpen ? "Hide the steps" : "Show the steps",
+            icon: PanelRight,
+            onSelect: props.onTogglePanel,
+            wideOnly: true,
+          },
+        ]
+      : []),
+    { kind: "divider" },
+    { kind: "link", label: "Agent settings", icon: Settings2, to: "/agents/$agentId/edit", params },
+    {
+      kind: "action",
+      label: paused ? `Resume ${agent.name}` : `Pause ${agent.name}`,
+      icon: paused ? Play : Pause,
+      onSelect: props.onPause,
+      disabled: props.pausing || agent.status === "archived",
+    },
+  ];
 
   return (
-    <header className="flex h-16 shrink-0 items-center gap-3 border-b px-3 md:gap-5 md:px-6">
+    <header className="flex h-16 shrink-0 items-center gap-2 border-b px-2 md:gap-3 md:px-6">
       <Link
-        to="/agents"
-        aria-label="Back to agents"
-        className="flex size-10 items-center justify-center rounded-full outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring md:hidden"
+        to="/"
+        aria-label="Back to chats"
+        className="press flex size-10 items-center justify-center rounded-full outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring md:hidden"
       >
         <ArrowLeft className="size-5" aria-hidden />
       </Link>
-      <div className="flex min-w-0 flex-1 items-center gap-3">
-        <div className="relative size-11 shrink-0">
+      <div className="flex min-w-0 flex-1 items-center gap-2.5">
+        <div className="relative size-10 shrink-0">
           {active && <WorkingRing kind={phase?.kind ?? "thinking"} />}
           <Familiar
             key={props.celebrate ? "hop" : "still"}
             look={agent.spec.avatar}
             mood={mood}
-            size={34}
+            size={30}
             ring="var(--background)"
             animate
             celebrate={props.celebrate}
             label={`${agent.name}'s familiar, ${MOOD_LABELS[mood].toLowerCase()}`}
-            className="absolute top-1 left-[5px]"
+            className="absolute top-[5px] left-[5px]"
           />
         </div>
         <div className="flex min-w-0 flex-col">
-          <span className="flex items-center gap-2.5">
-            <h1 className="truncate text-[19px] leading-tight font-bold tracking-[-0.01em]">
-              {agent.name}
-            </h1>
+          <h1 className="truncate text-[17px] leading-tight font-semibold tracking-[-0.01em]">
+            {agent.name}
+          </h1>
+          {status && (
             <span
               className={cn(
-                "eyebrow inline-flex h-[22px] shrink-0 items-center gap-1.5 rounded-full px-2 text-[10.5px]",
-                PILL[mood],
+                "flex items-center gap-1.5 truncate text-[12.5px]",
+                mood === "error"
+                  ? "text-destructive"
+                  : mood === "waiting"
+                    ? "text-warning"
+                    : paused || mood === "asleep"
+                      ? "text-muted-foreground"
+                      : "text-highlight",
               )}
             >
-              <span aria-hidden className="size-1.5 rounded-full bg-current" />
-              {paused ? "Paused" : MOOD_LABELS[mood]}
-              {elapsed && <span className="opacity-80">· {elapsed}</span>}
+              <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-current" />
+              {status}
             </span>
-          </span>
-          <span className="truncate text-[12.5px] text-muted-foreground">{agent.spec.job}</span>
+          )}
         </div>
       </div>
 
-      <AgentTabs agent={agent} current="chat" className="hidden xl:flex" />
-
-      <div className="flex shrink-0 items-center gap-1">
-        <Link
-          to="/agents/$agentId/history"
-          params={{ agentId: agent.id }}
-          aria-label="History"
-          className="flex size-10 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:hidden"
-        >
-          <History className="size-[18px]" aria-hidden />
-        </Link>
-        <Link
-          to="/agents/$agentId/history"
-          params={{ agentId: agent.id }}
-          className="hidden h-10 items-center rounded-full px-3 text-sm text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:flex xl:hidden"
-        >
-          History
-        </Link>
-        <button
-          type="button"
-          onClick={props.onNewChat}
-          disabled={!props.canStartNew}
-          aria-label="New chat"
-          title="New chat (N)"
-          className="flex h-10 items-center gap-2 rounded-full px-2.5 text-sm font-semibold text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40 disabled:hover:bg-transparent md:border md:border-input md:px-3.5 md:text-foreground"
-        >
-          <SquarePen className="size-[17px]" aria-hidden />
-          <span className="hidden md:inline">New chat</span>
-        </button>
-        <Link
-          to="/agents/$agentId/edit"
-          params={{ agentId: agent.id }}
-          aria-label="Agent settings"
-          className="flex size-10 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring xl:hidden"
-        >
-          <Settings2 className="size-[18px]" aria-hidden />
-        </Link>
-        <button
-          type="button"
-          onClick={props.onPause}
-          disabled={props.pausing || agent.status === "archived"}
-          aria-label={paused ? `Resume ${agent.name}` : `Pause ${agent.name}`}
-          title={paused ? "Resume" : "Pause"}
-          className="flex size-10 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-        >
-          {paused ? (
-            <Play className="size-[18px]" aria-hidden />
-          ) : (
-            <Pause className="size-[18px]" aria-hidden />
-          )}
-        </button>
+      <div className="flex shrink-0 items-center gap-0.5">
         {props.onComputer && (
           <button
             type="button"
@@ -570,21 +571,7 @@ function ChatHeader(props: {
             <Monitor className="size-[18px]" aria-hidden />
           </button>
         )}
-        {props.onTogglePanel && (
-          <button
-            type="button"
-            onClick={props.onTogglePanel}
-            aria-pressed={props.panelOpen}
-            aria-label={props.panelOpen ? "Hide the run panel" : "Show the run panel"}
-            title={props.panelOpen ? "Hide the run panel" : "Show the run panel"}
-            className={cn(
-              "hidden size-10 items-center justify-center rounded-full outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring lg:flex",
-              props.panelOpen ? "text-foreground" : "text-muted-foreground",
-            )}
-          >
-            <PanelRight className="size-[18px]" aria-hidden />
-          </button>
-        )}
+        <ChatMenu label={`${agent.name}: more`} items={items} />
       </div>
     </header>
   );

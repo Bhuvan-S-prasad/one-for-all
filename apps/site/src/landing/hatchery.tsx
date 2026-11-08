@@ -11,7 +11,7 @@ import {
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Familiar } from "@/components/familiar";
-import { gsap, ScrollTrigger, SplitText } from "@/lib/motion";
+import { gsap, scrollToTarget, ScrollTrigger, SplitText } from "@/lib/motion";
 import { reducedMotion, REPO_URL } from "@/lib/site";
 import { bySlug, CHIEF } from "@/lib/team";
 
@@ -251,6 +251,16 @@ export function Hatchery({ ready }: { ready: boolean }) {
             : "Click anywhere to hatch a familiar"}
         </p>
         <div data-hero-foot className="flex items-center gap-3">
+          <a
+            href="#demo"
+            onClick={(event) => {
+              event.preventDefault();
+              scrollToTarget("#demo");
+            }}
+            className="rounded-full border border-input px-4 py-3 text-[16px] transition-colors hover:border-foreground"
+          >
+            Try it here ↓
+          </a>
           <Link
             to="/docs"
             className="rounded-full px-4 py-3 text-[16px] underline-offset-4 hover:underline"

@@ -5,17 +5,23 @@ import { useNavigate } from "@tanstack/react-router";
 import {
   Activity,
   ArrowUp,
+  BookOpen,
+  Brain,
   Ghost,
   History,
   House,
+  LayoutGrid,
   Lightbulb,
   Moon,
   PanelLeft,
   Plus,
+  Repeat,
   Search,
+  ShieldCheck,
   SlidersHorizontal,
   SquarePen,
   Sun,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
@@ -198,9 +204,14 @@ function Palette({
       });
     }
     const pages: [string, LucideIcon, () => void][] = [
-      ["Home", House, () => void navigate({ to: "/" })],
+      ["Chats", House, () => void navigate({ to: "/" })],
+      ["Overview", LayoutGrid, () => void navigate({ to: "/overview" })],
+      ["Approvals", ShieldCheck, () => void navigate({ to: "/approvals" })],
       ["Agents", Ghost, () => void navigate({ to: "/agents" })],
       ["Activity", Activity, () => void navigate({ to: "/activity" })],
+      ["Routines", Repeat, () => void navigate({ to: "/routines" })],
+      ["Skills", BookOpen, () => void navigate({ to: "/skills" })],
+      ["Memory", Brain, () => void navigate({ to: "/memory" })],
       ["Settings", SlidersHorizontal, () => void navigate({ to: "/settings" })],
     ];
     for (const [label, Icon, fn] of pages.filter(([label]) => !q || matches(label, q))) {
@@ -213,7 +224,8 @@ function Palette({
         dark ? Sun : Moon,
         () => setThemePreference(dark ? "light" : "dark"),
       ],
-      ["Fold or unfold the sidebar", PanelLeft, onToggleSidebar],
+      ["New group chat", Users, () => void navigate({ to: "/groups/new" })],
+      ["Hide or show the sidebar", PanelLeft, onToggleSidebar],
     ];
     for (const [label, Icon, fn] of actions.filter(([label]) => !q || matches(label, q))) {
       list.push({ id: `do-${label}`, group: "Actions", label, icon: icon(Icon), run: go(fn) });
