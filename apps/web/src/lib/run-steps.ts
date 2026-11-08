@@ -467,6 +467,10 @@ export interface RunPhase {
   readonly until: string | null;
   /** For waiting: on a person's answer, or on the model's capacity. */
   readonly waitingFor?: "you" | "model";
+  /** For working: the tool it is using. */
+  readonly tool?: string;
+  /** For thinking: it has used tools already, or it is making room. */
+  readonly after?: "tools" | "compaction";
 }
 
 const DOING: Record<string, string> = {
@@ -533,10 +537,17 @@ export function runPhase(status: string, events: readonly RunEvent[]): RunPhase 
       detail: tool === "web.read_url" ? (detail ?? "a page") : detail,
       kind: "working",
       until: null,
+      tool,
     };
   }
   if (last.type === "run.compacted") {
-    return { label: "Tidying its notes to make room", detail: null, kind: "thinking", until: null };
+    return {
+      label: "Tidying its notes to make room",
+      detail: null,
+      kind: "thinking",
+      until: null,
+      after: "compaction",
+    };
   }
   const usedTools = events.some((e) => e.type === "tool.completed");
   return {
@@ -544,6 +555,7 @@ export function runPhase(status: string, events: readonly RunEvent[]): RunPhase 
     detail: null,
     kind: "thinking",
     until: null,
+    ...(usedTools ? { after: "tools" as const } : {}),
   };
 }
 

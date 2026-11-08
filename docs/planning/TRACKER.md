@@ -476,6 +476,9 @@ Newest first. Keep entries short.
 
 ### 2026-11-08 (session 28, shell)
 - **Done:** the Shell phase, CS.01–CS.08 (ADR-0052): the sidebar lists conversations only (last message, time, needs you, stuck, unread) from `GET /api/threads/conversations`; the other pages sit behind a Workspace menu and the palette; chat headers have a ⋯ menu; Home became Overview; on phones the list is home and there are no bottom tabs.
+- **Also:** thinking orbs (`thinking-orbs` 0.3.2, MIT, no dependencies) replace the spinning ring.
+  - **Web app:** the live run and Overview's working rows. Not in the sidebar rows or the chat header: too small there, and a second copy of the live run's orb. Each run phase picks one of the nine orb states: searching, reading, writing, waiting for you… (`lib/orb.ts`, tested).
+  - **Site:** the demo window. `WorkingRing` is removed.
 - **Next:** Learn LN.03; Enhancements EN.01.
 - **Open:** the "Shell v2" artboard on the design canvas; integration tests reuse their database between runs, so run `prepare-test-db` before a second run.
 

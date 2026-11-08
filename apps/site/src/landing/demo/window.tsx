@@ -1,5 +1,6 @@
 import type { FamiliarLook, FamiliarMood } from "@ofa/contracts";
 import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { ThinkingOrb } from "thinking-orbs";
 import { Familiar } from "@/components/familiar";
 import { reducedMotion } from "@/lib/site";
 import { bySlug, CHIEF } from "@/lib/team";
@@ -267,7 +268,10 @@ export function AppWindow() {
           <span className="flex min-w-0 flex-col leading-tight">
             <span className="truncate text-[15px] font-semibold">{conversation.name}</span>
             {typing ? (
-              <span className="text-[11.5px] text-highlight">Working…</span>
+              <span className="flex items-center gap-1 text-[11.5px] text-highlight">
+                <ThinkingOrb state="working" size={20} theme="dark" aria-hidden className="-my-1" />
+                Working…
+              </span>
             ) : conversation.kind === "group" ? (
               <span className="truncate text-[11.5px] text-muted-foreground">
                 {conversation.who.map((w) => NAMES[w]).join(" · ")}
@@ -471,16 +475,8 @@ function Messages(props: {
             aria-live="polite"
           >
             {c.kind === "group" && <Fam who={props.typing} size={20} mood="thinking" />}
-            <span className="flex gap-1" aria-hidden>
-              {[0, 1, 2].map((d) => (
-                <span
-                  key={d}
-                  className="size-1.5 animate-pulse rounded-full bg-muted-foreground"
-                  style={{ animationDelay: `${d * 160}ms` }}
-                />
-              ))}
-            </span>
-            <span className="sr-only">{NAMES[props.typing]} is writing</span>
+            <ThinkingOrb state="composing" size={20} theme="dark" aria-hidden />
+            <span>{c.kind === "group" ? `${NAMES[props.typing]} is writing…` : "Writing…"}</span>
           </div>
         )}
         {c.id === "chief" && p.cursor >= 2 && (

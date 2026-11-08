@@ -15,7 +15,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { ArrowRight, ArrowUp, KeyRound, RotateCcw, Square } from "lucide-react";
 import { useState, type FormEvent, type KeyboardEvent } from "react";
 import { ApprovalCard } from "@/components/approval-card";
-import { WorkingRing } from "@/components/chat/live-run";
+import { PhaseOrb } from "@/components/phase-orb";
 import { Familiar } from "@/components/familiar";
 import { FactRow, useForgetWithUndo } from "@/components/memory-review";
 import { SetupChecklist } from "@/components/setup-checklist";
@@ -537,7 +537,6 @@ function WorkingRow({ agent, run: listed, mood }: { agent: Agent; run: Run; mood
     <li className="flex flex-col gap-3 rounded-[18px] border bg-card px-4 py-3.5">
       <div className="flex items-start gap-3">
         <div className="relative size-11 shrink-0">
-          <WorkingRing kind={phase.kind} />
           <Familiar
             look={agent.spec.avatar}
             mood={mood}
@@ -549,9 +548,12 @@ function WorkingRow({ agent, run: listed, mood }: { agent: Agent; run: Run; mood
         </div>
         <div className="flex min-w-0 flex-col gap-0.5">
           <span className="text-[15px] font-semibold">{agent.name}</span>
-          <span className="shimmer-text truncate text-[13px]" aria-live="polite">
-            {phase.label}
-            {phase.detail ? ` · ${phase.detail}` : ""}
+          <span className="flex min-w-0 items-center gap-1.5 text-[13px]" aria-live="polite">
+            <PhaseOrb phase={phase} className="shrink-0" />
+            <span className="truncate">
+              {phase.label}
+              {phase.detail ? ` · ${phase.detail}` : ""}
+            </span>
           </span>
           <span className="font-mono text-[11px] text-muted-foreground">
             {duration(now - Date.parse(run.startedAt ?? run.createdAt))} elapsed

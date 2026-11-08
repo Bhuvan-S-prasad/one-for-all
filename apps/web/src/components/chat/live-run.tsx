@@ -4,41 +4,17 @@ import { Link } from "@tanstack/react-router";
 import { Square } from "lucide-react";
 import { ApprovalCard } from "@/components/approval-card";
 import { Familiar } from "@/components/familiar";
+import { PhaseOrb } from "@/components/phase-orb";
 import { StepList } from "@/components/chat/step-trail";
 import { countdown, duration } from "@/lib/format";
 import { agentNames, runPhase, runSteps } from "@/lib/run-steps";
 import { cn } from "@/lib/utils";
 
 // The run as it happens, at the bottom of the thread where the reply will
-// appear (UX.07). The familiar is the loader: it moves with the phase, and the
-// phase is said in words, with a timer, so the wait never looks stuck.
-
-/** A ring that turns around a familiar while its agent works. */
-export function WorkingRing({
-  kind,
-  className,
-}: {
-  kind: "queued" | "thinking" | "working" | "waiting";
-  className?: string;
-}) {
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        "pointer-events-none absolute inset-0 rounded-full border-2 border-transparent",
-        kind === "waiting"
-          ? "border-t-warning"
-          : kind === "queued"
-            ? "border-dashed border-muted-foreground/50"
-            : kind === "thinking"
-              ? "border-t-info border-r-info/30"
-              : "border-t-primary border-r-primary/35",
-        "animate-spin [animation-duration:1.4s]",
-        className,
-      )}
-    />
-  );
-}
+// appear (UX.07). The familiar says who is working and moves with its mood;
+// a thinking orb beside the words shows what it is doing (searching,
+// reading, writing, waiting), and the phase is said in words, with a timer,
+// so the wait never looks stuck.
 
 export function LiveRun({
   agent,
@@ -72,7 +48,6 @@ export function LiveRun({
       className="grid grid-cols-[48px_minmax(0,1fr)] gap-3.5"
     >
       <div className="relative size-12">
-        <WorkingRing kind={phase.kind} />
         <Familiar
           look={{ ...agent.spec.avatar, mark: "none" }}
           mood={mood}
@@ -84,11 +59,12 @@ export function LiveRun({
       </div>
       <div className="flex min-w-0 flex-col gap-3 pt-1">
         {/* Announced once per phase, not per tick of the timer. */}
-        <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1" aria-live="polite">
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1" aria-live="polite">
+          <PhaseOrb phase={phase} className="shrink-0" />
           <span
             className={cn(
               "text-[16px] font-semibold",
-              phase.kind === "waiting" ? "text-warning" : "shimmer-text",
+              phase.kind === "waiting" ? "text-warning" : "text-foreground",
             )}
           >
             {phase.label}

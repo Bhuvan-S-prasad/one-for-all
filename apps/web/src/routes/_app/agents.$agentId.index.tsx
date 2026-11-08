@@ -51,7 +51,7 @@ import {
   SentAttachments,
   useAttachments,
 } from "@/components/chat/attachments";
-import { LiveRun, WorkingRing } from "@/components/chat/live-run";
+import { LiveRun } from "@/components/chat/live-run";
 import { Reply } from "@/components/chat/reply";
 import { RunPanel } from "@/components/chat/run-panel";
 import {
@@ -66,7 +66,6 @@ import { ErrorAlert } from "@/components/ui/alert";
 import { starters } from "@/lib/agents";
 import { splitAttachments } from "@/lib/attachments";
 import { duration, shortTime } from "@/lib/format";
-import { runPhase } from "@/lib/run-steps";
 import { isTyping, useStoredFlag } from "@/lib/shortcuts";
 import { toast } from "@/lib/toast";
 import { useNow } from "@/lib/use-now";
@@ -449,7 +448,6 @@ function ChatHeader(props: {
   onComputer?: () => void;
 }) {
   const { agent, mood, run, active } = props;
-  const phase = active && run ? runPhase(run.status, []) : null;
   const elapsed =
     active && run ? duration(props.now - Date.parse(run.startedAt ?? run.createdAt)) : null;
   const paused = agent.status !== "active";
@@ -518,7 +516,6 @@ function ChatHeader(props: {
       </Link>
       <div className="flex min-w-0 flex-1 items-center gap-2.5">
         <div className="relative size-10 shrink-0">
-          {active && <WorkingRing kind={phase?.kind ?? "thinking"} />}
           <Familiar
             key={props.celebrate ? "hop" : "still"}
             look={agent.spec.avatar}
