@@ -49,6 +49,7 @@ export function applyRealtime(queryClient: QueryClient, message: RealtimeMessage
       // A request for a person, or its answer: the approval lists change.
       if (event.type === "approval.requested" || event.type === "approval.decided") {
         void queryClient.invalidateQueries({ queryKey: queryKeys.approvalLists });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.conversations });
       }
       // Something was learned: the review lists change (UX.14).
       if (event.type === "memory.written") {
@@ -83,6 +84,10 @@ export function applyRealtime(queryClient: QueryClient, message: RealtimeMessage
       // Filtered Activity pages refetch when a status change can move a run between them.
       if (known?.status !== run.status) {
         void queryClient.invalidateQueries({ queryKey: queryKeys.runSearches });
+        // A failed run marks its conversation stuck; the next one clears it.
+        if (run.status === "failed" || !known || known.status === "failed") {
+          void queryClient.invalidateQueries({ queryKey: queryKeys.conversations });
+        }
         if (run.status === "succeeded" || !known) {
           void queryClient.invalidateQueries({ queryKey: queryKeys.agentStats });
         }
@@ -103,6 +108,10 @@ export function applyRealtime(queryClient: QueryClient, message: RealtimeMessage
       void queryClient.invalidateQueries({ queryKey: queryKeys.threadLists });
       return;
     }
+    case "discussion.updated":
+      // Whose turn it is, and the answer once it closes (ADR-0050).
+      void queryClient.invalidateQueries({ queryKey: queryKeys.discussions(message.threadId) });
+      return;
     case "agent.updated": {
       const agent = message.agent;
       queryClient.setQueryData<Agent>(queryKeys.agent(agent.id), agent);
@@ -113,6 +122,8 @@ export function applyRealtime(queryClient: QueryClient, message: RealtimeMessage
           ? next
           : [...next, agent].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
       });
+      // An agent hatched or archived adds or removes its row.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.conversations });
       return;
     }
   }

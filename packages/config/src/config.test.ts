@@ -41,6 +41,28 @@ describe("loadConfig", () => {
     expect(loadConfig({ ...valid, NODE_ENV: "production" }).inngest.dev).toBe(false);
   });
 
+  it("finds the dev object store in development, and needs every setting elsewhere", () => {
+    const dev = loadConfig({ ...valid, NODE_ENV: "development" }).blobs;
+    expect(dev).toMatchObject({
+      endpoint: "http://127.0.0.1:3900",
+      bucket: "ofa-media",
+      garage: { adminUrl: "http://127.0.0.1:3903" },
+    });
+    expect(loadConfig({ ...valid, NODE_ENV: "production" }).blobs).toBeNull();
+    expect(() =>
+      loadConfig({ ...valid, NODE_ENV: "production", BLOB_S3_ENDPOINT: "http://garage:3900" }),
+    ).toThrow(/BLOB_S3_ACCESS_KEY_ID/);
+    const prod = loadConfig({
+      ...valid,
+      NODE_ENV: "production",
+      BLOB_S3_ENDPOINT: "https://s3.example.com",
+      BLOB_S3_ACCESS_KEY_ID: "AKIAEXAMPLEEXAMPLE",
+      BLOB_S3_SECRET_ACCESS_KEY: "x".repeat(40),
+    }).blobs;
+    // Not Garage: nothing to set up.
+    expect(prod).toMatchObject({ endpoint: "https://s3.example.com", garage: null });
+  });
+
   it("finds the dev sandbox in development, and needs both settings elsewhere", () => {
     expect(loadConfig({ ...valid, NODE_ENV: "development" }).sandbox).toEqual({
       url: "http://127.0.0.1:7070",

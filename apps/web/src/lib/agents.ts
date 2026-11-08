@@ -157,6 +157,12 @@ export const BUILTIN_TOOLS = [
     starter: false,
   },
   {
+    name: "video.*",
+    label: "Edit video",
+    hint: "Read footage and songs on its computer, cut to the beat or on speech, add effects and captions, and render videos. Needs files to send you the result.",
+    starter: false,
+  },
+  {
     name: "delegate_task",
     label: "Hand work to other agents",
     hint: "Give another of your agents a task and use its answer. That agent works with its own tools and permissions.",
@@ -166,6 +172,12 @@ export const BUILTIN_TOOLS = [
     name: "message_agent",
     label: "Message other agents",
     hint: "Pass a request to another agent in the chat. Its reply appears in the chat later. Lets a group's coordinator route messages.",
+    starter: false,
+  },
+  {
+    name: "ask_group",
+    label: "Ask the group",
+    hint: "As a group's coordinator, ask every member a question in turn, then close with one agreed answer. You can also start one yourself with @all.",
     starter: false,
   },
   {

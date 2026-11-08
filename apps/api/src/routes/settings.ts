@@ -1,12 +1,28 @@
 import {
   setLlmKeyRequestSchema,
+  setSpendCapRequestSchema,
   updateWorkspaceSettingsRequestSchema,
   type LlmSettings,
+  type SpendSummary,
   type UsageToday,
   type WorkspaceSettings,
 } from "@ofa/contracts";
-import { ForbiddenError, MODEL_TIERS, type TenantContext } from "@ofa/core";
-import { getWorkspace, modelCallsSince, recordAudit, setWorkspaceTimeZone } from "@ofa/db";
+import {
+  ForbiddenError,
+  MODEL_TIERS,
+  spendMonthStart,
+  toCents,
+  type TenantContext,
+} from "@ofa/core";
+import {
+  createSpendLedger,
+  getWorkspace,
+  modelCallsSince,
+  recordAudit,
+  setSpendCap,
+  setWorkspaceTimeZone,
+  spendByAgentSince,
+} from "@ofa/db";
 import { Hono, type Context } from "hono";
 import { llmKeySecretName, type Container } from "../container";
 import { requestMeta } from "../lib/request";
@@ -22,6 +38,8 @@ import type { AppEnv } from "../types";
  *   GET    /api/settings/usage     model requests today against the provider's daily quota (UX.11)
  *   GET    /api/settings/workspace the workspace time zone, for routines and reminders (M5.06)
  *   PUT    /api/settings/workspace change it (owner or admin)
+ *   GET    /api/settings/spend     paid app credits this month, the cap, per agent (EN.15)
+ *   PUT    /api/settings/spend     set or clear the monthly cap (owner or admin)
  */
 export function settingsRoutes(
   deps: Pick<Container, "db" | "sessions" | "vault" | "llmProvider" | "tiers" | "config">,
@@ -77,6 +95,26 @@ export function settingsRoutes(
     };
   }
 
+  const ledger = createSpendLedger(deps.db);
+  async function spending(tenant: TenantContext): Promise<SpendSummary> {
+    const since = spendMonthStart(new Date());
+    const [month, byAgent] = await Promise.all([
+      ledger.month(tenant),
+      spendByAgentSince(deps.db, tenant, since),
+    ]);
+    return {
+      since: since.toISOString(),
+      spentUsd: month.spentCents / 100,
+      capUsd: month.capCents === null ? null : month.capCents / 100,
+      byAgent: byAgent.map((a) => ({
+        agentId: a.agentId,
+        name: a.name,
+        calls: a.calls,
+        spentUsd: a.spentCents / 100,
+      })),
+    };
+  }
+
   return new Hono<AppEnv>()
     .use(requireSession(deps.sessions), requireTenant())
     .get("/llm", async (c) => c.json(await settings(c.get("tenant"))))
@@ -90,6 +128,19 @@ export function settingsRoutes(
       const { timeZone } = await readJson(c, updateWorkspaceSettingsRequestSchema);
       await setWorkspaceTimeZone(deps.db, tenant, timeZone);
       return c.json({ timeZone } satisfies WorkspaceSettings);
+    })
+    .get("/spend", async (c) => c.json(await spending(c.get("tenant"))))
+    .put("/spend", async (c) => {
+      const tenant = requireAdmin(c, "the spending limit");
+      const { capUsd } = await readJson(c, setSpendCapRequestSchema);
+      await setSpendCap(deps.db, tenant, capUsd === null ? null : toCents(capUsd));
+      await recordAudit(deps.db, tenant, {
+        action: "workspace.spend_cap_set",
+        targetType: "workspace",
+        targetId: tenant.workspaceId,
+        ...requestMeta(c),
+      });
+      return c.json(await spending(tenant));
     })
     .put("/llm/key", async (c) => {
       const tenant = requireAdmin(c);

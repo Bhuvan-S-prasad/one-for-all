@@ -88,6 +88,8 @@ describe.skipIf(!hasDb)("skills and memory (integration)", async () => {
     approvalDecided: async () => {},
     scheduleCreated: async () => {},
     consolidateMemory: async () => {},
+    discussionStarted: async () => {},
+    discussionStopped: async () => {},
     scheduleCancelled: async () => {},
   };
   const container = createContainer(config, {
@@ -331,15 +333,20 @@ describe.skipIf(!hasDb)("skills and memory (integration)", async () => {
     const contents = facts.items.map((m) => m.content);
     expect(contents).toContain("Riley wants answers short and in bullet points.");
     expect(contents).toContain("Riley publishes the release digest every Friday.");
+    // The call was shown the unconfirmed fact, so the new one waits for a person too (ADR-0037).
+    const added = facts.items.find((m) => m.content.startsWith("Riley publishes"));
+    expect(added?.verified).toBe(false);
     expect(await maintenance.newEpisodes(tenant, agentId, 10)).toEqual([]);
 
-    // Forty days on, it was never confirmed: it expires; confirmed facts stay.
+    // Forty days on, neither was confirmed: both expire; confirmed facts stay.
     const later = new Date(now.getTime() + 40 * 24 * 60 * 60_000);
-    expect(await maintenance.expireStale(tenant, later)).toBe(1);
+    expect(await maintenance.expireStale(tenant, later)).toBe(2);
     const after = memoryListSchema.parse(
       await json(send("GET", `/api/memories?agentId=${agentId}`)),
     );
-    expect(after.items.map((m) => m.content)).not.toContain("Riley once mentioned a vendor.");
+    const left = after.items.map((m) => m.content);
+    expect(left).not.toContain("Riley once mentioned a vendor.");
+    expect(left).toContain("Riley wants answers short and in bullet points.");
   });
 
   it("proposes a new skill for a person to approve", async () => {

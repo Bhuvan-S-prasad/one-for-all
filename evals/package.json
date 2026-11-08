@@ -8,9 +8,11 @@
     "eval": "tsx graders/cli.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests --exclude \"**/*.integration.test.ts\"",
+    "test:integration": "vitest run --passWithNoTests integration"
   },
   "dependencies": {
+    "@ofa/contracts": "workspace:*",
     "@ofa/core": "workspace:*",
     "@ofa/harness": "workspace:*",
     "@ofa/llm": "workspace:*",

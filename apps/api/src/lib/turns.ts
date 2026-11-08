@@ -5,15 +5,19 @@ import {
   getAgent,
   listActiveRuns,
   listAgents,
+  openDiscussionIn,
   postUserMessage,
   startTurn,
   type ThreadWithMembers,
 } from "@ofa/db";
 import type { Container } from "../container";
 import { toMessage, toRun } from "./mappers";
-import { pickResponder } from "./routing";
+import { discussionFor, pickResponder } from "./routing";
 
-export type TurnDeps = Pick<Container, "db" | "bus" | "dispatcher" | "runs" | "logger">;
+export type TurnDeps = Pick<
+  Container,
+  "db" | "bus" | "dispatcher" | "runs" | "logger" | "discussions"
+>;
 
 /** "stop", "stop now", "cancel" and the like, alone in a message (M5.05). */
 const STOP_COMMAND = /^\s*\/?(stop|stop now|stop it|stop that|cancel|halt|abort)[\s.!]*$/i;
@@ -66,7 +70,10 @@ export async function startAgentTurn(
   // actions stay done. With nothing running, it is an ordinary message.
   if (thread.kind !== "handoff" && isStopCommand(content)) {
     const working = await listActiveRuns(deps.db, tenant, { threadId: thread.id });
-    if (working.length > 0) {
+    // A discussion here ends too, between turns or not (ADR-0050).
+    const discussing =
+      thread.kind === "group" && (await deps.discussions.stopIn(tenant, thread.id));
+    if (working.length > 0 || discussing) {
       const message = await postUserMessage(deps.db, tenant, { threadId: thread.id, content });
       await announce(deps, tenant, thread.id, message.id);
       for (const run of working) {
@@ -79,6 +86,11 @@ export async function startAgentTurn(
       }
       return { message: toMessage(message), run: null };
     }
+  }
+
+  if (thread.kind === "group") {
+    const discussed = await joinOrStartDiscussion(deps, tenant, thread, content);
+    if (discussed) return discussed;
   }
 
   const agent = await responderFor(deps, tenant, thread, content);
@@ -141,6 +153,47 @@ export async function startAgentTurn(
   }
 
   return { message: toMessage(turn.message), run: toRun(turn.run) };
+}
+
+/**
+ * A group discussion (ADR-0050). While one is going on, the person's message
+ * starts no run: the next turn reads it. A message to the whole group
+ * (`@all`, `/discuss`) opens one, with the members it names (two or more,
+ * in that order) or everyone but the coordinator. Null for any other message.
+ */
+async function joinOrStartDiscussion(
+  deps: TurnDeps,
+  tenant: TenantContext,
+  thread: ThreadWithMembers,
+  content: string,
+): Promise<SendMessageResponse | null> {
+  if (await openDiscussionIn(deps.db, tenant, thread.id)) {
+    const message = await postUserMessage(deps.db, tenant, { threadId: thread.id, content });
+    await announce(deps, tenant, thread.id, message.id);
+    return { message: toMessage(message), run: null };
+  }
+  // Members in roster order (the order they joined), as the discussion keeps them.
+  const memberIds = thread.members.flatMap((m) => (m.type === "agent" ? [m.agentId] : []));
+  const byId = new Map((await listAgents(deps.db, tenant)).map((a) => [a.id, a]));
+  const members = memberIds.flatMap((id) => byId.get(id) ?? []);
+  const coordinatorId = thread.coordinatorAgentId ?? members[0]?.id ?? null;
+  const asked = discussionFor(content, members, coordinatorId);
+  if (!asked || !coordinatorId) return null;
+  if (asked.members.length === 0) {
+    throw new AppError("bad_request", "Nobody else in this group is active to discuss it");
+  }
+  const message = await postUserMessage(deps.db, tenant, { threadId: thread.id, content });
+  await announce(deps, tenant, thread.id, message.id);
+  await deps.discussions.open(tenant, {
+    key: message.id,
+    threadId: thread.id,
+    question: { messageId: message.id },
+    startedByRunId: null,
+    coordinatorAgentId: coordinatorId,
+    memberIds: asked.members.map((m) => m.id),
+    tainted: false,
+  });
+  return { message: toMessage(message), run: null };
 }
 
 async function announce(

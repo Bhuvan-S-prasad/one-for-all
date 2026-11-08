@@ -6,7 +6,7 @@ import {
   type SandboxProvider,
 } from "@ofa/core";
 import { describe, expect, it } from "vitest";
-import type { ToolRunContext } from "../define";
+import type { ToolDefinition, ToolRunContext } from "../define";
 import { browserTools, fileTools, pageText, shellTool, useSavedLoginTool } from "./computer";
 
 const ctx: ToolRunContext = {
@@ -319,5 +319,66 @@ describe("use_saved_login", () => {
       });
       expect(typed).toEqual([]);
     }
+  });
+});
+
+describe("large files and attachments (EN.09)", () => {
+  async function* bytes(n: number, value = 1) {
+    yield new Uint8Array(n).fill(value);
+  }
+
+  it("streams a large file it sends straight into the store, typed by its name", async () => {
+    const puts: unknown[] = [];
+    const { provider } = fakeSandbox({
+      readFileStream: async () => ({ body: bytes(11 * 1024 * 1024), size: 11 * 1024 * 1024 }),
+    });
+    const send = byName(fileTools(provider), "files.send") as ToolDefinition<{ path: string }>;
+    const result = await send.run(
+      { path: "renders/reel.mp4" },
+      {
+        ...ctx,
+        artifacts: {
+          put: async (input) => {
+            puts.push(input);
+            return { id: asId("a1") } as never;
+          },
+          get: async () => null,
+          read: async () => null,
+        },
+      },
+    );
+    expect(result.artifactId).toBe("a1");
+    expect(puts[0]).toMatchObject({
+      name: "reel.mp4",
+      mimeType: "video/mp4",
+      content: { size: 11 * 1024 * 1024 },
+    });
+  });
+
+  it("copies a file the person attached into the computer, only through the run's own uploads", async () => {
+    const writes: unknown[][] = [];
+    const { provider } = fakeSandbox({
+      writeFileStream: async (agentId, path, _body, size) =>
+        void writes.push([agentId, path, size]),
+    });
+    const receive = byName(fileTools(provider), "files.receive") as ToolDefinition<{
+      upload: string;
+      path?: string;
+    }>;
+    const id = "0b8f6f3e-1c2d-4e5f-8a9b-0c1d2e3f4a5b";
+    const uploads = {
+      open: async (asked: string) =>
+        asked === id
+          ? { name: "beach day.mp4", mimeType: "video/mp4", size: 5, body: bytes(5) }
+          : null,
+    };
+    const result = await receive.run({ upload: `upload://${id}` }, { ...ctx, uploads });
+    expect(writes).toEqual([["agent-1", "uploads/beach day.mp4", 5]]);
+    expect(result.content).toMatch(/Saved beach day.mp4/);
+    await expect(
+      receive.run({ upload: "upload://00000000-0000-4000-8000-000000000000" }, { ...ctx, uploads }),
+    ).rejects.toMatchObject({ code: "not_found" });
+    // Not outbound: it writes only into the agent's own computer.
+    expect(receive.annotations.outbound).toBeFalsy();
   });
 });

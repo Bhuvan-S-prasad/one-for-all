@@ -42,6 +42,7 @@ import {
   queryKeys,
   runArtifactsQuery,
   runHandoffsQuery,
+  discussionsQuery,
   runEventsQuery,
   runQuery,
   runSearchQuery,
@@ -237,6 +238,19 @@ export function useUnread() {
 }
 
 /**
+ * The sidebar's conversations, most recently active first (ADR-0052). Kept
+ * fresh by the realtime socket: new messages, requests and finished runs.
+ */
+export function useConversations() {
+  const api = useApiClient();
+  return useQuery({
+    queryKey: queryKeys.conversations,
+    queryFn: async () => (await api.conversations()).items,
+    staleTime: 10_000,
+  });
+}
+
+/**
  * Mark a chat read while it is on screen: when it opens, and when a new
  * message arrives while the tab is visible.
  */
@@ -249,7 +263,10 @@ export function useMarkRead(threadId: string | undefined, latestMessageId: strin
       if (document.visibilityState !== "visible") return;
       void api
         .markThreadRead(threadId)
-        .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.unread }))
+        .then(() => {
+          void queryClient.invalidateQueries({ queryKey: queryKeys.unread });
+          void queryClient.invalidateQueries({ queryKey: queryKeys.conversations });
+        })
         .catch(() => {});
     };
     mark();
@@ -266,6 +283,12 @@ export function useThread(threadId: string | undefined) {
     queryFn: () => api.getThread(threadId!),
     enabled: !!threadId,
   });
+}
+
+/** A group chat's discussions (ADR-0050), newest first; kept live over the socket. */
+export function useDiscussions(threadId: string | undefined) {
+  const api = useApiClient();
+  return useQuery({ ...discussionsQuery(api, threadId ?? ""), enabled: !!threadId });
 }
 
 /** Start a chat: with one agent a new direct chat, with two to six a group chat. */
@@ -341,9 +364,10 @@ export function useSendMessage(threadId: string | undefined) {
   const api = useApiClient();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (content: string) => {
+    mutationFn: (message: string | { content: string; uploads?: readonly string[] }) => {
       if (!threadId) throw new Error("No thread yet");
-      return api.sendMessage(threadId, content);
+      const { content, uploads } = typeof message === "string" ? { content: message } : message;
+      return api.sendMessage(threadId, content, uploads);
     },
     onSuccess: (turn) => rememberTurn(queryClient, turn),
   });
@@ -776,6 +800,21 @@ export function useShareLogin(agentId: string) {
 /** Model requests today against the daily free quota (UX.11). */
 export function useUsageToday() {
   return useQuery(usageQuery(useApiClient()));
+}
+
+/** Paid app credits this month (EN.15). */
+export function useSpend() {
+  const api = useApiClient();
+  return useQuery({ queryKey: queryKeys.spend, queryFn: () => api.spend() });
+}
+
+export function useSetSpendCap() {
+  const api = useApiClient();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (capUsd: number | null) => api.setSpendCap(capUsd),
+    onSuccess: (summary) => queryClient.setQueryData(queryKeys.spend, summary),
+  });
 }
 
 export function useLlmSettings() {

@@ -69,6 +69,8 @@ describe.skipIf(!hasDb)("interrupts, routines and things for later (integration)
     approvalDecided: async () => {},
     scheduleCreated: async (event) => void waits.push(event),
     consolidateMemory: async () => {},
+    discussionStarted: async () => {},
+    discussionStopped: async () => {},
     scheduleCancelled: async (event) => void unwaits.push(event),
   };
   const container = createContainer(config, {

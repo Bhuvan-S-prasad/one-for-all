@@ -441,3 +441,72 @@ export function didNotRedo(tool: string): Check {
     },
   };
 }
+
+// ── Discussions (ADR-0050) ───────────────────────────────────────────────────
+
+/**
+ * Members answered in the order set, one turn each per round, and the
+ * coordinator closed last.
+ */
+export const discussionInOrder: Check = {
+  name: "kept the order",
+  grade: (t) => {
+    const d = t.discussion;
+    if (!d) return { pass: false, detail: "not a discussion" };
+    const expected = Array.from({ length: d.rounds }, () => d.members).flat();
+    const got = d.turns.filter((turn) => !turn.close).map((turn) => turn.agent);
+    const closes = d.turns.filter((turn) => turn.close);
+    if (JSON.stringify(got) !== JSON.stringify(expected)) {
+      return { pass: false, detail: `turns ${got.join(", ")}; expected ${expected.join(", ")}` };
+    }
+    if (closes.length !== 1 || d.turns.at(-1) !== closes[0] || closes[0]!.agent !== d.coordinator) {
+      return { pass: false, detail: "the coordinator didn't close last, once" };
+    }
+    return { pass: true };
+  },
+};
+
+/** At most `rounds` rounds, at most one turn per member each, and it closed. */
+export function discussionWithin(rounds: number): Check {
+  return {
+    name: `within ${rounds} ${rounds === 1 ? "round" : "rounds"}`,
+    grade: (t) => {
+      const d = t.discussion;
+      if (!d) return { pass: false, detail: "not a discussion" };
+      const memberTurns = d.turns.filter((turn) => !turn.close).length;
+      if (d.rounds > rounds || memberTurns > rounds * d.members.length) {
+        return { pass: false, detail: `${d.rounds} rounds, ${memberTurns} turns` };
+      }
+      return d.status === "done" ? { pass: true } : { pass: false, detail: `ended ${d.status}` };
+    },
+  };
+}
+
+/** Every member said something in the first round (nobody passed it or failed). */
+export const everyMemberSpoke: Check = {
+  name: "every member spoke",
+  grade: (t) => {
+    const d = t.discussion;
+    if (!d) return { pass: false, detail: "not a discussion" };
+    const silent = d.members.filter(
+      (m) => !d.turns.some((turn) => turn.agent === m && turn.round === 1 && turn.reply),
+    );
+    return silent.length === 0
+      ? { pass: true }
+      : { pass: false, detail: `no answer from ${silent.join(", ")}` };
+  },
+};
+
+/** The close says what this member brought, and credits it by name. */
+export function closeReflects(name: string, member: string, point: RegExp): Check {
+  return {
+    name,
+    grade: (t) => {
+      const reply = t.reply ?? "";
+      if (!point.test(reply)) return { pass: false, detail: `close lacks ${String(point)}` };
+      return new RegExp(`\\b${member}\\b`, "i").test(reply)
+        ? { pass: true }
+        : { pass: false, detail: `close doesn't name ${member}` };
+    },
+  };
+}

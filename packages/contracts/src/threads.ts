@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { idSchema, timestampSchema } from "./common";
-import { runSchema } from "./runs";
+import { runSchema, runStatusSchema } from "./runs";
 
 // Conversations between people and agents (ARCHITECTURE.md Â§6.3, Â§15).
 
@@ -83,10 +83,34 @@ export const messageSchema = z.object({
 });
 export type Message = z.infer<typeof messageSchema>;
 
-export const sendMessageRequestSchema = z.object({
-  content: z.string().trim().min(1, "Write a message").max(MAX_MESSAGE_LENGTH),
+/** Files attached to one message at most (EN.09). */
+export const MAX_UPLOADS_PER_MESSAGE = 10;
+
+export const sendMessageRequestSchema = z
+  .object({
+    content: z.string().trim().max(MAX_MESSAGE_LENGTH).default(""),
+    /** Files uploaded to this chat first (`POST /api/threads/:id/uploads`), sent with the message. */
+    uploads: z.array(idSchema).max(MAX_UPLOADS_PER_MESSAGE).default([]),
+  })
+  .refine((m) => m.content.length > 0 || m.uploads.length > 0, {
+    message: "Write a message",
+    path: ["content"],
+  });
+export type SendMessageRequest = z.input<typeof sendMessageRequestSchema>;
+
+/** A file a person attached to a chat (EN.09). */
+export const uploadSchema = z.object({
+  id: idSchema,
+  threadId: idSchema,
+  name: z.string(),
+  mimeType: z.string(),
+  size: z.number().int().nonnegative(),
+  createdAt: timestampSchema,
 });
-export type SendMessageRequest = z.infer<typeof sendMessageRequestSchema>;
+export type Upload = z.infer<typeof uploadSchema>;
+
+/** Largest file a person can attach: 2 GB with an object store, else 10 MB (ADR-0047). */
+export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024 - 1;
 
 /** The stored message and the run it started (null when no agent answers). */
 export const sendMessageResponseSchema = z.object({
@@ -133,3 +157,85 @@ export type UnreadThread = z.infer<typeof unreadThreadSchema>;
 
 export const unreadListSchema = z.object({ items: z.array(unreadThreadSchema) });
 export type UnreadList = z.infer<typeof unreadListSchema>;
+
+// ── Conversations (ADR-0052) ─────────────────────────────────────────────────
+
+/** How much of the last message a conversation row carries. */
+export const CONVERSATION_SNIPPET_CHARS = 160;
+
+/**
+ * One row of the sidebar: an agent's latest direct chat (or the agent, when
+ * there is no chat yet, with `threadId` null) or a group chat.
+ */
+export const conversationSchema = z.object({
+  kind: z.enum(["direct", "group"]),
+  threadId: idSchema.nullable(),
+  /** Direct: the agent. Group: its agents, in the order they joined. */
+  agentIds: z.array(idSchema),
+  /** A group's title; null for direct chats and untitled groups. */
+  title: z.string().nullable(),
+  last: z
+    .object({
+      snippet: z.string().max(CONVERSATION_SNIPPET_CHARS),
+      author: z.enum(["user", "agent", "system"]),
+      agentId: idSchema.nullable(),
+      at: timestampSchema,
+    })
+    .nullable(),
+  unread: z.number().int().min(0),
+  /** Requests waiting for this person in this conversation (approvals). */
+  needsYou: z.number().int().min(0),
+  /** The conversation's latest run failed. */
+  stuck: z.boolean(),
+  /** Last activity, for ordering: the last message, else when it was made. */
+  activeAt: timestampSchema,
+});
+export type Conversation = z.infer<typeof conversationSchema>;
+
+export const conversationListSchema = z.object({ items: z.array(conversationSchema) });
+export type ConversationList = z.infer<typeof conversationListSchema>;
+
+// ── Discussions (ADR-0050) ───────────────────────────────────────────────────
+
+/** `closing`: the coordinator is writing the answer. */
+export const DISCUSSION_STATUSES = ["active", "closing", "done", "stopped", "failed"] as const;
+export const discussionStatusSchema = z.enum(DISCUSSION_STATUSES);
+export type DiscussionStatus = z.infer<typeof discussionStatusSchema>;
+
+/** One turn of a discussion: a member's, or the coordinator's close. */
+export const discussionTurnRecordSchema = z.object({
+  runId: idSchema,
+  agentId: idSchema,
+  round: z.number().int().min(1),
+  /** Its place in the order, 0-based; null for the close. */
+  position: z.number().int().min(0).nullable(),
+  close: z.boolean(),
+  status: runStatusSchema,
+  /** What it posted; null while it works, and for a pass. */
+  messageId: idSchema.nullable(),
+});
+export type DiscussionTurnRecord = z.infer<typeof discussionTurnRecordSchema>;
+
+export const discussionSchema = z.object({
+  id: idSchema,
+  threadId: idSchema,
+  /** The question: the person's message, or the coordinator's. */
+  questionMessageId: idSchema,
+  coordinatorAgentId: idSchema,
+  /** Who takes part, in order. */
+  memberIds: z.array(idSchema),
+  rounds: z.number().int().min(1),
+  /** The round going now (or the last one), 1-based. */
+  round: z.number().int().min(1),
+  status: discussionStatusSchema,
+  /** The coordinator's agreed answer, once it closed. */
+  closingMessageId: idSchema.nullable(),
+  tainted: z.boolean(),
+  createdAt: timestampSchema,
+  endedAt: timestampSchema.nullable(),
+  turns: z.array(discussionTurnRecordSchema),
+});
+export type Discussion = z.infer<typeof discussionSchema>;
+
+export const discussionListSchema = z.object({ items: z.array(discussionSchema) });
+export type DiscussionList = z.infer<typeof discussionListSchema>;

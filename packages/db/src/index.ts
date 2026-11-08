@@ -18,7 +18,7 @@ export {
   type AgentWrite,
 } from "./repos/agents";
 export { createApprovalStore } from "./repos/approvals";
-export { createArtifactStore } from "./repos/artifacts";
+export { createArtifactStore, referencedBlobKeys } from "./repos/artifacts";
 export { createConnectionStore, listConnectionsDueForRefresh } from "./repos/connections";
 export { recordAudit, type AuditEntry } from "./repos/audit";
 export {
@@ -36,6 +36,8 @@ export {
   markThreadRead,
   unreadThreads,
   type UnreadRow,
+  listConversations,
+  type ConversationRow,
   startHandoff,
   startTurn,
   updateThread,
@@ -181,3 +183,31 @@ export {
   type Tx,
 } from "./tenant";
 export { prepareTestDatabase, withDatabaseName, type TestDatabase } from "./testing";
+export {
+  attachmentLine,
+  attachUploads,
+  createUpload,
+  formatBytes,
+  getUpload,
+  openUpload,
+  sendableUploads,
+  type UploadRow,
+} from "./repos/uploads";
+export {
+  activeDiscussionRuns,
+  getDiscussion,
+  listDiscussions,
+  openDiscussion,
+  openDiscussionIn,
+  startDiscussionTurn,
+  updateDiscussion,
+  type DiscussionRow,
+  type DiscussionTurnRow,
+  type DiscussionWithTurns,
+} from "./repos/discussions";
+export {
+  createSpendLedger,
+  setSpendCap,
+  spendByAgentSince,
+  type SpendByAgent,
+} from "./repos/spend";

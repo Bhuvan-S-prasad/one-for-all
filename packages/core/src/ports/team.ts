@@ -1,5 +1,5 @@
 import type { AgentId, MessageId, RunId, ThreadId } from "../ids";
-import type { RunContext } from "../tenant";
+import type { RunContext, TenantContext } from "../tenant";
 import type { AgentCapability } from "./runtime";
 
 // Agents working as a team (ARCHITECTURE.md §6.3, M5.01). A run hands a piece
@@ -128,6 +128,90 @@ export interface TeamDirectory {
     ctx: RunContext,
     input: { readonly key: string; readonly agent: string; readonly content: string },
   ): Promise<AgentMessage>;
+  /**
+   * Who this run could ask with `ask_group` (ADR-0050), in roster order: the
+   * group's members but itself, for the coordinator's run answering a person
+   * in a group it leads. Empty for every other run.
+   */
+  discussants?(ctx: RunContext): Promise<TeamMember[]>;
+  /**
+   * Ask the whole group (ADR-0050, `ask_group`): post the question from this
+   * run's agent, open a discussion of it among the members (named ones, in
+   * that order, else all but the coordinator) and start it. Only for a
+   * person's run of the coordinator in a group it leads; refused while
+   * another discussion is open. The same `key` opens one discussion.
+   */
+  discuss?(
+    ctx: RunContext,
+    input: {
+      readonly key: string;
+      readonly question: string;
+      readonly order?: readonly string[];
+      readonly rounds?: number;
+    },
+  ): Promise<{ readonly discussionId: string; readonly members: readonly string[] }>;
+}
+
+// ── Discussions (ADR-0050) ───────────────────────────────────────────────────
+
+/** Rounds a discussion has unless asked otherwise, and the most it may have. */
+export const DEFAULT_DISCUSSION_ROUNDS = 2;
+export const MAX_DISCUSSION_ROUNDS = 3;
+/** A turn's step budget, whatever the agent's own: a turn is a short answer. */
+export const DISCUSSION_TURN_STEPS = 8;
+
+/** Where a discussion turn stands, as the run taking it reads it. */
+export interface DiscussionTurn {
+  readonly discussionId: string;
+  /** 1-based. */
+  readonly round: number;
+  readonly rounds: number;
+  /** This member's place in the order, 0-based; null for the close. */
+  readonly position: number | null;
+  /** Everyone taking part, by name, in order. */
+  readonly members: readonly string[];
+  /** The coordinator, who closes. */
+  readonly coordinator: string;
+  readonly close: boolean;
+}
+
+/** A discussion as the loop that runs it needs it. */
+export interface DiscussionPlan {
+  readonly id: string;
+  readonly threadId: ThreadId;
+  /** The question; every turn's request. */
+  readonly questionMessageId: MessageId;
+  readonly coordinator: { readonly id: AgentId; readonly name: string };
+  /** In order. */
+  readonly members: readonly { readonly id: AgentId; readonly name: string }[];
+  readonly rounds: number;
+  readonly status: "active" | "closing" | "done" | "stopped" | "failed";
+  readonly tainted: boolean;
+}
+
+/** Discussions, for the loop that runs their turns (`runDiscussion`). */
+export interface DiscussionStore {
+  get(ctx: TenantContext, discussionId: string): Promise<DiscussionPlan | null>;
+  /**
+   * Make the run for one turn: queued, in the discussion's thread, tainted if
+   * the discussion is. The same turn always gets the same run, so a retried
+   * step makes one. Null when the discussion is no longer open (stopped).
+   */
+  startTurn(
+    ctx: TenantContext,
+    discussionId: string,
+    turn: { readonly round: number; readonly position: number | null; readonly agentId: AgentId },
+  ): Promise<{ readonly runId: RunId } | null>;
+  update(
+    ctx: TenantContext,
+    discussionId: string,
+    patch: {
+      readonly round?: number;
+      readonly status?: DiscussionPlan["status"];
+      readonly tainted?: boolean;
+      readonly closingMessageId?: string;
+    },
+  ): Promise<void>;
 }
 
 /** The member a model named, by handle or by name, ignoring case and a leading `@`. */

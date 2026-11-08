@@ -1,7 +1,7 @@
 import { type TenantContext } from "@ofa/core";
 import { and, asc, desc, eq, inArray, isNull, lt, or, sql, type SQL } from "drizzle-orm";
 import type { Database } from "../client";
-import { message, routine, run, thread, threadMember } from "../schema/index";
+import { agent, approval, message, routine, run, thread, threadMember } from "../schema/index";
 import { withTenant, type Tx } from "../tenant";
 import { likePattern } from "./runs";
 
@@ -655,5 +655,147 @@ export async function unreadThreads(db: Database, ctx: TenantContext): Promise<U
       unread: Number(r.unread),
       lastAt: new Date(r.last_at),
     }));
+  });
+}
+
+// ── Conversations (ADR-0052) ─────────────────────────────────────────────────
+
+export interface ConversationRow {
+  readonly kind: "direct" | "group";
+  readonly threadId: string | null;
+  readonly agentIds: string[];
+  readonly title: string | null;
+  readonly last: {
+    readonly snippet: string;
+    readonly author: "user" | "agent" | "system";
+    readonly agentId: string | null;
+    readonly at: Date;
+  } | null;
+  readonly unread: number;
+  readonly needsYou: number;
+  readonly stuck: boolean;
+  readonly activeAt: Date;
+}
+
+type RawConversation = {
+  kind: "direct" | "group";
+  thread_id: string | null;
+  agent_id: string | null;
+  title: string | null;
+  last_snippet: string | null;
+  last_author: "user" | "agent" | "system" | null;
+  last_agent_id: string | null;
+  last_at: string | null;
+  unread: number;
+  needs_you: number;
+  last_run_status: string | null;
+  active_at: string;
+};
+
+/**
+ * The sidebar (ADR-0052): one row per agent that isn't archived (its current
+ * chat with this person, the one its chat screen opens, or none yet) and one
+ * per group chat this person is in, most recently active first. Requests
+ * waiting count across all of an agent's direct chats and its runs outside
+ * any chat, so a routine's request still raises its agent's row.
+ */
+export async function listConversations(
+  db: Database,
+  ctx: TenantContext,
+  options: { snippetChars: number },
+): Promise<ConversationRow[]> {
+  const n = options.snippetChars;
+  return withTenant(db, ctx, async (tx) => {
+    // Every direct chat between this person and each agent, used three times below.
+    const directOf = (agentCol: SQL, chatsOnly = false) => sql`
+      select t.id from ${thread} t
+      where t.kind = 'direct' and t.archived_at is null
+        ${chatsOnly ? sql`and not exists (select 1 from ${routine} ro where ro.thread_id = t.id)` : sql``}
+        and exists (select 1 from ${threadMember} m where m.thread_id = t.id and m.agent_id = ${agentCol})
+        and exists (select 1 from ${threadMember} m where m.thread_id = t.id and m.user_id = ${ctx.userId})`;
+    const lastMessage = (threadCol: SQL) => sql`
+      select left(regexp_replace(m.content, '[[:space:]]+', ' ', 'g'), ${n}) as snippet,
+             m.author_type as author, m.author_agent_id as agent_id, m.created_at as at
+      from ${message} m where m.thread_id = ${threadCol}
+      order by m.created_at desc limit 1`;
+    const lastRunStatus = (threadCol: SQL) => sql`
+      select r.status from ${run} r
+      where r.thread_id = ${threadCol} and r.parent_run_id is null
+      order by r.created_at desc limit 1`;
+    const unreadIn = (threadIds: SQL) => sql`
+      select count(*)::int from ${message} m
+      join ${threadMember} me on me.thread_id = m.thread_id and me.user_id = ${ctx.userId}
+      where m.thread_id in (${threadIds}) and m.author_type = 'agent'
+        and m.created_at > coalesce(me.last_read_at, me.joined_at)`;
+
+    const direct = await tx.execute<RawConversation>(sql`
+      select 'direct' as kind, lt.id as thread_id, a.id as agent_id, null as title,
+             lm.snippet as last_snippet, lm.author as last_author, lm.agent_id as last_agent_id,
+             lm.at as last_at,
+             (${unreadIn(sql`lt.id`)}) as unread,
+             (select count(*)::int from ${approval} ap join ${run} r on r.id = ap.run_id
+              where ap.status = 'pending' and ap.agent_id = a.id
+                and (r.thread_id is null or r.thread_id in (${directOf(sql`a.id`)}))) as needs_you,
+             (${lastRunStatus(sql`lt.id`)}) as last_run_status,
+             coalesce(lm.at, lt.created_at, a.created_at) as active_at
+      from ${agent} a
+      left join lateral (
+        select t.id, t.created_at from ${thread} t
+        where t.id in (${directOf(sql`a.id`, true)})
+        order by t.updated_at desc, t.created_at desc limit 1
+      ) lt on true
+      left join lateral (${lastMessage(sql`lt.id`)}) lm on true
+      where a.status <> 'archived'`);
+
+    const groups = await tx.execute<RawConversation>(sql`
+      select 'group' as kind, t.id as thread_id, null as agent_id, t.title,
+             lm.snippet as last_snippet, lm.author as last_author, lm.agent_id as last_agent_id,
+             lm.at as last_at,
+             (${unreadIn(sql`t.id`)}) as unread,
+             (select count(*)::int from ${approval} ap join ${run} r on r.id = ap.run_id
+              where ap.status = 'pending' and r.thread_id = t.id) as needs_you,
+             (${lastRunStatus(sql`t.id`)}) as last_run_status,
+             coalesce(lm.at, t.created_at) as active_at
+      from ${thread} t
+      left join lateral (${lastMessage(sql`t.id`)}) lm on true
+      where t.kind = 'group' and t.archived_at is null
+        and exists (select 1 from ${threadMember} m where m.thread_id = t.id and m.user_id = ${ctx.userId})
+      order by active_at desc
+      limit 100`);
+
+    const groupRows = [...groups];
+    const members = await membersOf(
+      tx,
+      groupRows.flatMap((r) => (r.thread_id ? [r.thread_id] : [])),
+    );
+    const toRow = (r: RawConversation): ConversationRow => ({
+      kind: r.kind,
+      threadId: r.thread_id,
+      agentIds:
+        r.kind === "direct"
+          ? r.agent_id
+            ? [r.agent_id]
+            : []
+          : (members.get(r.thread_id ?? "") ?? []).flatMap((m) =>
+              m.type === "agent" ? [m.agentId] : [],
+            ),
+      title: r.title,
+      last:
+        r.last_at && r.last_author
+          ? {
+              snippet: r.last_snippet ?? "",
+              author: r.last_author,
+              agentId: r.last_agent_id,
+              at: new Date(r.last_at),
+            }
+          : null,
+      unread: Number(r.unread ?? 0),
+      needsYou: Number(r.needs_you ?? 0),
+      stuck: r.last_run_status === "failed",
+      activeAt: new Date(r.active_at),
+    });
+    return [...direct, ...groupRows]
+      .map(toRow)
+      .sort((a, b) => b.activeAt.getTime() - a.activeAt.getTime());
   });
 }

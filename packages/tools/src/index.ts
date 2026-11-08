@@ -18,8 +18,25 @@ export {
 export { createToolExecutor, type ToolExecutorOptions } from "./executor";
 export { builtinTools, type BuiltinToolDeps } from "./builtins/index";
 export { artifactsReadTool } from "./builtins/artifacts";
+export {
+  keepDownload,
+  MAX_DOWNLOAD_BYTES,
+  mediaLinks,
+  nameFor,
+  saveFileTool,
+  typeFor,
+} from "./builtins/media";
+export { MAX_WAIT_SECONDS, WAIT_TOOL, waitTool } from "./builtins/wait";
+export { sandboxRunner, videoEditTools } from "./builtins/video";
 export { LOAD_ALL_LIMIT, LOAD_TOOLKIT, loadToolkitTool } from "./builtins/toolkits";
-export { DELEGATE_TASK, delegateTaskTool, MESSAGE_AGENT, messageAgentTool } from "./builtins/team";
+export {
+  ASK_GROUP,
+  askGroupTool,
+  DELEGATE_TASK,
+  delegateTaskTool,
+  MESSAGE_AGENT,
+  messageAgentTool,
+} from "./builtins/team";
 export { REMIND_ME, remindMeTool, SCHEDULE_TASK, scheduleTaskTool } from "./builtins/schedule";
 export { RUN_SKILL, runSkillTool, SAVE_SKILL, saveSkillTool } from "./builtins/skills";
 export {
@@ -36,7 +53,9 @@ export { recallTool, rememberTool, todoTool } from "./builtins/memory";
 export {
   FetchBlockedError,
   isPrivateAddress,
+  safeDownload,
   safeFetch,
+  type SafeDownload,
   type SafeResponse,
 } from "./builtins/safe-fetch";
 export {

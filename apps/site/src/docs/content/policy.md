@@ -17,6 +17,7 @@ Every source gives a verdict and **the strictest wins**. Nothing later can loose
 Not granted to this agent | deny
 On the always-human list | human: payments, deletions, permission or password changes, sharing outside
 Destructive by its own annotation | approve
+Uses paid app credits | approve, with the estimate on the card; refused outright past the monthly limit
 !Outbound in a tainted run | approve, also for an address nobody gave the run; skipped on a site you allowed for this task
 An ask-first rule | approve: workspace rules, then personal rules
 An allow rule | auto, only if nothing above fired
@@ -24,6 +25,8 @@ Otherwise the grant | as you set it: run or ask first
 ```
 
 A tool is on the always-human list when it declares so, or when its action's words name one (`delete_page`, `create_refund`, `share_file`, `update_permissions`), unless it is read-only. App tools from MCP servers don't say which are payments or deletions, so the words decide.
+
+Media apps such as Runway and Higgsfield spend credits you pay for. Their tools that make something carry an estimate from the catalog, so each call asks first and the card says roughly what it costs. Owners and admins can set a monthly limit in Settings; once a call would pass it, agents are refused before anyone is asked. Activity shows this month's spending per agent.
 
 ## Taint
 

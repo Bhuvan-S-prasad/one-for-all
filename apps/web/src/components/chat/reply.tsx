@@ -1,4 +1,4 @@
-import { useAgents, useRun, useRunArtifacts, useRunHandoffs } from "@ofa/client";
+import { useAgents, useApiClient, useRun, useRunArtifacts, useRunHandoffs } from "@ofa/client";
 import type { Agent, Message, Run, RunEvent } from "@ofa/contracts";
 import { Link } from "@tanstack/react-router";
 import {
@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { FileCard } from "@/components/chat/file-card";
+import { isMedia, MediaGrid } from "@/components/chat/media";
 import { Handoffs } from "@/components/chat/handoffs";
 import { StepList } from "@/components/chat/step-trail";
 import { Familiar } from "@/components/familiar";
@@ -342,16 +343,15 @@ export function Reply({
   const ref = useRef<HTMLElement>(null);
   // Only replies on (or near) the screen load their run's steps and sources.
   const seen = useSeen(ref);
+  const api = useApiClient();
   const { run, events } = useRun(seen && message.runId ? message.runId : undefined);
   const blocks = useMemo(() => parseMarkdown(message.content), [message.content]);
   const sources = useMemo(() => runSources(events.data ?? []), [events.data]);
   const doc = isDocument(message.content, blocks);
-  // Files the agent wrote or sent in this run (M3.06), fetched only when there are some.
+  // Files the run kept (M3.06): written, sent, or made by an app such as a
+  // generated image or video (EN.13). Fetched only when there are some.
   const wroteFiles = (events.data ?? []).some(
-    (e) =>
-      e.type === "tool.completed" &&
-      (e.payload.tool === "files.write" || e.payload.tool === "files.send") &&
-      e.payload.artifactId,
+    (e) => e.type === "tool.completed" && e.payload.artifactId,
   );
   const { data: artifacts } = useRunArtifacts(message.runId ?? undefined, { enabled: wroteFiles });
   // Work it handed to other agents (TC.10), and the files they made: a file a
@@ -412,11 +412,27 @@ export function Reply({
 
       {handoffs && handoffs.length > 0 && <Handoffs handoffs={handoffs} agents={agents ?? []} />}
 
-      {files.length > 0 && (
+      {files.some((f) => isMedia(f.mimeType)) && (
+        <MediaGrid
+          className="sm:max-w-[88%]"
+          items={files
+            .filter((f) => isMedia(f.mimeType))
+            .map((f) => ({
+              key: f.id,
+              name: f.name,
+              mimeType: f.mimeType,
+              viewUrl: api.artifactContentUrl(f.id, true),
+              downloadUrl: api.artifactContentUrl(f.id),
+            }))}
+        />
+      )}
+      {files.some((f) => !isMedia(f.mimeType)) && (
         <div className="flex flex-col gap-2 sm:max-w-[88%]">
-          {files.map((file) => (
-            <FileCard key={file.id} file={file} agentName={agent.name} />
-          ))}
+          {files
+            .filter((f) => !isMedia(f.mimeType))
+            .map((file) => (
+              <FileCard key={file.id} file={file} agentName={agent.name} />
+            ))}
         </div>
       )}
 

@@ -279,6 +279,74 @@ export const PROACTIVE_CHECK: PromptTemplate<{ readonly request: string }> = {
     ].join("\n"),
 };
 
+/** A discussion turn's answer when the member has nothing new (ADR-0050). */
+export const PASS_REPLY = "NOTHING_TO_ADD";
+
+/** A pass, give or take punctuation, quotes and case, alone or opening or closing a short line. */
+export const NOTHING_TO_ADD = /^\W*nothing[_ ]to[_ ]add\b|\bnothing[_ ]to[_ ]add\W*$/i;
+
+function listed(names: readonly string[]): string {
+  return names.length > 1
+    ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`
+    : (names[0] ?? "");
+}
+
+export interface DiscussionVars {
+  readonly question: string;
+  /** Everyone taking part, in order. */
+  readonly members: readonly string[];
+  readonly coordinator: string;
+  readonly round: number;
+  readonly rounds: number;
+  /** 0-based. */
+  readonly position: number;
+}
+
+/**
+ * A member's turn in a group discussion (ADR-0050), after the turns before
+ * it in the conversation. It comes last, as the request.
+ */
+export const DISCUSSION_TURN: PromptTemplate<DiscussionVars> = {
+  id: "harness.discussion_turn",
+  version: 1,
+  render: ({ question, members, coordinator, round, rounds, position }) =>
+    [
+      `It is your turn in a discussion in this group chat. Taking part, in this order: ${listed(members)}. This is round ${round} of ${rounds}, and you are number ${position + 1}. ${coordinator} sums up at the end.`,
+      "",
+      "How to take your turn:",
+      "- Answer the question from your own job, with what you know or can find with your tools.",
+      "- Read what the others said before you in this conversation. Build on it, say plainly where you agree or disagree and why, and don't repeat points already made.",
+      "- Keep it short: a few sentences or a short list, at most about 150 words. Speak to the group; don't ask the person questions and don't hand work to anyone.",
+      ...(round > 1
+        ? [
+            `- If you have nothing new to add since your last turn, your whole reply is ${PASS_REPLY}, with nothing else.`,
+          ]
+        : []),
+      "",
+      "The question:",
+      question,
+    ].join("\n"),
+};
+
+/** The coordinator's close of a group discussion (ADR-0050): one agreed answer. */
+export const DISCUSSION_CLOSE: PromptTemplate<Omit<DiscussionVars, "position" | "round">> = {
+  id: "harness.discussion_close",
+  version: 1,
+  render: ({ question, members, rounds }) =>
+    [
+      `The discussion in this group chat is over: ${listed(members)} took turns above (up to ${rounds} ${rounds === 1 ? "round" : "rounds"}). You lead this group, so close it with one agreed answer to the question, for the person.`,
+      "",
+      "How to close:",
+      "- Start with the answer itself, then the reasons.",
+      "- Take the best points from each member and say whose they are, by name. Leave nobody who spoke out.",
+      "- Where members disagreed, say so and give your call with the reason.",
+      "- Don't research anything new, and don't hand work to anyone: the discussion is the input.",
+      "",
+      "The question:",
+      question,
+    ].join("\n"),
+};
+
 /** What the person wrote while the run worked, joined at a step boundary (M5.05). */
 export const STEERING: PromptTemplate<{ readonly text: string }> = {
   id: "harness.steering",

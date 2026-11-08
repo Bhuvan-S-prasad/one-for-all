@@ -22,4 +22,6 @@ Needs `LLM_API_KEY` in the root `.env` and uses real quota (a few model calls pe
 
 A case with `continueWith` runs twice in the same chat: the person writes again (say "continue", maybe after raising the budget) once the first run ends, and the checks grade the second run, with the first in `before` (ADR-0045). Teammates come with capability cards from their grants, as in the app (ADR-0044).
 
+A case with `discussion` is a group discussion (ADR-0050, `discussion.*`): the prompt is the person's question to the whole group, the members answer in turn through `runDiscussion` (each turn its own run on the same harness, tools and policy), and the agent under test, the coordinator, closes. The transcript's `discussion` lists every turn in order with its round and reply, and its reply and run are the close. Each member holds one fact in its standing rules, so checks can tell whether the close reflects every member.
+
 **Adding a case:** write an `EvalCase` (agent, prompt, fixtures, checks) in `suites/` or `redteam/`, add it to `ALL_CASES` in `graders/cli.ts`, and add a scripted-model test in `graders/runner.test.ts` (`graders/desk.test.ts` for cases with a computer) showing one passing and one failing transcript.

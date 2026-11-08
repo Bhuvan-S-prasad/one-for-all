@@ -8,13 +8,16 @@ import type {
 } from "@ofa/core";
 import type { ToolDefinition } from "../define";
 import { artifactsReadTool } from "./artifacts";
+import { saveFileTool } from "./media";
+import { videoEditTools } from "./video";
+import { waitTool } from "./wait";
 import { browserTools, fileTools, shellTool, useSavedLoginTool } from "./computer";
 import { desktopTools } from "./desktop";
 import { recallTool, rememberTool, todoTool } from "./memory";
 import { remindMeTool, scheduleTaskTool } from "./schedule";
 import { runSkillTool, saveSkillTool } from "./skills";
 import { loadToolkitTool } from "./toolkits";
-import { delegateTaskTool, messageAgentTool } from "./team";
+import { askGroupTool, delegateTaskTool, messageAgentTool } from "./team";
 import { readUrlTool, webSearchTool, type Fetcher, type WebSearchProvider } from "./web";
 
 export interface BuiltinToolDeps {
@@ -25,7 +28,7 @@ export interface BuiltinToolDeps {
   readonly sandbox?: SandboxProvider | null;
   /**
    * The other agents a run can hand work to (M5.01) or message (M5.03);
-   * without it, `delegate_task` and `message_agent` are never listed.
+   * without it, `delegate_task`, `message_agent` and `ask_group` are never listed.
    */
   readonly team?: TeamDirectory | null;
   /** Tasks and reminders for later (M5.07); without it, those tools are never listed. */
@@ -41,12 +44,14 @@ export interface BuiltinToolDeps {
 
 /**
  * The built-in tools (ARCHITECTURE.md §9.3): web and memory (M2), the
- * computer (M3), working with other agents and on the clock (M5).
+ * computer (M3), working with other agents and on the clock (M5), editing
+ * video (ADR-0049).
  */
 export function builtinTools(deps: BuiltinToolDeps): ToolDefinition<never>[] {
   return [
     webSearchTool(deps.search),
     readUrlTool(deps.fetcher),
+    saveFileTool(),
     rememberTool(deps.memory),
     recallTool(deps.memory),
     todoTool(),
@@ -55,10 +60,13 @@ export function builtinTools(deps: BuiltinToolDeps): ToolDefinition<never>[] {
     shellTool(deps.sandbox ?? null),
     ...fileTools(deps.sandbox ?? null),
     ...desktopTools(deps.sandbox ?? null, deps.vision),
+    ...videoEditTools(deps.sandbox ?? null, deps.vision),
     artifactsReadTool(),
     loadToolkitTool(),
+    waitTool(),
     delegateTaskTool(deps.team ?? null),
     messageAgentTool(deps.team ?? null),
+    askGroupTool(deps.team ?? null),
     scheduleTaskTool(deps.scheduler ?? null),
     remindMeTool(deps.scheduler ?? null),
     runSkillTool(deps.skills ?? null),

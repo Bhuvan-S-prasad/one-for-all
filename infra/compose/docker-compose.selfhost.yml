@@ -29,6 +29,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      garage:
+        condition: service_healthy
     environment:
       OFA_MODE: self-host
       # Must match the address you open in the browser, including the port.
@@ -49,6 +51,12 @@ services:
       # The agents' computer, reached through the egress container.
       SANDBOX_URL: http://egress:7070
       SANDBOX_TOKEN: ${SANDBOX_TOKEN:?add SANDBOX_TOKEN to infra/compose/.env (see infra/scripts/init-env.sh)}
+      # Large artifacts (ADR-0047). The app sets Garage up on start.
+      BLOB_S3_ENDPOINT: http://garage:3900
+      BLOB_S3_ACCESS_KEY_ID: ${GARAGE_S3_KEY_ID:?add the GARAGE_ settings to infra/compose/.env (see infra/scripts/init-env.sh)}
+      BLOB_S3_SECRET_ACCESS_KEY: ${GARAGE_S3_SECRET:?add the GARAGE_ settings to infra/compose/.env (see infra/scripts/init-env.sh)}
+      GARAGE_ADMIN_URL: http://garage:3903
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN:?add the GARAGE_ settings to infra/compose/.env (see infra/scripts/init-env.sh)}
       INNGEST_EVENT_KEY: ${INNGEST_EVENT_KEY:?run infra/scripts/init-env.sh first}
       INNGEST_SIGNING_KEY: ${INNGEST_SIGNING_KEY:?run infra/scripts/init-env.sh first}
       # Model provider (ADR-0022). Keys are saved per workspace in Settings.
@@ -62,6 +70,25 @@ services:
     ports:
       - "127.0.0.1:${APP_PORT:-3000}:3000"
     mem_limit: 768m
+
+  # Object store for large artifacts (ADR-0047). Default network only: no
+  # published ports, and not on the sandbox network.
+  garage:
+    image: dxflrs/garage:v2.4.1
+    restart: unless-stopped
+    environment:
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:?add the GARAGE_ settings to infra/compose/.env (see infra/scripts/init-env.sh)}
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN:?add the GARAGE_ settings to infra/compose/.env (see infra/scripts/init-env.sh)}
+    volumes:
+      - ./garage/garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
 
   postgres:
     image: pgvector/pgvector:pg17
@@ -171,5 +198,7 @@ networks:
 
 volumes:
   postgres-data:
+  garage-meta:
+  garage-data:
   sandbox-home:
   sandbox-workspace:

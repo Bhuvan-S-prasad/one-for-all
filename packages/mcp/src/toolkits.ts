@@ -9,14 +9,20 @@ import {
 import {
   defineJsonSchemaTool,
   editableTextFields,
+  keepDownload,
+  MAX_DOWNLOAD_BYTES,
+  mediaLinks,
+  safeDownload,
   toDescriptor,
   ToolSchemaError,
   type ToolDefinition,
   type Toolkit,
   type ToolkitSource,
+  type ToolRunContext,
+  type ToolRunResult,
 } from "@ofa/tools";
 import { CATALOG, type CatalogEntry } from "./catalog";
-import type { McpConnections } from "./connections";
+import type { McpCallResult, McpConnections } from "./connections";
 import { gmailTools } from "./extras/gmail";
 
 // A workspace's connected apps as toolkits (M4.05): each server's last
@@ -65,6 +71,80 @@ export function annotationsFor(info: McpToolInfo): ToolAnnotations {
   };
 }
 
+/**
+ * Actions of a media app that only look: checking a job, listing models,
+ * reading the balance. Servers rarely mark these read-only, but they spend
+ * nothing, so they carry no cost (polling a job must not ask each time).
+ */
+const FREE_ACTION =
+  /(^|_)(get|list|status|check|poll|fetch|retrieve|search|describe|info|balance|credits|history|wait)(_|$)/;
+
+/** What a call of this tool costs, for a media app (ADR-0048); undefined when it is free. */
+export function costFor(
+  entry: CatalogEntry | undefined,
+  action: string,
+  annotations: ToolAnnotations,
+): number | undefined {
+  if (!entry?.media || annotations.readOnly || FREE_ACTION.test(action)) return undefined;
+  return entry.media.costPerCallUsd;
+}
+
+/** Most files kept from one call. */
+const MAX_KEPT = 8;
+
+/**
+ * Keep what a media app made (EN.13): inline pictures and sounds, links it
+ * returned as files, and, for a media app, links to media in its text.
+ * Provider links expire, so the files are downloaded into the run's own.
+ */
+async function keepMedia(
+  ctx: ToolRunContext,
+  result: McpCallResult,
+  entry: CatalogEntry | undefined,
+): Promise<{ lines: string[]; artifactId?: string }> {
+  if (!ctx.artifacts) return { lines: [] };
+  const lines: string[] = [];
+  let artifactId: string | undefined;
+  let n = 0;
+  for (const item of result.media ?? []) {
+    if (n >= MAX_KEPT) break;
+    const ext = item.mimeType.split("/")[1]?.replace(/[^a-z0-9]+/g, "") || "bin";
+    const kept = await ctx.artifacts.put({
+      key: `${ctx.idempotencyKey}:media:${n}`,
+      kind: "file",
+      name: `media-${n + 1}.${ext}`,
+      mimeType: item.mimeType,
+      content: item.data,
+      untrusted: true,
+    });
+    n += 1;
+    artifactId ??= kept.id;
+    lines.push(`Kept ${kept.name} (${kept.mimeType}); it shows under your reply.`);
+  }
+  const links = [
+    ...new Set([
+      ...(result.links ?? []).map((l) => l.uri),
+      ...(entry?.media ? mediaLinks(result.text) : []),
+    ]),
+  ];
+  for (const url of links) {
+    if (n >= MAX_KEPT) break;
+    try {
+      const got = await safeDownload(url, { maxBytes: MAX_DOWNLOAD_BYTES });
+      const kept = await keepDownload(ctx, got, {
+        key: `${ctx.idempotencyKey}:media:${n}`,
+        untrusted: true,
+      });
+      n += 1;
+      artifactId ??= kept.id;
+      lines.push(`Kept ${kept.name} (${kept.mimeType}) from ${url}; it shows under your reply.`);
+    } catch (error) {
+      lines.push(`Couldn't keep ${url}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return { lines, ...(artifactId ? { artifactId } : {}) };
+}
+
 /** "create_page" → "Create page", for people. */
 function sentence(action: string): string {
   const words = action.replace(/_/g, " ").trim();
@@ -108,6 +188,10 @@ export function createMcpToolkits(options: {
       if (!base) continue;
       let name = base;
       for (let n = 2; taken.has(name); n += 1) name = `${base}_${n}`;
+      const action = name.slice(server.slug.length + 1);
+      const annotations = annotationsFor(info);
+      const costUsd = costFor(entry, action, annotations);
+      const timeoutMs = entry?.media ? entry.media.callTimeoutSeconds * 1_000 : undefined;
       try {
         tools.push(
           defineJsonSchemaTool({
@@ -116,18 +200,30 @@ export function createMcpToolkits(options: {
               .trim()
               .slice(0, 1_500),
             inputSchema: info.inputSchema,
-            annotations: annotationsFor(info),
+            annotations: costUsd === undefined ? annotations : { ...annotations, costUsd },
             source: "mcp",
+            ...(timeoutMs ? { timeoutMs } : {}),
             // The card names the app and action, then lists the arguments;
             // written text in them can be changed before approving (ADR-0030).
             describe: async () =>
-              `Use ${server.name}: ${info.title?.trim() || sentence(name.slice(server.slug.length + 1))}`,
+              [
+                `Use ${server.name}: ${info.title?.trim() || sentence(action)}`,
+                ...(costUsd !== undefined && entry?.media
+                  ? [
+                      `Uses ${server.name} credits: about $${costUsd.toFixed(2)} (estimate: ${entry.media.costNote})`,
+                    ]
+                  : []),
+              ].join("\n"),
             showArgs: true,
             editable: editableTextFields(info.inputSchema),
             async run(args, ctx) {
               const session = await mcp.connect(ctx, server.id);
               try {
-                const result = await session.callTool(info.name, args as Record<string, unknown>);
+                const result = await session.callTool(
+                  info.name,
+                  args as Record<string, unknown>,
+                  timeoutMs ? { timeoutMs } : undefined,
+                );
                 if (result.isError) {
                   throw Object.assign(
                     new Error(`${server.name} said: ${result.text.slice(0, 2_000)}`),
@@ -136,8 +232,15 @@ export function createMcpToolkits(options: {
                     },
                   );
                 }
+                const kept = await keepMedia(ctx, result, entry);
+                const text = result.text || (kept.lines.length ? "" : "(no output)");
                 // Another app's data: the run is tainted from here (§10.3).
-                return { content: result.text || "(no output)", untrusted: true };
+                const out: ToolRunResult = {
+                  content: [text, ...kept.lines].filter(Boolean).join("\n"),
+                  untrusted: true,
+                  ...(kept.artifactId ? { artifactId: kept.artifactId } : {}),
+                };
+                return out;
               } finally {
                 await session.close().catch(() => {});
               }

@@ -1,4 +1,4 @@
-import { index, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { index, integer, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { user } from "./auth";
 import { createdAt, id, timestampAt, updatedAt } from "./columns";
 import { devicePlatform, membershipRole } from "./enums";
@@ -11,6 +11,8 @@ export const workspace = pgTable("workspace", {
   timeZone: text("time_zone").notNull().default("UTC"),
   /** The last nightly memory pass (M5.09). */
   memoryConsolidatedAt: timestampAt("memory_consolidated_at"),
+  /** Most paid app credits agents may use in a calendar month, in cents (EN.15); null: no cap. */
+  spendCapCents: integer("spend_cap_cents"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });

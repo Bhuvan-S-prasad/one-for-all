@@ -1,0 +1,15 @@
+{
+  "id": "runway",
+  "name": "Runway",
+  "description": "Make and edit images and video with Runway's models, using your Runway credits.",
+  "url": "https://mcp.runwayml.com/mcp",
+  "authOrigin": "https://mcp.runwayml.com",
+  "setup": "automatic",
+  "scopes": ["openid", "api:read_write"],
+  "media": {
+    "callTimeoutSeconds": 600,
+    "costPerCallUsd": 0.5,
+    "costNote": "a 5-second clip at Runway's API prices; images cost less"
+  },
+  "reviewed": "2026-10-19"
+}

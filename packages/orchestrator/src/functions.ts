@@ -1,4 +1,5 @@
 import {
+  discussionStartedEventSchema,
   EMPTY_RUN_USAGE,
   INNGEST_EVENTS,
   memoryConsolidationRequestedEventSchema,
@@ -10,8 +11,10 @@ import {
 import {
   asId,
   type ApprovalStore,
+  type BlobSweeper,
   type ChildRunRequest,
   type ConsolidationResult,
+  type DiscussionStore,
   type LLMGateway,
   type MemoryMaintenance,
   type ChildRunResult,
@@ -30,6 +33,7 @@ import {
   consolidateMemory,
   learnFromRun,
   runAgent,
+  runDiscussion,
   runEvent,
   type HarnessDeps,
 } from "@ofa/harness";
@@ -51,7 +55,14 @@ export interface OrchestratorDeps {
   readonly schedules?: ScheduleRunner;
   /** Nightly memory consolidation (M5.09). */
   readonly memory?: MemoryMaintenance;
+  /** Removes blobs no artifact points at any more (ADR-0047); absent without an object store. */
+  readonly blobSweep?: BlobSweeper;
+  /** Group discussions, run a turn at a time (ADR-0050). */
+  readonly discussions?: DiscussionStore;
 }
+
+/** Hourly, away from the other hourly work. */
+export const BLOB_SWEEP_CRON = "45 * * * *";
 
 /** Hourly: each workspace is consolidated when it is 3 at night there. */
 export const MEMORY_CONSOLIDATION_CRON = "15 * * * *";
@@ -97,11 +108,20 @@ export function inngestSteps(
       id: string,
       opts: { event: string; timeout: number; if: string },
     ) => Promise<{ data?: unknown } | null>;
+    sleep?: (id: string, duration: number) => Promise<unknown>;
   },
   invoke?: InvokeChildRun,
 ): StepRunner {
   const waitForEvent = step.waitForEvent?.bind(step);
+  const sleep = step.sleep?.bind(step);
   return {
+    ...(sleep
+      ? {
+          async sleep(id: string, ms: number) {
+            await sleep(id, Math.max(1_000, ms));
+          },
+        }
+      : {}),
     ...(invoke
       ? {
           async invokeRun(id, child, { timeoutMs }) {
@@ -111,6 +131,8 @@ export function inngestSteps(
                 stopReason?: string | null;
                 reply?: string | null;
                 tainted?: boolean;
+                messageId?: string | null;
+                passed?: boolean;
               } | null;
               if (!result?.status) return null;
               return {
@@ -119,6 +141,8 @@ export function inngestSteps(
                 reply: result.reply ?? null,
                 // Not knowing is treated as having read outside content.
                 tainted: result.tainted ?? true,
+                messageId: result.messageId ?? null,
+                ...(result.passed ? { passed: true } : {}),
               };
             } catch {
               // The child failed after its retries, or ran past the timeout;
@@ -178,17 +202,41 @@ function failureText(error: unknown): string {
 }
 
 export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
-  // A handoff's child is another `agent-run` (M5.01). The function invokes
-  // itself, so it is reached through this holder rather than by name.
+  // A handoff's child is another `agent-run` (M5.01), and so is a discussion
+  // turn (ADR-0050). The function invokes itself, so it is reached through
+  // this holder rather than by name.
   const self: { agentRun?: InngestFunction.Any } = {};
+  /** The `step.invoke` of a child run: a handoff, or a discussion turn. */
+  const childRun = (
+    tenant: { workspaceId: string; userId: string },
+    child: ChildRunRequest,
+    timeoutMs: number,
+  ) => ({
+    function: self.agentRun!,
+    data: messageReceivedEventSchema.parse({
+      workspaceId: tenant.workspaceId,
+      userId: tenant.userId,
+      agentId: child.agentId,
+      threadId: child.threadId,
+      messageId: child.messageId,
+      runId: child.runId,
+      trigger: child.discussion ? "discussion" : "delegation",
+      ...(child.discussion ? { discussion: child.discussion } : {}),
+    }),
+    timeout: timeoutMs,
+  });
 
   const agentRun = inngest.createFunction(
     {
       id: "agent-run",
       name: "Agent run",
       triggers: [{ event: INNGEST_EVENTS.messageReceived }],
-      // One run at a time per agent; more messages wait their turn.
-      concurrency: [{ key: "event.data.agentId", limit: 1 }],
+      // One run at a time per agent, and per thread (ADR-0050): more
+      // messages, and the turns of a discussion, wait their turn.
+      concurrency: [
+        { key: "event.data.agentId", limit: 1 },
+        { key: "event.data.threadId", limit: 1 },
+      ],
       // A person's message outranks queued background work (§6.3, M5.05):
       // it starts up to ten minutes ahead of routines and scheduled tasks.
       priority: { run: "event.data.trigger == 'message' ? 600 : 0" },
@@ -238,29 +286,18 @@ export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
         agentId: asId(data.agentId),
         runId: asId(data.runId),
       };
-      const invoke: InvokeChildRun = (id, child, timeoutMs) =>
-        step.invoke(id, {
-          function: self.agentRun!,
-          data: messageReceivedEventSchema.parse({
-            workspaceId: data.workspaceId,
-            userId: data.userId,
-            agentId: child.agentId,
-            threadId: child.threadId,
-            messageId: child.messageId,
-            runId: child.runId,
-            trigger: "delegation",
-          }),
-          timeout: timeoutMs,
-        });
       const result = await runAgent(
         {
           ctx,
           threadId: asId<ThreadId>(data.threadId),
           trigger: data.trigger,
           requestId: data.messageId,
+          ...(data.discussion ? { discussion: data.discussion } : {}),
         },
         deps.harness,
-        inngestSteps(step, invoke),
+        inngestSteps(step, (id, child, timeoutMs) =>
+          step.invoke(id, childRun(data, child, timeoutMs)),
+        ),
       );
       if (result.learn && result.messageId) {
         // Learning runs as its own function, so this agent's next message
@@ -371,7 +408,52 @@ export function createFunctions(inngest: Inngest.Any, deps: OrchestratorDeps) {
   );
 
   const functions: InngestFunction.Any[] = [agentRun, agentRunCancelled, agentLearn];
+  // A group discussion (ADR-0050): its turns one at a time, each an
+  // `agent-run` it waits for. A person's "stop" cancels it between turns.
+  const discussionRun = (discussions: DiscussionStore) =>
+    inngest.createFunction(
+      {
+        id: "discussion-run",
+        name: "Group discussion",
+        triggers: [{ event: INNGEST_EVENTS.discussionStarted }],
+        concurrency: [{ key: "event.data.threadId", limit: 1 }],
+        cancelOn: [
+          {
+            event: INNGEST_EVENTS.discussionStopped,
+            if: "async.data.discussionId == event.data.discussionId",
+          },
+        ],
+        retries: 4,
+        onFailure: async ({ event, step }) => {
+          const data = discussionStartedEventSchema.parse(event.data.event.data);
+          await step.run("mark-failed", async () => {
+            const ctx: TenantContext = {
+              workspaceId: asId(data.workspaceId),
+              userId: asId(data.userId),
+            };
+            await discussions.update(ctx, data.discussionId, { status: "failed" });
+            return true;
+          });
+        },
+      },
+      async ({ event, step }) => {
+        const data = discussionStartedEventSchema.parse(event.data);
+        const ctx: TenantContext = {
+          workspaceId: asId(data.workspaceId),
+          userId: asId(data.userId),
+        };
+        return runDiscussion(
+          { ctx, discussionId: data.discussionId },
+          { discussions },
+          inngestSteps(step, (id, child, timeoutMs) =>
+            step.invoke(id, childRun(data, child, timeoutMs)),
+          ),
+        );
+      },
+    );
+  if (deps.discussions) functions.push(discussionRun(deps.discussions));
   if (deps.tokenRefresh) functions.push(tokenRefreshFunction(inngest, deps.tokenRefresh));
+  if (deps.blobSweep) functions.push(blobSweepFunction(inngest, deps.blobSweep));
   if (deps.routines) functions.push(routineTickFunction(inngest, deps.routines));
   if (deps.schedules) functions.push(scheduleFireFunction(inngest, deps.schedules));
   if (deps.memory) {
@@ -556,6 +638,20 @@ function scheduleFireFunction(inngest: Inngest.Any, schedules: ScheduleRunner) {
  * sign-in is its own step: one provider that is down doesn't hold up the rest,
  * and it is tried again at the next tick.
  */
+/** The object store's orphan sweep (ADR-0047): one step, one at a time. */
+function blobSweepFunction(inngest: Inngest.Any, sweeper: BlobSweeper) {
+  return inngest.createFunction(
+    {
+      id: "blob-sweep",
+      name: "Remove files no artifact points at",
+      triggers: [{ cron: BLOB_SWEEP_CRON }],
+      concurrency: [{ limit: 1 }],
+      retries: 1,
+    },
+    async ({ step }) => step.run("sweep", () => sweeper.sweep(new Date())),
+  );
+}
+
 function tokenRefreshFunction(inngest: Inngest.Any, refresher: TokenRefresher) {
   return inngest.createFunction(
     {

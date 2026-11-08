@@ -10,6 +10,8 @@ import {
   type ChildRunRequest,
   type ChildRunResult,
   type ConversationMessage,
+  type DiscussionPlan,
+  type DiscussionStore,
   type LLMGateway,
   type LLMRequest,
   type LLMResponse,
@@ -18,6 +20,7 @@ import {
   type MemoryStore,
   type MessageId,
   type RunEventWrite,
+  type RunId,
   type RunRecord,
   type RunStore,
   type StepRunner,
@@ -348,6 +351,58 @@ export function createMemoryChatRecords(): ChatRecordStore & {
     },
     async save(ctx, threadId, record) {
       records.set(`${threadId}:${ctx.agentId}`, structuredClone(record));
+    },
+  };
+}
+
+/**
+ * Discussions in memory (ADR-0050): plans by ID, and each turn's run made in
+ * the runtime, queued and tainted like the discussion.
+ */
+export function createMemoryDiscussions(
+  runtime: MemoryRuntime,
+  plans: readonly DiscussionPlan[] = [],
+): DiscussionStore & {
+  readonly plans: Map<string, DiscussionPlan & { closingMessageId?: string; round: number }>;
+  readonly turns: { runId: string; agentId: string; round: number; position: number | null }[];
+} {
+  const store = new Map(plans.map((p) => [p.id, { ...p, round: 1 }]));
+  const turns: { runId: string; agentId: string; round: number; position: number | null }[] = [];
+  const open = (status: DiscussionPlan["status"]) => status === "active" || status === "closing";
+  return {
+    plans: store,
+    turns,
+    async get(_ctx, id) {
+      return store.get(id) ?? null;
+    },
+    async startTurn(_ctx, id, turn) {
+      const plan = store.get(id);
+      if (!plan || !open(plan.status)) return null;
+      const runId = asId<RunId>(`run_${id}_${turn.round}_${turn.position ?? "close"}`);
+      if (!runtime.runs.records.has(runId)) {
+        runtime.runs.records.set(runId, {
+          id: runId,
+          agentId: turn.agentId,
+          threadId: plan.threadId,
+          trigger: "discussion",
+          status: "queued",
+          tainted: plan.tainted,
+          usage: { inputTokens: 0, outputTokens: 0, costUsd: 0, modelCalls: 0, toolCalls: 0 },
+        });
+        turns.push({ runId, ...turn });
+      }
+      return { runId };
+    },
+    async update(_ctx, id, patch) {
+      const plan = store.get(id);
+      if (!plan || !open(plan.status)) return;
+      store.set(id, {
+        ...plan,
+        ...(patch.round !== undefined ? { round: patch.round } : {}),
+        ...(patch.status ? { status: patch.status } : {}),
+        ...(patch.tainted ? { tainted: true } : {}),
+        ...(patch.closingMessageId ? { closingMessageId: patch.closingMessageId } : {}),
+      });
     },
   };
 }

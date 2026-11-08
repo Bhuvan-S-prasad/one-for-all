@@ -260,6 +260,16 @@ export function timeline(events: readonly RunEvent[]): Timeline {
           at: e.createdAt,
         });
         break;
+      case "discussion.passed":
+        closeReads();
+        items.push({
+          id: e.id,
+          title: "Had nothing new to add, so it passed",
+          detail: null,
+          state: "done",
+          at: e.createdAt,
+        });
+        break;
       case "run.steered":
         closeReads();
         items.push({

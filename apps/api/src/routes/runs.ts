@@ -41,7 +41,10 @@ import type { AppEnv } from "../types";
  * tell them apart (UX.10).
  */
 export function runRoutes(
-  deps: Pick<Container, "db" | "sessions" | "bus" | "dispatcher" | "runs" | "logger" | "artifacts">,
+  deps: Pick<
+    Container,
+    "db" | "sessions" | "bus" | "dispatcher" | "runs" | "logger" | "artifacts" | "discussions"
+  >,
 ) {
   const { db } = deps;
   const afterSchema = z.object({ after: z.coerce.number().int().min(-1).optional() });
@@ -140,6 +143,11 @@ export function runRoutes(
         const tenant = c.get("tenant");
         const run = await getRun(db, tenant, c.req.param("id"));
         if (!run) throw new NotFoundError("Run");
+        // Stopping a discussion turn stops the discussion, not just this
+        // turn: otherwise the next member would start (ADR-0050).
+        if (run.trigger === "discussion" && run.threadId) {
+          await deps.discussions.stopIn(tenant, run.threadId);
+        }
         if (!TERMINAL.has(run.status)) {
           await deps.dispatcher.cancelRun({
             workspaceId: tenant.workspaceId,

@@ -69,11 +69,20 @@ export function originCheck(allowedOrigins: readonly string[]): MiddlewareHandle
     const hasBody = (length !== undefined && length !== "0") || c.req.header("transfer-encoding");
     if (!isUpgrade && hasBody) {
       const type = c.req.header("content-type")?.split(";")[0]?.trim().toLowerCase();
-      if (type !== "application/json") {
+      // A file upload is raw bytes (EN.09); still same-origin, and a
+      // cross-site page can't send this type without a preflight we never answer.
+      const rawUpload =
+        type === "application/octet-stream" && isUploadRequest(c.req.method, c.req.path);
+      if (type !== "application/json" && !rawUpload) {
         throw new AppError("bad_request", "Send request bodies as application/json");
       }
     }
 
     await next();
   };
+}
+
+/** `POST /api/threads/<id>/uploads`: the one route that takes raw bytes (EN.09). */
+export function isUploadRequest(method: string, path: string): boolean {
+  return method === "POST" && /^\/api\/threads\/[0-9a-f-]{36}\/uploads$/i.test(path);
 }

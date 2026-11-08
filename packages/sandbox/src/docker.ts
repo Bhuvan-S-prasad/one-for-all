@@ -66,22 +66,56 @@ export function createDockerSandbox(options: DockerSandboxOptions): SandboxProvi
       );
     }
     const payload = (await response.json().catch(() => ({}))) as { error?: string } & T;
-    if (!response.ok) {
-      if (response.status === 401) {
-        throw new SandboxError("unavailable", "The app and the sandbox disagree on SANDBOX_TOKEN.");
-      }
-      if (response.status === 423) {
-        throw new SandboxError(
-          "taken_over",
-          "A person has taken over your computer right now. Stop and tell them what you need, or try again after they hand it back.",
-        );
-      }
-      throw new SandboxError(
-        ERROR_CODES[response.status] ?? "unavailable",
-        payload.error ?? `The computer answered ${response.status}`,
+    if (!response.ok) throw refusal(response.status, payload.error);
+    return payload;
+  }
+
+  function refusal(status: number, error: string | undefined): SandboxError {
+    if (status === 401) {
+      return new SandboxError("unavailable", "The app and the sandbox disagree on SANDBOX_TOKEN.");
+    }
+    if (status === 423) {
+      return new SandboxError(
+        "taken_over",
+        "A person has taken over your computer right now. Stop and tell them what you need, or try again after they hand it back.",
       );
     }
-    return payload;
+    return new SandboxError(
+      ERROR_CODES[status] ?? "unavailable",
+      error ?? `The computer answered ${status}`,
+    );
+  }
+
+  /** A raw-bytes request to `/files/raw` (ADR-0047). */
+  async function raw(
+    method: "GET" | "PUT",
+    agentId: AgentId,
+    path: string,
+    init: RequestInit = {},
+  ) {
+    const url = new URL(`${base}/files/raw`);
+    url.searchParams.set("agent", agentId);
+    url.searchParams.set("path", path);
+    let response: Response;
+    try {
+      response = await fetchImpl(url, {
+        ...init,
+        method,
+        headers: { authorization: `Bearer ${options.token}`, ...init.headers },
+        // A large file takes a while either way; minutes, not hours.
+        signal: AbortSignal.timeout(30 * 60_000),
+      });
+    } catch {
+      throw new SandboxError(
+        "unavailable",
+        "The agents' computer is not reachable. Is the sandbox running?",
+      );
+    }
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      throw refusal(response.status, payload.error);
+    }
+    return response;
   }
 
   /**
@@ -119,6 +153,21 @@ export function createDockerSandbox(options: DockerSandboxOptions): SandboxProvi
         path,
         content: Buffer.from(content).toString("base64"),
       });
+    },
+
+    async readFileStream(agentId, path) {
+      const response = await raw("GET", agentId, path);
+      if (!response.body) throw new SandboxError("unavailable", "The computer sent no file.");
+      return { body: response.body, size: Number(response.headers.get("content-length") ?? 0) };
+    },
+
+    async writeFileStream(agentId, path, body, size) {
+      const response = await raw("PUT", agentId, path, {
+        body: ReadableStream.from(body),
+        headers: { "content-type": "application/octet-stream", "content-length": String(size) },
+        duplex: "half",
+      } as RequestInit);
+      await response.body?.cancel();
     },
 
     async listFiles(agentId, path) {

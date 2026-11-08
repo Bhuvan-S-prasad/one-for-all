@@ -13,6 +13,12 @@ export const busPayloadSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("run.updated"), runId: z.string() }),
   z.object({ kind: z.literal("message.created"), threadId: z.string(), messageId: z.string() }),
   z.object({ kind: z.literal("agent.updated"), agentId: z.string() }),
+  /** A group discussion moved on: a turn started or ended, or it closed (ADR-0050). */
+  z.object({
+    kind: z.literal("discussion.updated"),
+    threadId: z.string(),
+    discussionId: z.string(),
+  }),
 ]);
 export type BusPayload = z.infer<typeof busPayloadSchema>;
 

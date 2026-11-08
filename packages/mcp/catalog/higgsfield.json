@@ -1,0 +1,15 @@
+{
+  "id": "higgsfield",
+  "name": "Higgsfield",
+  "description": "Make images and video with Higgsfield's models, using your Higgsfield credits.",
+  "url": "https://mcp.higgsfield.ai/mcp",
+  "authOrigin": "https://clerk.higgsfield.ai",
+  "setup": "automatic",
+  "scopes": ["openid", "email", "offline_access"],
+  "media": {
+    "callTimeoutSeconds": 600,
+    "costPerCallUsd": 0.5,
+    "costNote": "a short clip at Higgsfield's credit prices; images cost less"
+  },
+  "reviewed": "2026-10-19"
+}

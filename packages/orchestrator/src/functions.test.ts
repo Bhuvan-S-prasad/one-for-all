@@ -109,6 +109,7 @@ describe("inngestSteps", () => {
       stopReason: "final_answer",
       reply: "Done: 3 papers.",
       tainted: false,
+      messageId: "m",
     });
     // Durable waits round up to a second.
     expect(calls).toEqual([{ id: "tool-0-0-delegate", request: child, timeoutMs: 1_000 }]);
@@ -118,6 +119,40 @@ describe("inngestSteps", () => {
     expect(await failing.invokeRun!("x", child, { timeoutMs: 60_000 })).toBeNull();
     // Without invoke, runs can't hand work over.
     expect(inngestSteps(step).invokeRun).toBeUndefined();
+  });
+
+  it("reads back a discussion turn's pass (ADR-0050)", async () => {
+    const steps = inngestSteps(step, async () => ({
+      status: "succeeded",
+      stopReason: "final_answer",
+      messageId: null,
+      reply: null,
+      tainted: false,
+      passed: true,
+    }));
+    const turn = {
+      agentId: asId<AgentId>("ana"),
+      runId: asId<RunId>("turn_1"),
+      threadId: asId<ThreadId>("group_1"),
+      messageId: asId<MessageId>("question_1"),
+      discussion: {
+        discussionId: "d1",
+        round: 2,
+        rounds: 2,
+        position: 0,
+        members: ["Ana"],
+        coordinator: "Lead",
+        close: false,
+      },
+    };
+    expect(await steps.invokeRun!("turn-2-0-run", turn, { timeoutMs: 500 })).toEqual({
+      status: "succeeded",
+      stopReason: "final_answer",
+      reply: null,
+      tainted: false,
+      messageId: null,
+      passed: true,
+    });
   });
 });
 

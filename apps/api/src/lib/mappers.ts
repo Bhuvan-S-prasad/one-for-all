@@ -3,6 +3,7 @@ import {
   runEventSchema,
   type Agent,
   type AgentSpec,
+  type Discussion,
   type Episode,
   type MemoryItem,
   type Message,
@@ -13,9 +14,11 @@ import {
   type Skill,
   type Thread,
   type ThreadSummary,
+  type Upload,
 } from "@ofa/contracts";
 import type {
   AgentWithGrants,
+  DiscussionWithTurns,
   EpisodeRow,
   MemoryReviewRow,
   MessageRow,
@@ -26,6 +29,7 @@ import type {
   SkillRow,
   ThreadSummaryRow,
   ThreadWithMembers,
+  UploadRow,
 } from "@ofa/db";
 
 // Database rows → API shapes from `@ofa/contracts`. The client validates
@@ -62,6 +66,32 @@ export function toThread(row: ThreadWithMembers): Thread {
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     archivedAt: row.archivedAt?.toISOString() ?? null,
+  };
+}
+
+export function toDiscussion(row: DiscussionWithTurns): Discussion {
+  return {
+    id: row.id,
+    threadId: row.threadId,
+    questionMessageId: row.questionMessageId,
+    coordinatorAgentId: row.coordinatorAgentId,
+    memberIds: row.memberIds,
+    rounds: row.rounds,
+    round: row.round,
+    status: row.status,
+    closingMessageId: row.closingMessageId,
+    tainted: row.tainted,
+    createdAt: row.createdAt.toISOString(),
+    endedAt: row.endedAt?.toISOString() ?? null,
+    turns: row.turns.map((t) => ({
+      runId: t.runId,
+      agentId: t.agentId,
+      round: t.round,
+      position: t.position,
+      close: t.position === null,
+      status: t.status,
+      messageId: t.messageId,
+    })),
   };
 }
 
@@ -201,6 +231,17 @@ export function toEpisode(row: EpisodeRow): Episode {
     summary: row.summary,
     outcome: row.outcome,
     tainted: row.tainted,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+export function toUpload(row: UploadRow): Upload {
+  return {
+    id: row.id,
+    threadId: row.threadId,
+    name: row.name,
+    mimeType: row.mimeType,
+    size: row.size,
     createdAt: row.createdAt.toISOString(),
   };
 }

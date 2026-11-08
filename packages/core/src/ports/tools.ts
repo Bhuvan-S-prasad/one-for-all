@@ -30,6 +30,12 @@ export interface ToolAnnotations {
    * (`gmail.delete_message` is a deletion) unless they are read-only.
    */
   readonly humanOnly?: HumanOnlyKind;
+  /**
+   * What one call costs in the app's credits, in US dollars, as estimated
+   * from the catalog (EN.15, ADR-0048). A paid call always asks first, its
+   * card shows the estimate, and it counts towards the monthly cap.
+   */
+  readonly costUsd?: number;
 }
 
 export type ToolSourceKind = "builtin" | "mcp" | "sandbox";

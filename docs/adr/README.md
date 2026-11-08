@@ -64,3 +64,8 @@ Each file records one significant decision: the context, what we chose, what we 
 | [0044](0044-team-roster-from-grants-coordinators-delegate.md) | The team roster is built from grants, and coordinators delegate first | Runtime | Accepted |
 | [0045](0045-a-chat-keeps-its-working-state.md) | A chat keeps each agent's working state across runs | Runtime | Accepted |
 | [0046](0046-public-site-and-docs-as-their-own-app.md) | The public site and docs are their own static app | Clients | Accepted |
+| [0047](0047-object-storage-for-media.md) | Large files go to object storage, Garage in self-host | Platform | Accepted |
+| [0048](0048-media-generation-through-catalog-apps.md) | Media comes from catalog apps, is kept as files, and paid calls ask first under a monthly cap | Integrations | Accepted |
+| [0049](0049-video-engine-as-a-standalone-package.md) | The video engine is a standalone package; One-for-All uses it through a thin adapter | Platform | Accepted |
+| [0050](0050-group-discussions-in-turns.md) | A group discusses in turns, one agent at a time, and the coordinator closes | Runtime | Accepted |
+| [0051](0051-learn-app-explains-the-codebase.md) | `apps/learn` explains the codebase from a code index built from the source | Clients | Accepted |

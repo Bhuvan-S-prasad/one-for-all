@@ -18,4 +18,10 @@ export {
   type FakeTool,
 } from "./testing";
 export type { McpToolInfo } from "@ofa/core";
-export { annotationsFor, createMcpToolkits, toolNameFor, type McpToolkits } from "./toolkits";
+export {
+  annotationsFor,
+  costFor,
+  createMcpToolkits,
+  toolNameFor,
+  type McpToolkits,
+} from "./toolkits";

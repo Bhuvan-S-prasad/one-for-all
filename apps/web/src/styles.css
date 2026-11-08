@@ -296,6 +296,52 @@
   }
 }
 
+/* Menus open from their trigger (ADR-0052): set the origin with origin-* classes. */
+.menu-pop {
+  animation: menu-pop 160ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@keyframes menu-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+/* A pressable row or button gives a little under the finger. */
+.press {
+  transition:
+    transform 140ms ease-out,
+    background-color 150ms ease;
+}
+.press:active {
+  transform: scale(0.98);
+}
+
+/* "Action needed" pulses once when it first shows, not forever. */
+.pip-in {
+  animation: pip-in 900ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@keyframes pip-in {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--primary) 70%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 8px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .menu-pop,
+  .pip-in {
+    animation: none !important;
+  }
+  .press:active {
+    transform: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .toast-in,
   .familiar,

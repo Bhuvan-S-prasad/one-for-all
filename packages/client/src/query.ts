@@ -13,6 +13,8 @@ export const queryKeys = {
   groupThreads: (archived: boolean) => ["threads", "list", "groups", archived] as const,
   /** Under the chat lists, so a new message refreshes it. */
   unread: ["threads", "list", "unread"] as const,
+  /** The sidebar (ADR-0052); under the chat lists too. */
+  conversations: ["threads", "list", "conversations"] as const,
   thread: (id: string) => ["threads", id] as const,
   agentStats: ["agents-stats"] as const,
   teamRoster: ["agents-team"] as const,
@@ -21,6 +23,7 @@ export const queryKeys = {
   usage: ["settings", "usage"] as const,
   logins: ["settings", "logins"] as const,
   messages: (threadId: string) => ["threads", threadId, "messages"] as const,
+  discussions: (threadId: string) => ["threads", threadId, "discussions"] as const,
   runs: (agentId?: string) => ["runs", "list", agentId ?? "all"] as const,
   runLists: ["runs", "list"] as const,
   runSearch: (filter: RunFilter) => ["runs", "search", filter] as const,
@@ -43,6 +46,7 @@ export const queryKeys = {
   schedules: (agentId?: string) => ["schedules", agentId ?? "all"] as const,
   scheduleLists: ["schedules"] as const,
   workspaceSettings: ["settings", "workspace"] as const,
+  spend: ["settings", "spend"] as const,
   skills: (agentId?: string) => ["skills", agentId ?? "all"] as const,
   skillLists: ["skills"] as const,
   episodes: (agentId?: string) => ["episodes", agentId ?? "all"] as const,
@@ -161,6 +165,12 @@ export const runArtifactsQuery = (api: ApiClient, id: string) =>
     queryKey: queryKeys.runArtifacts(id),
     queryFn: async () => (await api.runArtifacts(id)).items,
     staleTime: Infinity,
+  });
+
+export const discussionsQuery = (api: ApiClient, threadId: string) =>
+  queryOptions({
+    queryKey: queryKeys.discussions(threadId),
+    queryFn: async () => (await api.threadDiscussions(threadId)).items,
   });
 
 export const runHandoffsQuery = (api: ApiClient, id: string) =>

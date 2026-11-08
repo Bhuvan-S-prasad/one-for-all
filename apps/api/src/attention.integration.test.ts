@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { loadConfig } from "@ofa/config";
 import {
   agentFileSchema,
+  conversationListSchema,
   importAgentResponseSchema,
   messagePageSchema,
   routineSchema,
@@ -46,6 +47,8 @@ describe.skipIf(!hasDb)("checks, unread and agent files (integration)", async ()
     approvalDecided: async () => {},
     scheduleCreated: async () => {},
     consolidateMemory: async () => {},
+    discussionStarted: async () => {},
+    discussionStopped: async () => {},
     scheduleCancelled: async () => {},
   };
   const container = createContainer(config, {
@@ -132,6 +135,45 @@ describe.skipIf(!hasDb)("checks, unread and agent files (integration)", async ()
     expect(unread.items).toEqual([]);
   });
 
+  // ── Conversations (ADR-0052) ──────────────────────────────────────────────
+
+  it("lists each agent's latest chat with its last message, and what waits for you", async () => {
+    const chat = threadSchema.parse(await json(send("GET", `/api/agents/${helperId}/thread`)));
+    const list = async () =>
+      conversationListSchema.parse(await json(send("GET", "/api/threads/conversations"))).items;
+
+    let items = await list();
+    // Helper spoke last, so it comes first; Sentinel has no chat yet but still has a row.
+    expect(items.map((c) => c.agentIds[0])).toEqual([helperId, watcherId]);
+    expect(items[0]).toMatchObject({
+      kind: "direct",
+      threadId: chat.id,
+      last: { snippet: "Hi! How can I help?", author: "agent", agentId: helperId },
+      unread: 0,
+      needsYou: 0,
+      stuck: false,
+    });
+    expect(items[1]).toMatchObject({ kind: "direct", threadId: null, last: null, unread: 0 });
+
+    // A request waiting in Helper's chat raises its row.
+    const run = started.at(-1)!;
+    const ctx: RunContext = { ...tenant, agentId: asId(helperId), runId: asId(run.runId) };
+    const asked = await container.approvals.request(ctx, {
+      toolCallId: "tool-9-0",
+      tool: "gmail.send_email",
+      args: {},
+      summary: "Send a note",
+      reasons: ["Sends email"],
+      verdict: "approve",
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    items = await list();
+    expect(items.find((c) => c.threadId === chat.id)?.needsYou).toBe(1);
+    await container.approvals.decide(tenant, asked.id, { status: "rejected", decidedBy: null });
+    items = await list();
+    expect(items.find((c) => c.threadId === chat.id)?.needsYou).toBe(0);
+  });
+
   // ── Proactive checks (M5.10) ──────────────────────────────────────────────
 
   it("runs a check read-only, posting nothing to start and nothing when all is quiet", async () => {
@@ -161,8 +203,8 @@ describe.skipIf(!hasDb)("checks, unread and agent files (integration)", async ()
     // What the agent sees, and its quiet answer.
     const ctx: RunContext = { ...tenant, agentId: asId(watcherId), runId: asId(run.id) };
     const tools = await container.harness.tools.listTools(ctx, { readOnly: true });
-    // Only what reads: its granted recall and the platform's artifacts.read.
-    expect(tools.map((t) => t.name).sort()).toEqual(["artifacts.read", "recall"]);
+    // Only what reads: its granted recall and the platform's artifacts.read and wait.
+    expect(tools.map((t) => t.name).sort()).toEqual(["artifacts.read", "recall", "wait"]);
     const refused = await container.harness.tools.execute(
       {
         name: "remember",

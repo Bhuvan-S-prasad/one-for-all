@@ -182,6 +182,18 @@ export interface SandboxHandle {
   /** Paths are relative to the shared workspace unless absolute. */
   readFile(agentId: AgentId, path: string): Promise<Uint8Array>;
   writeFile(agentId: AgentId, path: string, content: Uint8Array | string): Promise<void>;
+  /** A file's bytes as a stream, up to 2 GB (ADR-0047): footage and renders. */
+  readFileStream?(
+    agentId: AgentId,
+    path: string,
+  ): Promise<{ readonly body: AsyncIterable<Uint8Array>; readonly size: number }>;
+  /** Write a file from a stream of exactly `size` bytes, up to 2 GB. */
+  writeFileStream?(
+    agentId: AgentId,
+    path: string,
+    body: AsyncIterable<Uint8Array>,
+    size: number,
+  ): Promise<void>;
   listFiles(agentId: AgentId, path: string): Promise<{ entries: FileEntry[]; truncated: boolean }>;
   browser(agentId: AgentId): Promise<AgentBrowser>;
   /**

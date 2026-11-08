@@ -142,6 +142,9 @@ importers:
       '@hono/node-ws':
         specifier: 1.3.1
         version: 1.3.1(@hono/node-server@2.1.3(hono@4.13.11))(hono@4.13.11)
+      '@ofa/blobs':
+        specifier: workspace:*
+        version: link:../../packages/blobs
       '@ofa/config':
         specifier: workspace:*
         version: link:../../packages/config
@@ -206,6 +209,58 @@ importers:
       tsx:
         specifier: 4.23.15
         version: 4.23.15
+
+  apps/learn:
+    dependencies:
+      '@fontsource-variable/bricolage-grotesque':
+        specifier: 5.3.0
+        version: 5.3.0
+      '@fontsource-variable/geist':
+        specifier: 5.3.0
+        version: 5.3.0
+      '@fontsource-variable/geist-mono':
+        specifier: 5.3.0
+        version: 5.3.0
+      '@tanstack/react-router':
+        specifier: 1.170.40
+        version: 1.170.40(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      react:
+        specifier: 19.3.0
+        version: 19.3.0
+      react-dom:
+        specifier: 19.3.0
+        version: 19.3.0(react@19.3.0)
+    devDependencies:
+      '@ofa/tailwind-config':
+        specifier: workspace:*
+        version: link:../../tooling/tailwind
+      '@tailwindcss/vite':
+        specifier: 4.3.3
+        version: 4.3.3(vite@8.3.1(@types/node@24.19.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+      '@types/node':
+        specifier: 24.19.0
+        version: 24.19.0
+      '@types/react':
+        specifier: 19.3.0
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: 19.3.0
+        version: 19.3.0(@types/react@19.3.0)
+      '@vitejs/plugin-react':
+        specifier: 6.1.1
+        version: 6.1.1(vite@8.3.1(@types/node@24.19.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+      tailwindcss:
+        specifier: 4.3.3
+        version: 4.3.3
+      tsx:
+        specifier: 4.23.15
+        version: 4.23.15
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vite:
+        specifier: 8.3.1
+        version: 8.3.1(@types/node@24.19.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)
 
   apps/site:
     dependencies:
@@ -343,6 +398,9 @@ importers:
 
   evals:
     dependencies:
+      '@ofa/contracts':
+        specifier: workspace:*
+        version: link:../packages/contracts
       '@ofa/core':
         specifier: workspace:*
         version: link:../packages/core
@@ -365,6 +423,15 @@ importers:
       tsx:
         specifier: 4.23.15
         version: 4.23.15
+
+  packages/blobs:
+    dependencies:
+      '@ofa/core':
+        specifier: workspace:*
+        version: link:../core
+      aws4fetch:
+        specifier: 1.0.20
+        version: 1.0.20
 
   packages/client:
     dependencies:
@@ -561,6 +628,9 @@ importers:
       '@ofa/policy':
         specifier: workspace:*
         version: link:../policy
+      '@ofa/video':
+        specifier: workspace:*
+        version: link:../video
       zod:
         specifier: 4.6.5
         version: 4.6.5
@@ -580,6 +650,16 @@ importers:
       drizzle-orm:
         specifier: 0.45.3
         version: 0.45.3(@opentelemetry/api@1.9.1)(@types/pg@8.15.6)(kysely@0.29.6)(postgres@3.4.9)
+      tsx:
+        specifier: 4.23.15
+        version: 4.23.15
+
+  packages/video:
+    dependencies:
+      zod:
+        specifier: 4.6.5
+        version: 4.6.5
+    devDependencies:
       tsx:
         specifier: 4.23.15
         version: 4.23.15
@@ -2396,6 +2476,9 @@ packages:
   assertion-error@2.0.1:
     resolution: {integrity: sha512-Izi8RQcffqCeNVgFigKli1ssklIbpHnCYc6AknXGYoB6grJqyeby7jv12JUQgmTAnIDnbck1uxksT4dzN3PWBA==}
     engines: {node: '>=12'}
+
+  aws4fetch@1.0.20:
+    resolution: {integrity: sha512-/djoAN709iY65ETD6LKCtyyEI04XIBP5xVvfmNxsEP0uJB5tyaGBztSryRr4HqMStr9R06PisQE7m9zDTXKu6g==}
 
   babel-dead-code-elimination@1.0.12:
     resolution: {integrity: sha512-GERT7L2TiYcYDtYk1IpD+ASAYXjKbLTDPhBtYj7X1NuRMDTMtAx9kyBenub1Ev41lo91OHCKdmP+egTDmfQ7Ig==}
@@ -5538,6 +5621,8 @@ snapshots:
   ansis@4.4.0: {}
 
   assertion-error@2.0.1: {}
+
+  aws4fetch@1.0.20: {}
 
   babel-dead-code-elimination@1.0.12:
     dependencies:

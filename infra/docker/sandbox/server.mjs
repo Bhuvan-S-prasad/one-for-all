@@ -18,6 +18,8 @@
 //   POST /files/read  {agent, path}    {content: base64, size}
 //   POST /files/write {agent, path, content: base64}
 //   POST /files/list  {agent, path}
+//   GET  /files/raw?agent=&path=       a file's raw bytes, streamed (up to 2 GB)
+//   PUT  /files/raw?agent=&path=       write a file from the raw request body
 //   POST /browser {agent}              start the agent's desktop and browser; {path} of its CDP endpoint
 //   POST /open {agent, path}           open a file or folder in its app on the desktop
 //   POST /apps {agent, request}        its desktop apps through their accessibility tree
@@ -161,6 +163,11 @@ function agentEnv(user, extra = {}) {
     GTK2_RC_FILES: "/etc/gtk-2.0/one-for-all.gtkrc",
     // GTK2 apps (PCManFM) publish their accessibility tree only when asked (DT.09).
     GTK_MODULES: "gail:atk-bridge",
+    // The video engine's Python and models (ADR-0049); numba caches compiled
+    // code in the agent's own home, never a shared folder another agent could fill.
+    ...(process.env.OFA_VIDEO_PYTHON ? { OFA_VIDEO_PYTHON: process.env.OFA_VIDEO_PYTHON } : {}),
+    ...(process.env.OFA_VIDEO_MODELS ? { OFA_VIDEO_MODELS: process.env.OFA_VIDEO_MODELS } : {}),
+    NUMBA_CACHE_DIR: `${user.home}/.cache/numba`,
     ...extra,
   };
   if (PROXY) {
@@ -1096,6 +1103,81 @@ function refuseIfTakenOver(body) {
   }
 }
 
+/** Largest file streamed in or out: just under 2 GB (ADR-0047). */
+const MAX_STREAM = 2 * 1024 * 1024 * 1024 - 1;
+
+/**
+ * Raw bytes of any file up to 2 GB (ADR-0047): footage people upload, renders
+ * agents send back. `GET /files/raw?agent=&path=` streams a file out, `PUT`
+ * streams one in (Content-Length required). Same rules as /files/read and
+ * /files/write: as the agent, relative to /workspace, a leading ~ its home.
+ */
+async function streamFile(req, res, url) {
+  const user = await agentUser(url.searchParams.get("agent"));
+  const path = textArg(url.searchParams.get("path") ?? "", "path", 4096);
+  if (req.method === "GET") {
+    // The size first, as the agent, so the reply can say how long it is.
+    const sized = await runAs(user, `${PATH_ARG} && [ -f "$p" ] && stat -c %s -- "$p"`, [
+      WORKSPACE,
+      path,
+    ]);
+    if (sized.exitCode !== 0) throw httpError(404, sized.stderr.trim() || "No such file");
+    const size = Number(sized.stdout.trim());
+    if (!(size <= MAX_STREAM)) throw httpError(413, "The file is larger than 2 GB");
+    const child = spawnAs(user, [
+      "bash",
+      "-c",
+      `${PATH_ARG} && exec cat -- "$p"`,
+      "bash",
+      WORKSPACE,
+      path,
+    ]);
+    res.writeHead(200, {
+      "content-type": "application/octet-stream",
+      "content-length": String(size),
+    });
+    child.stderr.resume();
+    child.stdout.pipe(res);
+    // A caller that goes away stops the copy.
+    res.on("close", () => {
+      if (child.exitCode === null) killGroup(child.pid);
+    });
+    return;
+  }
+  if (req.method !== "PUT") throw httpError(405, "Use GET or PUT");
+  if (takenOver.has(user.agentId) && url.searchParams.get("person") !== "1") {
+    throw httpError(423, "A person is using this computer right now");
+  }
+  const size = Number(req.headers["content-length"]);
+  if (!Number.isInteger(size) || size < 0) throw httpError(411, "Content-Length is required");
+  if (size > MAX_STREAM) throw httpError(413, "The file is larger than 2 GB");
+  const child = spawnAs(user, [
+    "bash",
+    "-c",
+    `${PATH_ARG} && umask 007 && mkdir -p -- "$(dirname -- "$p")" && exec cat > "$p"`,
+    "bash",
+    WORKSPACE,
+    path,
+  ]);
+  const errors = [];
+  child.stderr.on("data", (chunk) => errors.push(chunk));
+  let received = 0;
+  req.on("data", (chunk) => {
+    received += chunk.length;
+    if (received > size) req.destroy(httpError(413, "More bytes than Content-Length"));
+  });
+  req.pipe(child.stdin);
+  const code = await new Promise((resolve) => child.on("close", resolve));
+  if (code !== 0) {
+    throw httpError(
+      400,
+      Buffer.concat(errors).toString("utf8").trim() || "Could not write the file",
+    );
+  }
+  if (received !== size) throw httpError(400, "The upload ended early");
+  send(res, 200, { size: received });
+}
+
 const routes = {
   async "POST /exec"(body) {
     refuseIfTakenOver(body);
@@ -1259,6 +1341,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true, version: VERSION });
     }
     if (!authorized(req, url)) throw httpError(401, "Unauthorized");
+    if (url.pathname === "/files/raw") return await streamFile(req, res, url);
     const route = routes[`${req.method} ${url.pathname}`];
     if (!route) throw httpError(404, "Not found");
     send(res, 200, await route(await readBody(req)));

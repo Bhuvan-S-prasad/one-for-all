@@ -9,6 +9,8 @@ import {
   type ImportAgentResponse,
   unreadListSchema,
   type UnreadList,
+  conversationListSchema,
+  type ConversationList,
   episodeListSchema,
   skillListSchema,
   skillSchema,
@@ -36,6 +38,8 @@ import {
   agentStatsListSchema,
   teamRosterSchema,
   handoffListSchema,
+  discussionListSchema,
+  type DiscussionList,
   type HandoffList,
   type TeamRoster,
   approvalListSchema,
@@ -62,6 +66,7 @@ import {
   savedLoginListSchema,
   savedLoginSchema,
   sendMessageResponseSchema,
+  uploadSchema,
   shareLoginResponseSchema,
   sessionResponseSchema,
   setupStatusSchema,
@@ -69,6 +74,8 @@ import {
   threadSchema,
   threadSummaryPageSchema,
   usageTodaySchema,
+  spendSummarySchema,
+  type SpendSummary,
   type Agent,
   type AgentListResponse,
   type AgentStatsList,
@@ -104,6 +111,7 @@ import {
   type SaveLoginRequest,
   type ShareLoginResponse,
   type SendMessageResponse,
+  type Upload,
   type SessionResponse,
   type SetupStatus,
   type CreateThreadRequest,
@@ -166,6 +174,16 @@ export interface MemoryFilter {
 }
 
 /** `?a=1&b=2` from defined values only. */
+/** An API error from a status and a JSON error body, when there is one. */
+function apiErrorFrom(status: number, payload: unknown): ApiError {
+  const parsed = errorResponseSchema.safeParse(payload);
+  if (parsed.success) {
+    const { code, message, details } = parsed.data.error;
+    return new ApiError(status, code, message, details);
+  }
+  return new ApiError(status, "internal", `Unexpected response (${status})`);
+}
+
 function query(params: Record<string, string | number | boolean | undefined>): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -316,10 +334,16 @@ export function createApiClient(options: ApiClientOptions = {}) {
     /** Chats with agent messages not yet seen (M5.11). */
     unreadThreads: (): Promise<UnreadList> =>
       request("GET", "/api/threads/unread", unreadListSchema),
+    /** The sidebar: each agent's latest chat and each group, with the last message (ADR-0052). */
+    conversations: (): Promise<ConversationList> =>
+      request("GET", "/api/threads/conversations", conversationListSchema),
     markThreadRead: (id: string): Promise<void> =>
       request("POST", `/api/threads/${encodeURIComponent(id)}/read`, null),
     getThread: (id: string): Promise<Thread> =>
       request("GET", `/api/threads/${encodeURIComponent(id)}`, threadSchema),
+    /** A group's discussions, newest first, with their turns (ADR-0050). */
+    threadDiscussions: (id: string): Promise<DiscussionList> =>
+      request("GET", `/api/threads/${encodeURIComponent(id)}/discussions`, discussionListSchema),
     updateThread: (id: string, patch: UpdateThreadRequest): Promise<Thread> =>
       request("PATCH", `/api/threads/${encodeURIComponent(id)}`, threadSchema, patch),
     listMessages: (
@@ -331,15 +355,80 @@ export function createApiClient(options: ApiClientOptions = {}) {
         `/api/threads/${encodeURIComponent(threadId)}/messages${query(page)}`,
         messagePageSchema,
       ),
-    sendMessage: (threadId: string, content: string): Promise<SendMessageResponse> =>
+    sendMessage: (
+      threadId: string,
+      content: string,
+      uploads: readonly string[] = [],
+    ): Promise<SendMessageResponse> =>
       request(
         "POST",
         `/api/threads/${encodeURIComponent(threadId)}/messages`,
         sendMessageResponseSchema,
-        {
-          content,
-        },
+        uploads.length > 0 ? { content, uploads } : { content },
       ),
+    /**
+     * Attach a file to a chat (EN.09): its raw bytes, streamed. The returned
+     * upload goes with the next message. `onProgress` gets 0..1 where the
+     * platform can tell (XMLHttpRequest in browsers).
+     */
+    uploadFile: (
+      threadId: string,
+      file: Blob,
+      name: string,
+      onProgress?: (fraction: number) => void,
+    ): Promise<Upload> => {
+      const path = `/api/threads/${encodeURIComponent(threadId)}/uploads${query({
+        name,
+        type: file.type || undefined,
+      })}`;
+      const workspaceId = options.workspaceId?.();
+      if (typeof XMLHttpRequest === "undefined") {
+        return (async () => {
+          const res = await fetchImpl(`${baseUrl}${path}`, {
+            method: "POST",
+            credentials: "include",
+            headers: {
+              accept: "application/json",
+              "content-type": "application/octet-stream",
+              ...(workspaceId ? { "x-workspace-id": workspaceId } : {}),
+            },
+            body: file,
+          });
+          const payload: unknown = await res.json().catch(() => null);
+          if (!res.ok) throw apiErrorFrom(res.status, payload);
+          return uploadSchema.parse(payload);
+        })();
+      }
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", `${baseUrl}${path}`);
+        xhr.withCredentials = true;
+        xhr.setRequestHeader("accept", "application/json");
+        xhr.setRequestHeader("content-type", "application/octet-stream");
+        if (workspaceId) xhr.setRequestHeader("x-workspace-id", workspaceId);
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) onProgress?.(event.loaded / event.total);
+        };
+        xhr.onerror = () =>
+          reject(new ApiError(0, "internal", "Cannot reach the server. Is it running?"));
+        xhr.onload = () => {
+          let payload: unknown = null;
+          try {
+            payload = JSON.parse(xhr.responseText);
+          } catch {
+            // Not JSON: handled below.
+          }
+          if (xhr.status < 200 || xhr.status >= 300) {
+            reject(apiErrorFrom(xhr.status, payload));
+            return;
+          }
+          const parsed = uploadSchema.safeParse(payload);
+          if (parsed.success) resolve(parsed.data);
+          else reject(new ApiError(xhr.status, "internal", "Unexpected response"));
+        };
+        xhr.send(file);
+      });
+    },
 
     // ── Runs ───────────────────────────────────────────────────────────────
     listRuns: (filter: RunFilter & { limit?: number; cursor?: string } = {}): Promise<RunPage> =>
@@ -365,8 +454,12 @@ export function createApiClient(options: ApiClientOptions = {}) {
     runHandoffs: (id: string): Promise<HandoffList> =>
       request("GET", `/api/runs/${encodeURIComponent(id)}/handoffs`, handoffListSchema),
     /** Where an artifact's content downloads from (same origin, with the session cookie). */
-    artifactContentUrl: (id: string): string =>
-      `${baseUrl}/api/artifacts/${encodeURIComponent(id)}/content`,
+    /** A stored file: a download, or with `view` a picture, video or sound shown in place (ADR-0047). */
+    artifactContentUrl: (id: string, view = false): string =>
+      `${baseUrl}/api/artifacts/${encodeURIComponent(id)}/content${view ? "?view=1" : ""}`,
+    /** A file a person attached (EN.09), as for artifacts. */
+    uploadContentUrl: (id: string, view = false): string =>
+      `${baseUrl}/api/uploads/${encodeURIComponent(id)}/content${view ? "?view=1" : ""}`,
     /** Ask again: the run's message, in the same chat, as a new run (UX.12). */
     retryRun: (id: string): Promise<SendMessageResponse> =>
       request("POST", `/api/runs/${encodeURIComponent(id)}/retry`, sendMessageResponseSchema),
@@ -500,6 +593,9 @@ export function createApiClient(options: ApiClientOptions = {}) {
     // ── Settings ───────────────────────────────────────────────────────────
     llmSettings: (): Promise<LlmSettings> => request("GET", "/api/settings/llm", llmSettingsSchema),
     usageToday: (): Promise<UsageToday> => request("GET", "/api/settings/usage", usageTodaySchema),
+    spend: (): Promise<SpendSummary> => request("GET", "/api/settings/spend", spendSummarySchema),
+    setSpendCap: (capUsd: number | null): Promise<SpendSummary> =>
+      request("PUT", "/api/settings/spend", spendSummarySchema, { capUsd }),
     saveLlmKey: (apiKey: string): Promise<LlmSettings> =>
       request("PUT", "/api/settings/llm/key", llmSettingsSchema, { apiKey }),
     deleteLlmKey: (): Promise<LlmSettings> =>

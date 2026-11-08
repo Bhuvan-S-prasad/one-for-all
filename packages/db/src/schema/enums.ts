@@ -23,6 +23,16 @@ export const runTrigger = pgEnum("run_trigger", [
   "event",
   "manual",
   "schedule",
+  "discussion",
+]);
+
+/** Where a group discussion is (ADR-0050); `closing`: the coordinator is answering. */
+export const discussionStatus = pgEnum("discussion_status", [
+  "active",
+  "closing",
+  "done",
+  "stopped",
+  "failed",
 ]);
 
 export const runStatus = pgEnum("run_status", [

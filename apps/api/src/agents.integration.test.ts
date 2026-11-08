@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { createServer, type AddressInfo } from "node:net";
 import { serve } from "@hono/node-server";
 import { loadConfig } from "@ofa/config";
@@ -18,6 +18,7 @@ import {
   sendMessageResponseSchema,
   threadSchema,
   threadSummaryPageSchema,
+  spendSummarySchema,
   usageTodaySchema,
   type ApprovalDecidedEvent,
   type CreateAgentInput,
@@ -26,7 +27,15 @@ import {
   type RunCancelledEvent,
 } from "@ofa/contracts";
 import { asId, type AgentId, type RunId, type TenantContext } from "@ofa/core";
-import { insertMemory, loadRootEnv, withDatabaseName } from "@ofa/db";
+import { sweepOrphans } from "@ofa/blobs";
+import {
+  createDatabase,
+  createSpendLedger,
+  insertMemory,
+  loadRootEnv,
+  referencedBlobKeys,
+  withDatabaseName,
+} from "@ofa/db";
 import { createMemoryEventBus } from "@ofa/events";
 import type { RunDispatcher } from "@ofa/orchestrator";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -67,6 +76,15 @@ describe.skipIf(!hasDb)("M2 API (integration)", async () => {
     // A throwaway vault key, and no environment key, so Settings is predictable.
     vault: { ...base.vault, key: randomBytes(32).toString("base64") },
     llm: { ...base.llm, apiKey: undefined },
+    // The dev stack's Garage (`pnpm infra:up`), with its dev credentials (ADR-0047).
+    blobs: base.blobs ?? {
+      endpoint: "http://127.0.0.1:3900",
+      bucket: "ofa-test-api",
+      region: "garage",
+      accessKeyId: "GK0a1b2c3d4e5f60718293a4b5",
+      secretAccessKey: "d".repeat(64),
+      garage: { adminUrl: "http://127.0.0.1:3903", adminToken: "ofa-garage-dev-admin-token" },
+    },
   };
 
   const started: MessageReceivedEvent[] = [];
@@ -78,6 +96,8 @@ describe.skipIf(!hasDb)("M2 API (integration)", async () => {
     approvalDecided: async (event) => void decided.push(event),
     scheduleCreated: async () => {},
     consolidateMemory: async () => {},
+    discussionStarted: async () => {},
+    discussionStopped: async () => {},
     scheduleCancelled: async () => {},
   };
   const bus = createMemoryEventBus();
@@ -103,7 +123,8 @@ describe.skipIf(!hasDb)("M2 API (integration)", async () => {
       headers: { cookie, origin, "content-type": "application/json" },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-  const get = (path: string) => app.request(url(path), { headers: { cookie } });
+  const get = (path: string, headers: Record<string, string> = {}) =>
+    app.request(url(path), { headers: { cookie, ...headers } });
 
   const sage: CreateAgentInput = {
     name: "Sage",
@@ -409,9 +430,68 @@ describe.skipIf(!hasDb)("M2 API (integration)", async () => {
       'attachment; filename="report _draft_.html"',
     );
     expect(content.headers.get("x-content-type-options")).toBe("nosniff");
+    // The route's own policy, not the app's (the global one used to replace it).
+    expect(content.headers.get("content-security-policy")).toBe("sandbox; default-src 'none'");
     expect(await content.text()).toBe("<script>alert(1)</script>");
     expect((await get("/api/artifacts/00000000-0000-4000-8000-000000000000")).status).toBe(404);
   });
+
+  it("keeps a large artifact in the object store and serves it by range", async () => {
+    // The dev stack's Garage (ADR-0047); the server sets it up on start.
+    expect(container.blobs).not.toBeNull();
+    await container.blobs!.ready();
+    const runCtx = { ...tenant(), agentId: asId<AgentId>(agentId), runId: asId<RunId>(retryRunId) };
+    const bytes = new Uint8Array(2 * 1024 * 1024).map((_, i) => i % 251);
+    const kept = await container.artifacts.put(runCtx, {
+      key: "big-1",
+      kind: "file",
+      name: "clip.mp4",
+      mimeType: "video/mp4",
+      content: bytes,
+      untrusted: false,
+    });
+    expect(kept.size).toBe(bytes.length);
+    // The bytes are in the store, under the workspace and the artifact.
+    const blobKey = `w/${tenant().workspaceId}/a/${kept.id}`;
+    expect((await container.blobs!.get(blobKey))?.totalSize).toBe(bytes.length);
+
+    const whole = await get(`/api/artifacts/${kept.id}/content`);
+    expect(whole.status).toBe(200);
+    expect(whole.headers.get("accept-ranges")).toBe("bytes");
+    expect(new Uint8Array(await whole.arrayBuffer())).toEqual(bytes);
+
+    const part = await get(`/api/artifacts/${kept.id}/content`, { range: "bytes=1000-1009" });
+    expect(part.status).toBe(206);
+    expect(part.headers.get("content-range")).toBe(`bytes 1000-1009/${bytes.length}`);
+    expect([...new Uint8Array(await part.arrayBuffer())]).toEqual([...bytes.slice(1000, 1010)]);
+    const tail = await get(`/api/artifacts/${kept.id}/content`, { range: "bytes=-4" });
+    expect([...new Uint8Array(await tail.arrayBuffer())]).toEqual([...bytes.slice(-4)]);
+    expect(
+      (await get(`/api/artifacts/${kept.id}/content`, { range: `bytes=${bytes.length}-` })).status,
+    ).toBe(416);
+
+    // The hourly sweep (after an hour's grace) removes a blob no row points
+    // at, and keeps the artifact's.
+    const stray = `w/${tenant().workspaceId}/a/${randomUUID()}`;
+    await container.blobs!.put(stray, new Uint8Array([1, 2, 3]), {
+      size: 3,
+      contentType: "application/octet-stream",
+    });
+    const owner = createDatabase(config.database.migrationUrl, { max: 1 });
+    try {
+      await sweepOrphans(
+        container.blobs!,
+        (keys) => referencedBlobKeys(owner.db, keys),
+        new Date(Date.now() + 2 * 60 * 60 * 1000),
+      );
+    } finally {
+      await owner.close();
+    }
+    expect(await container.blobs!.get(stray)).toBeNull();
+    expect((await container.blobs!.get(blobKey))?.totalSize).toBe(bytes.length);
+    // A real object store round trip (2 MB up, three ranged reads, a sweep):
+    // on a fresh CI runner Garage's first requests take several seconds.
+  }, 30_000);
 
   it("lists waiting approvals, settles one once, and wakes the run", async () => {
     const runCtx = { ...tenant(), agentId: asId<AgentId>(agentId), runId: asId<RunId>(retryRunId) };
@@ -610,6 +690,107 @@ describe.skipIf(!hasDb)("M2 API (integration)", async () => {
     expect(stats.items).toEqual([
       expect.objectContaining({ agentId, runsThisWeek: 2, lastResult: null }),
     ]);
+  });
+
+  it("counts paid app credits per agent against the monthly limit (EN.15)", async () => {
+    const ledger = createSpendLedger(container.db);
+    const run = { ...tenant(), agentId: asId<AgentId>(agentId), runId: asId<RunId>(randomUUID()) };
+    expect(await ledger.month(tenant())).toEqual({ spentCents: 0, capCents: null });
+    await ledger.record(run, {
+      idempotencyKey: `${run.runId}:t1`,
+      tool: "runway.x",
+      costCents: 50,
+    });
+    // A retried call is counted once.
+    await ledger.record(run, {
+      idempotencyKey: `${run.runId}:t1`,
+      tool: "runway.x",
+      costCents: 50,
+    });
+    await ledger.record(run, {
+      idempotencyKey: `${run.runId}:t2`,
+      tool: "runway.x",
+      costCents: 25,
+    });
+
+    const set = await send("PUT", "/api/settings/spend", { capUsd: 20 });
+    expect(set.status).toBe(200);
+    const summary = spendSummarySchema.parse(await (await get("/api/settings/spend")).json());
+    expect(summary).toMatchObject({ spentUsd: 0.75, capUsd: 20 });
+    expect(summary.byAgent).toEqual([
+      expect.objectContaining({ agentId, calls: 2, spentUsd: 0.75 }),
+    ]);
+    expect(await ledger.month(tenant())).toEqual({ spentCents: 75, capCents: 2000 });
+    expect((await send("PUT", "/api/settings/spend", { capUsd: -1 })).status).toBe(422);
+    await send("PUT", "/api/settings/spend", { capUsd: null });
+    expect((await ledger.month(tenant())).capCents).toBeNull();
+  });
+
+  it("takes files attached to a chat, sends them with a message once, and serves them", async () => {
+    await container.blobs!.ready();
+    const upload = (name: string, type: string, bytes: Uint8Array) =>
+      app.request(
+        url(`/api/threads/${threadId}/uploads?name=${encodeURIComponent(name)}&type=${type}`),
+        {
+          method: "POST",
+          headers: {
+            cookie,
+            origin,
+            "content-type": "application/octet-stream",
+            "content-length": String(bytes.length),
+          },
+          body: bytes,
+        },
+      );
+    const video = new Uint8Array(3 * 1024 * 1024).map((_, i) => i % 199);
+    const clip = await upload("beach day.mp4", "video/mp4", video);
+    expect(clip.status).toBe(201);
+    const clipUpload = (await clip.json()) as { id: string; size: number; mimeType: string };
+    expect(clipUpload).toMatchObject({ size: video.length, mimeType: "video/mp4" });
+    const pdf = (await (
+      await upload("notes.pdf", "application/pdf", new Uint8Array([37, 80, 68, 70]))
+    ).json()) as {
+      id: string;
+    };
+
+    // Raw bytes are taken only on the upload route.
+    const raw = await app.request(url(`/api/threads/${threadId}/messages`), {
+      method: "POST",
+      headers: { cookie, origin, "content-type": "application/octet-stream" },
+      body: new Uint8Array([1]),
+    });
+    expect(raw.status).toBe(400);
+
+    const sent = await send("POST", `/api/threads/${threadId}/messages`, {
+      content: "Cut this into a reel",
+      uploads: [clipUpload.id, pdf.id],
+    });
+    expect(sent.status).toBe(201);
+    const { message } = sendMessageResponseSchema.parse(await sent.json());
+    expect(message.content).toContain("Cut this into a reel");
+    expect(message.content).toContain(
+      `[Attached: beach day.mp4 · video/mp4 · 3.0 MB · upload://${clipUpload.id}]`,
+    );
+    expect(message.content).toContain(`upload://${pdf.id}]`);
+    // Once sent, a file can't go out again with another message.
+    const again = await send("POST", `/api/threads/${threadId}/messages`, {
+      content: "And again",
+      uploads: [clipUpload.id],
+    });
+    expect(again.status).toBe(400);
+
+    // A video plays in place and seeks by range; a PDF is only ever a download.
+    const played = await get(`/api/uploads/${clipUpload.id}/content?view=1`, {
+      range: "bytes=0-9",
+    });
+    expect(played.status).toBe(206);
+    expect(played.headers.get("content-type")).toBe("video/mp4");
+    expect(played.headers.get("content-disposition")).toMatch(/^inline/);
+    expect(played.headers.get("content-security-policy")).toBe("sandbox; default-src 'none'");
+    expect([...new Uint8Array(await played.arrayBuffer())]).toEqual([...video.slice(0, 10)]);
+    const doc = await get(`/api/uploads/${pdf.id}/content?view=1`);
+    expect(doc.headers.get("content-type")).toBe("application/octet-stream");
+    expect(doc.headers.get("content-disposition")).toMatch(/^attachment/);
   });
 
   it("stores the model key encrypted and only ever shows its last four characters", async () => {

@@ -47,3 +47,30 @@ export function pickResponder(
   const coordinator = members.find((m) => m.id === coordinatorId) ?? members[0];
   return coordinator ? { member: coordinator, mentioned: false } : null;
 }
+
+/** Addresses the whole group (ADR-0050): `@all`, `@everyone`, `@team`, `@group`. */
+const WHOLE_GROUP = /(^|[^\p{L}\p{N}._-])@(all|everyone|team|group)(?![\p{L}\p{N}_-])/iu;
+/** A message that opens with `/discuss`. */
+const DISCUSS = /^\s*\/discuss(?![\p{L}\p{N}_-])/iu;
+
+/**
+ * A message that asks the whole group starts a discussion (ADR-0050). Who
+ * takes part, in order: the members it `@mentions` when it names two or
+ * more, else every active member but the coordinator, in roster order.
+ * Null when the message doesn't ask the group.
+ */
+export function discussionFor(
+  content: string,
+  members: readonly GroupMember[],
+  coordinatorId: string | null,
+): { members: GroupMember[] } | null {
+  if (!WHOLE_GROUP.test(content) && !DISCUSS.test(content)) return null;
+  const active = members.filter((m) => m.status === "active");
+  const named = active
+    .map((member) => ({ member, at: mentionAt(content, member) }))
+    .filter((m) => m.at >= 0)
+    .sort((a, b) => a.at - b.at)
+    .map((m) => m.member);
+  if (named.length >= 2) return { members: named };
+  return { members: active.filter((m) => m.id !== coordinatorId) };
+}

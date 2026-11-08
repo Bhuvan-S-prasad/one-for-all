@@ -3,6 +3,7 @@ import type { RunContext, TenantContext } from "../tenant";
 import type { LLMImage, ModelTier } from "./llm";
 import type { MemoryScope } from "./memory";
 import type { GrantMode, Verdict } from "./policy";
+import type { DiscussionTurn } from "./team";
 import type { ToolDescriptor } from "./tools";
 
 // Ports the agent harness runs on (ARCHITECTURE.md §6). The harness sees only
@@ -16,6 +17,12 @@ import type { ToolDescriptor } from "./tools";
  */
 export interface StepRunner {
   run<T>(id: string, fn: () => Promise<T>): Promise<T>;
+  /**
+   * Pause, holding no process, for `ms` (Inngest `step.sleep`): an agent
+   * waiting on a long job, such as a video being made (EN.12). Absent where
+   * runs can't sleep; then waiting returns at once.
+   */
+  sleep?(id: string, ms: number): Promise<void>;
   /**
    * Wait, holding no process, for an event whose `data[field]` equals `value`
    * (Inngest `step.waitForEvent`). Resolves with the event's data, or null
@@ -45,13 +52,15 @@ export interface StepRunner {
   ): Promise<ChildRunResult | null>;
 }
 
-/** The child run of a handoff (see `TeamDirectory.handoff`). */
+/** The child run of a handoff (see `TeamDirectory.handoff`), or a discussion turn. */
 export interface ChildRunRequest {
   readonly agentId: AgentId;
   readonly runId: RunId;
   readonly threadId: ThreadId;
-  /** The brief that starts it. */
+  /** The brief that starts it, or a discussion's question. */
   readonly messageId: MessageId;
+  /** A turn in a group discussion (ADR-0050); a handoff otherwise. */
+  readonly discussion?: DiscussionTurn;
 }
 
 /** What a child run came to. */
@@ -62,6 +71,10 @@ export interface ChildRunResult {
   readonly reply: string | null;
   /** It read outside content, so its reply may carry someone else's words. */
   readonly tainted: boolean;
+  /** The message it posted, if it did. */
+  readonly messageId?: string | null;
+  /** A discussion turn with nothing new to add: it posted nothing (ADR-0050). */
+  readonly passed?: boolean;
 }
 
 // ── Runs ─────────────────────────────────────────────────────────────────────

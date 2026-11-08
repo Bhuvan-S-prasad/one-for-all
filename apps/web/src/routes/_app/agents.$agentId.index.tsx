@@ -18,10 +18,12 @@ import {
 import type { Agent, FamiliarMood, Message, Run } from "@ofa/contracts";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import {
+  Activity as ActivityIcon,
   ArrowDown,
   ArrowLeft,
   ArrowUp,
   History,
+  Lightbulb,
   Monitor,
   PanelRight,
   Pause,
@@ -35,12 +37,20 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
   type KeyboardEvent,
 } from "react";
-import { AgentTabs } from "@/components/agent-tabs";
+import { useUnconfirmedCount } from "@/components/agent-tabs";
+import { ChatMenu, type ChatMenuItem } from "@/components/chat/chat-menu";
+import {
+  AttachButton,
+  PendingAttachments,
+  SentAttachments,
+  useAttachments,
+} from "@/components/chat/attachments";
 import { LiveRun, WorkingRing } from "@/components/chat/live-run";
 import { Reply } from "@/components/chat/reply";
 import { RunPanel } from "@/components/chat/run-panel";
@@ -54,6 +64,7 @@ import { ComputerOverlay, ComputerPanel, usesComputer } from "@/components/compu
 import { Familiar } from "@/components/familiar";
 import { ErrorAlert } from "@/components/ui/alert";
 import { starters } from "@/lib/agents";
+import { splitAttachments } from "@/lib/attachments";
 import { duration, shortTime } from "@/lib/format";
 import { runPhase } from "@/lib/run-steps";
 import { isTyping, useStoredFlag } from "@/lib/shortcuts";
@@ -228,8 +239,8 @@ function Chat({ agent }: { agent: Agent }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [active, stopRun, startNewChat]);
 
-  const sendText = (text: string) =>
-    send.mutateAsync(text).then(() => {
+  const sendText = (text: string, uploads: readonly string[] = []) =>
+    send.mutateAsync({ content: text, uploads }).then(() => {
       // Writing in an older chat makes it the current one.
       if (threadId) {
         void navigate({
@@ -354,6 +365,7 @@ function Chat({ agent }: { agent: Agent }) {
             agent={agent}
             initial={draft}
             onDraftUsed={clearDraft}
+            threadId={thread?.id}
             disabled={!thread}
             sending={send.isPending}
             active={active}
@@ -420,15 +432,6 @@ function useJustFinished(run: Run | undefined): boolean {
 
 // ── Header ───────────────────────────────────────────────────────────────────
 
-const PILL: Record<FamiliarMood, string> = {
-  idle: "bg-accent text-muted-foreground",
-  thinking: "bg-info/15 text-info",
-  working: "bg-primary/15 text-highlight",
-  waiting: "bg-warning/15 text-warning",
-  asleep: "bg-accent text-muted-foreground",
-  error: "bg-destructive-surface text-destructive",
-};
-
 function ChatHeader(props: {
   agent: Agent;
   mood: FamiliarMood;
@@ -450,102 +453,109 @@ function ChatHeader(props: {
   const elapsed =
     active && run ? duration(props.now - Date.parse(run.startedAt ?? run.createdAt)) : null;
   const paused = agent.status !== "active";
+  // Said only when there is something to say: working, paused or stuck.
+  const status = paused
+    ? "Paused"
+    : mood === "idle"
+      ? null
+      : `${MOOD_LABELS[mood]}${elapsed ? ` · ${elapsed}` : ""}`;
+  const params = { agentId: agent.id };
+  const unconfirmed = useUnconfirmedCount(agent.id);
+  const items: ChatMenuItem[] = [
+    {
+      kind: "action",
+      label: "New chat",
+      icon: SquarePen,
+      hint: "N",
+      onSelect: props.onNewChat,
+      disabled: !props.canStartNew,
+    },
+    { kind: "link", label: "Chat history", icon: History, to: "/agents/$agentId/history", params },
+    {
+      kind: "link",
+      label: unconfirmed > 0 ? `Memory · ${unconfirmed} new` : "Memory",
+      icon: Lightbulb,
+      to: "/agents/$agentId/memory",
+      params,
+    },
+    {
+      kind: "link",
+      label: "Activity",
+      icon: ActivityIcon,
+      to: "/activity",
+      search: { agent: agent.id },
+    },
+    ...(props.onTogglePanel
+      ? [
+          {
+            kind: "action" as const,
+            label: props.panelOpen ? "Hide the steps" : "Show the steps",
+            icon: PanelRight,
+            onSelect: props.onTogglePanel,
+            wideOnly: true,
+          },
+        ]
+      : []),
+    { kind: "divider" },
+    { kind: "link", label: "Agent settings", icon: Settings2, to: "/agents/$agentId/edit", params },
+    {
+      kind: "action",
+      label: paused ? `Resume ${agent.name}` : `Pause ${agent.name}`,
+      icon: paused ? Play : Pause,
+      onSelect: props.onPause,
+      disabled: props.pausing || agent.status === "archived",
+    },
+  ];
 
   return (
-    <header className="flex h-16 shrink-0 items-center gap-3 border-b px-3 md:gap-5 md:px-6">
+    <header className="flex h-16 shrink-0 items-center gap-2 border-b px-2 md:gap-3 md:px-6">
       <Link
-        to="/agents"
-        aria-label="Back to agents"
-        className="flex size-10 items-center justify-center rounded-full outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring md:hidden"
+        to="/"
+        aria-label="Back to chats"
+        className="press flex size-10 items-center justify-center rounded-full outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring md:hidden"
       >
         <ArrowLeft className="size-5" aria-hidden />
       </Link>
-      <div className="flex min-w-0 flex-1 items-center gap-3">
-        <div className="relative size-11 shrink-0">
+      <div className="flex min-w-0 flex-1 items-center gap-2.5">
+        <div className="relative size-10 shrink-0">
           {active && <WorkingRing kind={phase?.kind ?? "thinking"} />}
           <Familiar
             key={props.celebrate ? "hop" : "still"}
             look={agent.spec.avatar}
             mood={mood}
-            size={34}
+            size={30}
             ring="var(--background)"
             animate
             celebrate={props.celebrate}
             label={`${agent.name}'s familiar, ${MOOD_LABELS[mood].toLowerCase()}`}
-            className="absolute top-1 left-[5px]"
+            className="absolute top-[5px] left-[5px]"
           />
         </div>
         <div className="flex min-w-0 flex-col">
-          <span className="flex items-center gap-2.5">
-            <h1 className="truncate text-[19px] leading-tight font-bold tracking-[-0.01em]">
-              {agent.name}
-            </h1>
+          <h1 className="truncate text-[17px] leading-tight font-semibold tracking-[-0.01em]">
+            {agent.name}
+          </h1>
+          {status && (
             <span
               className={cn(
-                "eyebrow inline-flex h-[22px] shrink-0 items-center gap-1.5 rounded-full px-2 text-[10.5px]",
-                PILL[mood],
+                "flex items-center gap-1.5 truncate text-[12.5px]",
+                mood === "error"
+                  ? "text-destructive"
+                  : mood === "waiting"
+                    ? "text-warning"
+                    : paused || mood === "asleep"
+                      ? "text-muted-foreground"
+                      : "text-highlight",
               )}
             >
-              <span aria-hidden className="size-1.5 rounded-full bg-current" />
-              {paused ? "Paused" : MOOD_LABELS[mood]}
-              {elapsed && <span className="opacity-80">· {elapsed}</span>}
+              <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-current" />
+              {status}
             </span>
-          </span>
-          <span className="truncate text-[12.5px] text-muted-foreground">{agent.spec.job}</span>
+          )}
         </div>
       </div>
 
-      <AgentTabs agent={agent} current="chat" className="hidden xl:flex" />
-
-      <div className="flex shrink-0 items-center gap-1">
-        <Link
-          to="/agents/$agentId/history"
-          params={{ agentId: agent.id }}
-          aria-label="History"
-          className="flex size-10 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:hidden"
-        >
-          <History className="size-[18px]" aria-hidden />
-        </Link>
-        <Link
-          to="/agents/$agentId/history"
-          params={{ agentId: agent.id }}
-          className="hidden h-10 items-center rounded-full px-3 text-sm text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:flex xl:hidden"
-        >
-          History
-        </Link>
-        <button
-          type="button"
-          onClick={props.onNewChat}
-          disabled={!props.canStartNew}
-          aria-label="New chat"
-          title="New chat (N)"
-          className="flex h-10 items-center gap-2 rounded-full px-2.5 text-sm font-semibold text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40 disabled:hover:bg-transparent md:border md:border-input md:px-3.5 md:text-foreground"
-        >
-          <SquarePen className="size-[17px]" aria-hidden />
-          <span className="hidden md:inline">New chat</span>
-        </button>
-        <Link
-          to="/agents/$agentId/edit"
-          params={{ agentId: agent.id }}
-          aria-label="Agent settings"
-          className="flex size-10 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring xl:hidden"
-        >
-          <Settings2 className="size-[18px]" aria-hidden />
-        </Link>
-        <button
-          type="button"
-          onClick={props.onPause}
-          disabled={props.pausing || agent.status === "archived"}
-          aria-label={paused ? `Resume ${agent.name}` : `Pause ${agent.name}`}
-          title={paused ? "Resume" : "Pause"}
-          className="flex size-10 items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-        >
-          {paused ? (
-            <Play className="size-[18px]" aria-hidden />
-          ) : (
-            <Pause className="size-[18px]" aria-hidden />
-          )}
-        </button>
+      <div className="flex shrink-0 items-center gap-0.5">
         {props.onComputer && (
           <button
             type="button"
@@ -561,21 +571,7 @@ function ChatHeader(props: {
             <Monitor className="size-[18px]" aria-hidden />
           </button>
         )}
-        {props.onTogglePanel && (
-          <button
-            type="button"
-            onClick={props.onTogglePanel}
-            aria-pressed={props.panelOpen}
-            aria-label={props.panelOpen ? "Hide the run panel" : "Show the run panel"}
-            title={props.panelOpen ? "Hide the run panel" : "Show the run panel"}
-            className={cn(
-              "hidden size-10 items-center justify-center rounded-full outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring lg:flex",
-              props.panelOpen ? "text-foreground" : "text-muted-foreground",
-            )}
-          >
-            <PanelRight className="size-[18px]" aria-hidden />
-          </button>
-        )}
+        <ChatMenu label={`${agent.name}: more`} items={items} />
       </div>
     </header>
   );
@@ -737,9 +733,7 @@ function Thread(props: {
           {props.messages.map((m) =>
             m.author.type === "user" ? (
               <div key={m.id} className="flex max-w-[78%] flex-col items-end gap-1 self-end">
-                <div className="rounded-[20px_20px_6px_20px] border border-input bg-accent px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap">
-                  {m.content}
-                </div>
+                <UserMessage content={m.content} />
                 <span className="font-mono text-[11px] text-muted-foreground">
                   {shortTime(m.createdAt)}
                 </span>
@@ -786,17 +780,20 @@ function Composer(props: {
   agent: Agent;
   initial?: string;
   onDraftUsed: () => void;
+  threadId: string | undefined;
   disabled: boolean;
   sending: boolean;
   active: boolean;
   stopping: boolean;
   resuming: boolean;
-  onSend: (text: string) => Promise<void>;
+  onSend: (text: string, uploads?: readonly string[]) => Promise<void>;
   onStop: () => void;
   onResume: () => void;
 }) {
   const [text, setText] = useState(props.initial ?? "");
   const local = useRef<HTMLTextAreaElement | null>(null);
+  // Files to send with the message (EN.09).
+  const attachments = useAttachments(props.threadId);
   const { initial, onDraftUsed } = props;
   // `/` names one of the agent's skills (M5.08).
   const { data: skills } = useSkills(props.agent.id);
@@ -852,10 +849,13 @@ function Composer(props: {
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
     const content = text.trim();
-    if (!content || props.disabled || props.sending) return;
+    const uploads = attachments.ready;
+    if ((!content && uploads.length === 0) || props.disabled || props.sending) return;
+    if (attachments.uploading) return;
     setText("");
+    attachments.clear();
     try {
-      await props.onSend(content);
+      await props.onSend(content, uploads);
     } catch {
       setText(content); // Keep what they wrote if it didn't send.
     }
@@ -883,14 +883,28 @@ function Composer(props: {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing)
       void submit(event);
   };
-  const showStop = props.active && !text.trim();
+  const showStop = props.active && !text.trim() && attachments.items.length === 0;
+  const canSend = (!!text.trim() || attachments.ready.length > 0) && !attachments.uploading;
 
   return (
-    <form onSubmit={submit} className="mx-auto w-full max-w-[820px] px-4 pt-2 pb-4 md:px-8 md:pb-5">
+    <form
+      onSubmit={submit}
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes("Files")) e.preventDefault();
+      }}
+      onDrop={(e) => {
+        if (e.dataTransfer.files.length === 0) return;
+        e.preventDefault();
+        attachments.add(e.dataTransfer.files);
+      }}
+      className="mx-auto w-full max-w-[820px] px-4 pt-2 pb-4 md:px-8 md:pb-5"
+    >
+      <PendingAttachments items={attachments.items} onRemove={attachments.remove} />
       <label htmlFor="message" className="sr-only">
         Message {props.agent.name}
       </label>
-      <div className="relative flex items-end gap-2 rounded-[26px] border border-input bg-card p-2 pl-4 focus-within:border-ring/60">
+      <div className="relative flex items-end gap-1 rounded-[26px] border border-input bg-card p-2 pl-1.5 focus-within:border-ring/60">
+        <AttachButton onFiles={attachments.add} disabled={props.disabled || !props.threadId} />
         {picking && (
           <SkillSuggestions
             id="skill-suggestions"
@@ -917,6 +931,11 @@ function Composer(props: {
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKey}
+          onPaste={(e) => {
+            if (e.clipboardData.files.length === 0) return;
+            e.preventDefault();
+            attachments.add(e.clipboardData.files);
+          }}
           disabled={props.disabled}
           placeholder={
             props.active
@@ -940,7 +959,7 @@ function Composer(props: {
           <button
             type="submit"
             aria-label="Send"
-            disabled={props.disabled || props.sending || !text.trim()}
+            disabled={props.disabled || props.sending || !canSend}
             className="flex size-11 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground outline-none hover:bg-primary/85 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:bg-accent disabled:text-muted-foreground"
           >
             <ArrowUp className="size-5" aria-hidden />
@@ -955,5 +974,20 @@ function Composer(props: {
         {props.active && <span className="ml-auto">Esc stops {props.agent.name}</span>}
       </div>
     </form>
+  );
+}
+
+/** A person's message: its text, and the files attached to it (EN.09). */
+function UserMessage({ content }: { content: string }) {
+  const { text, files } = useMemo(() => splitAttachments(content), [content]);
+  return (
+    <>
+      {files.length > 0 && <SentAttachments files={files} />}
+      {text && (
+        <div className="rounded-[20px_20px_6px_20px] border border-input bg-accent px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap">
+          {text}
+        </div>
+      )}
+    </>
   );
 }

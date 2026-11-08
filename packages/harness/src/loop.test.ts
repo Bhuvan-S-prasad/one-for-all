@@ -328,6 +328,28 @@ describe("runAgent", () => {
     expect(steps.ran).toContain("tool-0-0-toolkit");
   });
 
+  it("sleeps durably when the agent waits for a long job, between steps (EN.12)", async () => {
+    const { tools, run, steps } = setup([
+      { toolCalls: [{ name: "wait", args: { seconds: 90, reason: "the video" } }] },
+      { toolCalls: [{ name: "wait", args: { seconds: 99_999 } }] },
+      { text: "It's ready." },
+    ]);
+    const slept: [string, number][] = [];
+    (steps as typeof steps & { sleep: (id: string, ms: number) => Promise<void> }).sleep = async (
+      id,
+      ms,
+    ) => void slept.push([id, ms]);
+    const execute = tools.execute.bind(tools);
+    tools.execute = async (request, c) =>
+      request.name === "wait" ? okOutcome("Waited.") : execute(request, c);
+    await run();
+    // At most ten minutes a time, whatever the model asks for.
+    expect(slept).toEqual([
+      ["tool-0-0-wait", 90_000],
+      ["tool-1-0-wait", 600_000],
+    ]);
+  });
+
   it("loads just the tools picked from a large app, however the model names them", async () => {
     const { tools, llm, run } = setup([
       {

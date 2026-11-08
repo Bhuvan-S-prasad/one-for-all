@@ -7,7 +7,7 @@ import type { Container } from "./container";
 import { toHttpError } from "./lib/errors";
 import { rateLimit } from "./lib/rate-limit";
 import { clientIp } from "./lib/request";
-import { hostCheck, originCheck } from "./middleware/perimeter";
+import { hostCheck, isUploadRequest, originCheck } from "./middleware/perimeter";
 import { requestContext } from "./middleware/request-context";
 import { requireSession, requireTenant } from "./middleware/session";
 import { agentFileRoutes } from "./routes/agent-files";
@@ -16,6 +16,7 @@ import { approvalRoutes } from "./routes/approvals";
 import { connectionCallbackRoutes, mcpServerRoutes } from "./routes/mcp-servers";
 import { policyRuleRoutes } from "./routes/policy-rules";
 import { artifactRoutes } from "./routes/artifacts";
+import { uploadRoutes } from "./routes/uploads";
 import { healthRoutes } from "./routes/health";
 import { loginRoutes } from "./routes/logins";
 import { memoryRoutes } from "./routes/memories";
@@ -60,27 +61,46 @@ export function createApp(container: Container): App {
   app.use(requestContext(logger));
   app.use(hostCheck(config.server.allowedHosts));
   app.use(originCheck(config.server.allowedOrigins));
-  app.use(
-    secureHeaders({
-      contentSecurityPolicy: {
-        defaultSrc: ["'self'"],
-        scriptSrc: ["'self'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", "data:", "blob:"],
-        fontSrc: ["'self'", "data:"],
-        connectSrc: ["'self'"],
-        objectSrc: ["'none'"],
-        baseUri: ["'self'"],
-        formAction: ["'self'"],
-        frameAncestors: ["'none'"],
-      },
-      // Plain http on localhost; HSTS would break it.
-      strictTransportSecurity: false,
-    }),
-  );
+  const secure = secureHeaders({
+    contentSecurityPolicy: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "blob:"],
+      fontSrc: ["'self'", "data:"],
+      connectSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'none'"],
+    },
+    // Plain http on localhost; HSTS would break it.
+    strictTransportSecurity: false,
+  });
+  // The app's policy, unless a route set a stricter one of its own: stored
+  // files carry `sandbox; default-src 'none'` (lib/content.ts), which
+  // secureHeaders would otherwise replace on the way out.
+  app.use(async (c, next) => {
+    let own: string | null = null;
+    await secure(c, async () => {
+      await next();
+      own = c.res.headers.get("content-security-policy");
+    });
+    if (own) c.res.headers.set("content-security-policy", own);
+  });
 
   // ── API ──────────────────────────────────────────────────────────────────
-  app.use("/api/*", bodyLimit({ maxSize: 1024 * 1024 }));
+  // JSON bodies stay small; a file upload streams to storage under its own limit (EN.09).
+  // Inngest is exempt: it posts a run's whole state with every step (contact
+  // sheets, file contents), which passes 1 MB in a long run, and a refused step
+  // fails the run (found when an editor run died on its first image). Its
+  // requests are signed with the signing key wherever one is set.
+  const smallBodies = bodyLimit({ maxSize: 1024 * 1024 });
+  app.use("/api/*", (c, next) =>
+    isUploadRequest(c.req.method, c.req.path) || c.req.path === "/api/inngest"
+      ? next()
+      : smallBodies(c, next),
+  );
   app.use("/api/*", async (c, next) => {
     await next();
     c.header("Cache-Control", "no-store");
@@ -106,6 +126,7 @@ export function createApp(container: Container): App {
   app.route("/api/connections", connectionCallbackRoutes(container));
   app.route("/api/memories", memoryRoutes(container));
   app.route("/api/artifacts", artifactRoutes(container));
+  app.route("/api/uploads", uploadRoutes(container));
   app.route("/api/logins", loginRoutes(container));
   app.route("/api/settings", settingsRoutes(container));
   app.route("/api/routines", routineRoutes(container));

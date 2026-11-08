@@ -97,6 +97,15 @@ export const boundaries = {
   /** packages/core imports nothing internal (R2). */
   core: onlyWorkspaceImports([], "packages/core must not import other workspace packages (R2)."),
 
+  /**
+   * packages/video stands alone (ADR-0049): nothing from One-for-All, so it
+   * can move to its own repository as it is.
+   */
+  standalone: onlyWorkspaceImports(
+    [],
+    "packages/video stands alone and must not import One-for-All packages (ADR-0049).",
+  ),
+
   /** Browser-safe packages (contracts, client) may import only core and contracts. */
   browserPackage: onlyWorkspaceImports(
     ["core", "contracts"],

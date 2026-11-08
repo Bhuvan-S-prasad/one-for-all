@@ -17,6 +17,7 @@
   "dependencies": {
     "@hono/node-server": "2.1.3",
     "@hono/node-ws": "1.3.1",
+    "@ofa/blobs": "workspace:*",
     "@ofa/config": "workspace:*",
     "@ofa/contracts": "workspace:*",
     "@ofa/core": "workspace:*",

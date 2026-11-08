@@ -48,11 +48,19 @@ export interface McpCallResult {
   /** The server said the call failed (the model should see why). */
   readonly isError: boolean;
   readonly structured?: unknown;
+  /** Pictures and sounds the server sent inline (EN.13), to keep as files. */
+  readonly media?: readonly { readonly mimeType: string; readonly data: Uint8Array }[];
+  /** Links to files the server pointed at (`resource_link` parts). */
+  readonly links?: readonly { readonly uri: string; readonly mimeType?: string }[];
 }
 
 export interface McpSession {
   listTools(): Promise<McpToolInfo[]>;
-  callTool(name: string, args: Record<string, unknown>): Promise<McpCallResult>;
+  callTool(
+    name: string,
+    args: Record<string, unknown>,
+    options?: { readonly timeoutMs?: number },
+  ): Promise<McpCallResult>;
   close(): Promise<void>;
 }
 
@@ -104,6 +112,34 @@ function textOf(content: readonly Record<string, unknown>[]): string {
       return `[${String(part.type)} content]`;
     })
     .join("\n");
+}
+
+/** Inline pictures and sounds (`image`, `audio`, or a resource with a blob), at most eight. */
+function mediaOf(content: readonly Record<string, unknown>[]) {
+  const out: { mimeType: string; data: Uint8Array }[] = [];
+  for (const part of content) {
+    const resource = part.type === "resource" ? (part.resource as Record<string, unknown>) : null;
+    const data = part.type === "image" || part.type === "audio" ? part.data : resource?.blob;
+    const mimeType = String((resource ?? part).mimeType ?? "");
+    if (typeof data !== "string" || !/^(image|audio|video)\//.test(mimeType)) continue;
+    out.push({ mimeType, data: new Uint8Array(Buffer.from(data, "base64")) });
+    if (out.length === 8) break;
+  }
+  return out;
+}
+
+/** Links the server pointed at as files (`resource_link`), https only. */
+function linksOf(content: readonly Record<string, unknown>[]) {
+  return content.flatMap((part) =>
+    part.type === "resource_link" && typeof part.uri === "string" && part.uri.startsWith("https://")
+      ? [
+          {
+            uri: part.uri,
+            ...(typeof part.mimeType === "string" ? { mimeType: part.mimeType } : {}),
+          },
+        ]
+      : [],
+  );
 }
 
 function unavailable(server: McpServerRecord, error: unknown): McpError {
@@ -369,16 +405,26 @@ export function createMcpConnections(options: McpConnectionsOptions): McpConnect
             }
             return tools;
           }),
-        callTool: (name, args) =>
+        callTool: (name, args, options) =>
           guarded(async () => {
-            const result = await client.callTool({ name, arguments: args });
+            const result = await client.callTool({
+              name,
+              arguments: args,
+              ...(options?.timeoutMs
+                ? { options: { timeout: options.timeoutMs, maxTotalTimeout: options.timeoutMs } }
+                : {}),
+            });
             const content = (result.content ?? []) as Record<string, unknown>[];
+            const media = mediaOf(content);
+            const links = linksOf(content);
             return {
               text: textOf(content),
               isError: result.isError === true,
               ...(result.structuredContent !== undefined
                 ? { structured: result.structuredContent }
                 : {}),
+              ...(media.length > 0 ? { media } : {}),
+              ...(links.length > 0 ? { links } : {}),
             };
           }),
         close: () => client.close(),

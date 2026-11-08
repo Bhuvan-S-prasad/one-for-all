@@ -4,11 +4,12 @@ import { Hono } from "hono";
 import type { Container } from "../container";
 import { requireSession, requireTenant } from "../middleware/session";
 import type { AppEnv } from "../types";
+import { sendContent } from "../lib/content";
 
 /**
  * Artifacts (M3.06):
  *   GET /api/artifacts/:id           what it is
- *   GET /api/artifacts/:id/content   the content, always as a download
+ *   GET /api/artifacts/:id/content   the content: a download, or ?view=1 to show a picture or play a video (ADR-0047)
  *
  * Content may come from outside (a web page, a command's output), so it is
  * never rendered by the browser on this origin: attachment, nosniff, and a
@@ -25,15 +26,12 @@ export function artifactRoutes(deps: Pick<Container, "artifacts" | "sessions">) 
     .get("/:id/content", async (c) => {
       const tenant = c.get("tenant");
       const found = await deps.artifacts.get(tenant, c.req.param("id"));
-      const content = found ? await deps.artifacts.read(tenant, found.id) : null;
-      if (!found || !content) throw new NotFoundError("Artifact");
-      const name = found.name.replace(/[^\w.\- ]+/g, "_").slice(0, 200) || "artifact";
-      return c.body(Buffer.from(content), 200, {
-        "content-type": "application/octet-stream",
-        "content-disposition": `attachment; filename="${name}"`,
-        "x-content-type-options": "nosniff",
-        "content-security-policy": "sandbox; default-src 'none'",
-      });
+      if (!found) throw new NotFoundError("Artifact");
+      const sent = await sendContent(c, found, (range) =>
+        deps.artifacts.open(tenant, found.id, range),
+      );
+      if (!sent) throw new NotFoundError("Artifact");
+      return sent;
     });
 }
 

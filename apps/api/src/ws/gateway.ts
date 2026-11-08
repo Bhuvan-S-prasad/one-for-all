@@ -39,6 +39,12 @@ async function toRealtime(
       const agent = await getAgent(deps.db, tenant, payload.agentId);
       return agent ? { type: "agent.updated", agent: toAgent(agent) } : null;
     }
+    case "discussion.updated":
+      return {
+        type: "discussion.updated",
+        threadId: payload.threadId,
+        discussionId: payload.discussionId,
+      };
   }
 }
 

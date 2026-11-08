@@ -104,7 +104,7 @@ Nine layers, each with one responsibility. A layer only calls the layers below i
 | **L6 Model gateway** | Provider adapters (one file each; OpenRouter first), model tiers, shared rate-limit queue, fallback chain with per-model circuit breakers, token and cost metering; requests with images go only to models that read them (a vision chain, then the tier's own, DT.10). | `packages/llm` | Bypass the queue, pick a model outside the workspace's tier mapping, or let provider details leak upward. |
 | **L7 Memory** | Semantic, episodic, procedural and prospective stores; recall; post-run extraction; nightly consolidation. | `packages/memory` | Accept writes that skip policy. |
 | **L8 Computer** | A light desktop per agent (ADR-0040): shell, files in `/workspace`, Python with a venv per agent (ADR-0042), Chromium over CDP with one profile per agent, desktop apps through the accessibility tree (ADR-0041), the whole screen streamed over VNC for watching and takeover. | `packages/sandbox`, `infra/docker/sandbox` | Touch the host file system or Docker socket, or reach domains outside the egress allowlist. |
-| **L9 Data & platform** | Postgres + pgvector with row-level security, credential vault, event bus, telemetry, validated config. | `packages/db`, `vault`, `events`, `telemetry`, `config` | Run a query without a `TenantContext`. |
+| **L9 Data & platform** | Postgres + pgvector with row-level security, credential vault, event bus, telemetry, validated config. | `packages/db`, `blobs`, `vault`, `events`, `telemetry`, `config` | Run a query without a `TenantContext`. |
 
 ---
 
@@ -121,6 +121,7 @@ All defined in `packages/core`. Adapters are chosen only in a composition root (
 | `PolicyEngine` | `evaluate(action, ctx)` → allow / approve / human / deny | Same | Same, plus org policies |
 | `CredentialVault` | Get, put, rotate, redact secrets | AES-256-GCM, key from OS keychain or env | KMS envelope encryption |
 | `MemoryStore` | Write, recall, consolidate | Postgres + pgvector | Same |
+| `BlobStore` | Put, get (streamed, by range), delete and list large file bytes; artifacts over 1 MB live here, their rows stay in Postgres (ADR-0047) | Garage (S3), internal network only | Any S3-compatible store (S3, R2) |
 | `EventBus` | Publish and subscribe | Postgres `LISTEN/NOTIFY` | Valkey pub/sub |
 | `Telemetry` | Spans and metrics | OpenTelemetry → local Phoenix, or off | OpenTelemetry → Langfuse or Grafana |
 
@@ -222,7 +223,8 @@ Hooks are real middleware (onion pattern). Policy, logging, redaction and memory
 |---|---|
 | **Delegation** | `delegate_task(agent, brief)` starts a child run with `step.invoke` ([ADR-0032](../adr/0032-delegation-one-level-from-a-brief.md)). The child gets a fresh context (brief + relevant memory), never the parent's transcript, and returns a structured result (`agent`, `status`, `answer`). The brief and the child's reply live in a `handoff` thread, outside the person's chats. One level deep: a delegated run can't delegate. A child of a tainted run starts tainted, and a child that read outside content taints its parent. Stopping a run stops its children. A brief can carry earlier handoffs' answers by name (`include_results_from`), a child with missing inputs says so instead of recreating them, and the person sees each handoff as a card under the reply, with the child's files there too (TC.10). |
 | **Fork-join** | Independent delegations run as concurrent steps; the parent resumes when all results are in. All handoffs from one model step start before any is awaited. |
-| **Group threads** | Two to six agents share a thread with the person ([ADR-0033](../adr/0033-group-threads-and-agent-messages.md)). Each message gets one responder: the member `@mentioned` first, otherwise the thread's coordinator (`thread.coordinator_agent_id`), which answers or passes it on with `message_agent` or `delegate_task`. Handoffs are visible. Agents' messages are labelled with their names in each other's context. |
+| **Group threads** | Two to six agents share a thread with the person ([ADR-0033](../adr/0033-group-threads-and-agent-messages.md)). Each message gets one responder: the member `@mentioned` first, otherwise the thread's coordinator (`thread.coordinator_agent_id`), which answers or passes it on with `message_agent` or `delegate_task`. Handoffs are visible. Agents' messages are labelled with their names in each other's context. Only one run is active per thread at a time. |
+| **Discussions** | A message to the whole group (`@all`, `@everyone`, `@team`, or `/discuss`), or the coordinator's `ask_group`, starts a discussion ([ADR-0050](../adr/0050-group-discussions-in-turns.md)): members answer one at a time in a fixed order (named in the message, else the roster), each reading the turns before it; one turn per member per round, at most 3 rounds, and a round where everyone passes ends them early. The orchestrator starts every turn (`discussion-run`, `trigger: discussion`), and a turn can't message, delegate or ask the group, so no agent wakes another. The coordinator closes with one agreed answer, pinned in the chat. "stop" ends it at once; other messages from the person are read by the next turn. |
 | **Async messages** | `message_agent` posts in the run's own thread and wakes the named agent with an event (`trigger: event`, the sending run as parent); the woken agent reads the message as its request and replies later in the same thread. In a group, only members can be messaged; in a direct chat, any other active agent. One hop: a run started by another agent can't message or delegate. Taint carries over as for handoffs. |
 | **Interrupts** | A direct user message outranks background work ([ADR-0034](../adr/0034-interrupts-steer-stop-preempt.md)). In a chat where the agent is already working, the message joins that run at its next step boundary (steering; its own queued run ends as `steered`). A message that is only "stop" or "stop now" stops every run in the chat through Inngest `cancelOn` and starts none. The agent's routine runs in other chats are set aside (`preempted`), and a person's message starts ahead of queued background runs. Completed actions are not undone. |
 | **The roster** | Every list of agents a run can hand work to or message is read live and shows each agent's capability card, built from its grants and connected apps (`web: search, read pages`; `gmail: create draft (asks first)`), so a new agent, tool or app changes routing with no prompt edits ([ADR-0044](../adr/0044-team-roster-from-grants-coordinators-delegate.md)). |
@@ -250,7 +252,7 @@ Every prompt is assembled from typed blocks, each with a token budget derived fr
 
 **Techniques**
 
-- **Artifacts over dumps.** Output longer than 12,000 characters is stored as an artifact (the `artifact` table; 10 MB at most); the context gets its start and a handle, `artifact://<id>`, which the agent reopens with `artifacts.read`, a platform tool every agent may use for its own artifacts. Files an agent writes are kept the same way and shown under its reply.
+- **Artifacts over dumps.** Output longer than 12,000 characters is stored as an artifact (the `artifact` table; bytes over 1 MB go to the object store, up to 2 GB, ADR-0047); the context gets its start and a handle, `artifact://<id>`, which the agent reopens with `artifacts.read`, a platform tool every agent may use for its own artifacts. Files an agent writes are kept the same way and shown under its reply.
 - **Structured compaction.** Older turns become sections: decisions made, facts learned, open items, artifacts produced. The result is the agent's private notes, placed in the task block, never a message in the conversation: a model once returned notes inserted as a user message as its answer. The notes count against the history budget.
 - **Read in chunks.** `web.read_url` returns 6,000 characters at a time and says how to read on (`from`), so a few long pages do not fill a small window.
 - **Scoped subagents.** Delegated work starts from a brief; parent transcripts never leak into a child's window.
@@ -342,6 +344,7 @@ Setup cost per provider:
 - **Grants:** an app granted whole (`notion.*` on auto) lets read-only tools run and has the rest ask first. Naming a tool in a grant is the person's own choice and wins. The agent's Tools step sets both (M4.09): per app Off, "Reads run, changes ask" or "Ask every time", and single tools apart from that, from the kept tool list as agents see it (`GET /api/mcp-servers/:id/agent-tools`). Rules (ask first, allow without asking) are set in Settings.
 - **`load_toolkit`:** an app with more than 8 granted tools stays out of the model's list. The agent sees which apps it can load, with their tool names, and loads one for the rest of the run. An app with more than 12 tools is loaded a few at a time: the agent names the tools it needs, and can load more later. This matters for free models' small windows: Notion's server alone offers 46 tools, about 55,000 tokens of schemas. A call to a tool the agent hasn't loaded is answered with how to load it.
 - **Hand-written tools on the same sign-in** (ADR-0029): a catalog entry can list its app's own API origins, and our tools reach that API with the person's sign-in through `fetchAs`, never holding the token.
+- **Media apps** (ADR-0048): an entry with a `media` block (Runway, Higgsfield) gets a longer call timeout; pictures, video and sound it returns, inline or as links, are kept as the run's files and shown under the reply; its tools that make something carry a cost estimate, ask first and count towards the workspace's monthly cap. For a job, the agent checks the app's status tool and calls `wait` between checks, which sleeps durably.
 - **Apps without an MCP server** (ADR-0031): a catalog entry of kind `api` has no server. Sign-in goes straight to its `authOrigin`, found through the site's own OAuth or OpenID metadata, with the same PKCE, pinning, vault and refresh. All its tools are ours. Gmail is one: `gmail.search_messages`, `gmail.read_message`, `gmail.create_draft`, `gmail.send_email` and `gmail.send_draft` on the Gmail API, with plain-text email built under strict header rules.
 
 **Every call is checked against the tool's schema before it runs.** Built-in tools declare zod schemas; an MCP tool's JSON Schema is compiled into a validator when the tool is registered (`defineJsonSchemaTool`), and a schema that cannot be checked is refused then, not mid-run. The tool executor validates first, so a malformed call goes back to the model to fix and never reaches policy, the `tool_call` record or the server. The model is shown the server's own schema unchanged.
@@ -350,7 +353,9 @@ Setup cost per provider:
 
 Hand-written once, available to every agent subject to grants:
 
-`web.search` · `web.read_url` · `browser.*` · `desktop.*` · `shell.run` · `files.*` (including `files.send`) · `docs.create` · `remember` · `recall` · `schedule_task` · `remind_me` · `create_routine` · `message_agent` · `delegate_task` · `ask_user` · `request_approval` · `notify_user` · `todo.*` · `run_skill` · `save_skill` · `use_saved_login` · `load_toolkit`
+`web.search` · `web.read_url` · `web.save_file` · `browser.*` · `desktop.*` · `shell.run` · `files.*` (including `files.send` and `files.receive`) · `docs.create` · `remember` · `recall` · `schedule_task` · `remind_me` · `create_routine` · `message_agent` · `delegate_task` · `ask_group` · `ask_user` · `request_approval` · `notify_user` · `todo.*` · `run_skill` · `save_skill` · `use_saved_login` · `load_toolkit` · `wait` · `video.*` (scan, music, transcribe, plan_beats, render, verify, contact_sheet, styles; ADR-0049)
+
+`artifacts.read`, `load_toolkit` and `wait` are platform tools: every agent has them without a grant. Files people attach to a chat (EN.09) reach the agent's computer only through `files.receive`, in a run of that chat (ADR-0048).
 
 Web search defaults to self-hosted SearXNG, with Tavily or Exa as optional keyed providers.
 
@@ -391,7 +396,7 @@ Every source produces a verdict and **the strictest wins**. Nothing later can lo
 |---:|---|---|
 | 1 | Tool not granted to this agent | `deny` |
 | 2 | Always-human list: payments, deletions, permission or password changes, external sharing | `human` (takeover or explicit approval) |
-| 3 | Destructive annotation | `approve` |
+| 3 | Destructive annotation, or a paid call with a cost estimate (ADR-0048) | `approve` |
 | 4 | Outbound tool, or an address nobody gave the run (ADR-0027), in a tainted run; skipped on a site a person allowed for this task (ADR-0028) | `approve` |
 | 5 | Ask-first rule (workspace rules, then personal rules) | `approve` |
 | 6 | Allow-auto rule (workspace only), only if nothing above fired | `auto` |
@@ -436,7 +441,8 @@ clean ──reads untrusted content──▶ tainted ──outbound tool call─
 - **Watching and takeover** (ADR-0040, superseding ADR-0026): the whole screen is streamed over VNC (x11vnc on 127.0.0.1 inside the sandbox, only while someone watches, bridged by the sandbox service) to `/api/agents/:id/desktop`, behind login and Origin checks; the web app draws it with noVNC. Watchers are view-only; one person at a time can take control, and meanwhile the agent's computer tools are refused. Nothing seen or typed is recorded; start and end are audited. The CDP page stream (`/api/agents/:id/screen`) stays as a fallback.
 - **Saved logins** (M3.08): two vault secrets per site, `login.<site>.password` (redacted from all output) and `login.<site>.username`. Only the executor decrypts them, for `use_saved_login`, which types them into a page on that site or its subdomains, never elsewhere. The API lists sites only.
 - Agents browse and use desktop apps through the accessibility tree (CDP for pages, AT-SPI for apps, ADR-0041): `desktop.snapshot` lists the window in front (as X reports it) as numbered controls, and `desktop.click`, `desktop.type` and `desktop.press` act on them, each number checked against the control's role and name. Screenshots, clicks at a point and raw typing (`desktop.screenshot`, `desktop.click_at`, `desktop.type_text`) are a fallback, listed only when the run's tier can see images; points are fractions of the screen (free vision models point far better that way, see the vision spike in §19); only the latest screenshot stays in the prompt and the run's state, and each is kept as a run artifact. Clicking, typing, key presses and the shell are outbound tools: after a run reads outside content they need a person's approval (§10.3); proactive checks may use none of them. Opening a file on the desktop (`desktop.open`) is not outbound: it uses only apps that send nothing anywhere, never the browser (ADR-0043).
-- **Python and files** (ADR-0042): pip, venv, openpyxl and python-docx are in the image; each agent has its own `~/.venv`, first on its PATH, so packages it installs stay in its home. pip goes through the egress proxy (an allowlist needs `pypi.org` and `files.pythonhosted.org`). `files.send` attaches any file up to 10 MB from the computer to the reply.
+- **Python and files** (ADR-0042): pip, venv, openpyxl and python-docx are in the image; each agent has its own `~/.venv`, first on its PATH, so packages it installs stay in its home. pip goes through the egress proxy (an allowlist needs `pypi.org` and `files.pythonhosted.org`). `files.send` attaches any file from the computer to the reply, streamed, up to 2 GB (ADR-0047); `files.receive` copies a file the person attached into it.
+- **Video** (ADR-0049): ffmpeg, librosa and faster-whisper (base model) are in the image, in their own venv. The `video.*` tools run the video engine's commands as the agent; long ones (renders, transcription) run detached and are polled with short requests, so none outlives the service's 10-minute limit. Work files live in `~/.ofa-video`.
 - Each agent has its own Chromium profile, so one agent's logins are not available to another unless the user opts in.
 - Nothing an agent's computer runs for a person listens on the network, since agents share it: Chromium is driven over its DevTools pipe (`--remote-debugging-pipe`), relayed by the sandbox service, which keeps each connection's commands and page sessions apart; each display has an Xauthority key only its agent reads; desktop viewers use a Unix socket in a folder only that agent and the service can enter.
 
@@ -521,6 +527,7 @@ All clients are thin: they render chat, approvals and activity, and every action
 | `inngest` | ~200 MB | Self-hosted durable execution engine and dashboard | Internal; dashboard via Tailscale |
 | `sandbox` | up to 1.5 GB (three desktops measured at 0.9–1.2 GB, DT.13) | Our slim image (ADR-0025): a light desktop and Chromium per agent on demand (at most three open, ADR-0040), shell, files, Python with a venv per agent (ADR-0042), each agent as its own user | Internal network only |
 | `egress` | ~30 MB | The sandbox's only exit: an allowlisting HTTP(S) proxy that never reaches private addresses; forwards the app to the sandbox service | Internal |
+| `garage` | ~10 MB idle | Object store for artifacts over 1 MB: footage, generated images and video, renders (ADR-0047); set up by the app on start | Internal |
 | `phoenix` (optional) | ~300 MB | Local trace viewer | Profile `observability` |
 | `ollama` (optional) | Model-dependent | Local models | Profile `local-models` |
 
@@ -528,7 +535,7 @@ Outbound connections: OpenRouter, MCP servers, allowlisted sites the sandbox vis
 
 Always-on hosting options for users: a spare Mac mini or laptop, a Raspberry Pi 5 (8 GB), or their own Oracle Cloud Always Free VM (2 OCPU / 12 GB ARM; all images must ship arm64).
 
-Backups: `infra/scripts/backup.sh` runs a nightly `pg_dump`.
+Backups: `infra/scripts/backup.sh` runs a nightly `pg_dump` and copies the Garage volume, since large artifacts live there (ADR-0047).
 
 ### 14.2 Cloud mode
 
@@ -606,6 +613,12 @@ Summary only. Full records (context, decision, alternatives, consequences) are i
 | [0044](../adr/0044-team-roster-from-grants-coordinators-delegate.md) | Runtime | Capability cards from grants in every roster; coordinators plan, delegate first and lose the tools a teammate covers | A chief of staff did the research itself; a prompt rule per agent was ignored and doesn't scale |
 | [0045](../adr/0045-a-chat-keeps-its-working-state.md) | Runtime | Each agent keeps a working record per chat (plan, ledger, notes), saved as the run goes and shown to the next run | "Continue" after a budget stop started over: nothing but chat text reached the next run |
 | [0046](../adr/0046-public-site-and-docs-as-their-own-app.md) | Clients | The landing page and docs are `apps/site`, a static Vite app on Vercel that reads the decision records at build time | Docs that can't drift; the real familiars and routing on the page; no server code in public |
+| [0051](../adr/0051-learn-app-explains-the-codebase.md) | Clients | `apps/learn` explains the codebase; its facts come from an index of the source built at build time, and written pages' references to code are checked then | Learning the repository from one place; guides that quote code go stale silently |
+| [0052](../adr/0052-conversation-first-shell.md) | Clients | The web app is conversation-first: the sidebar lists conversations (last message, time, needs-you, unread) and the other pages sit behind a Workspace menu, the palette and the chat's ⋯ menu; amends 0039 | A sidebar of nine pages and badges crowding out the chat |
+| [0047](../adr/0047-object-storage-for-media.md) | Platform | Files over 1 MB in an S3-compatible store behind `BlobStore`; Garage in self-host | Images and video don't belong in Postgres; MinIO's community edition is gone |
+| [0048](../adr/0048-media-generation-through-catalog-apps.md) | Integrations | Media from catalog apps (Runway, Higgsfield), kept as files, `wait` for long jobs, paid calls ask first under a monthly cap | Generations are slow, their links expire, and they spend the person's money |
+| [0049](../adr/0049-video-engine-as-a-standalone-package.md) | Platform | The video engine is `packages/video`, importing nothing from One-for-All; `video.*` tools adapt it, and it runs alone as a CLI and an MCP server | Our own video edit agent, usable outside One-for-All without a second project |
+| [0050](../adr/0050-group-discussions-in-turns.md) | Runtime | A group discusses in turns run by the orchestrator, in a fixed order, at most 3 rounds, closed by the coordinator; one active run per thread | "What do you all think?" in a group got one voice, or several answering blind at once |
 
 **Rejected along the way:** Next.js (mobile and WebSocket fit), Express (untyped), Neon (free-tier limits), Prisma (vector support), BullMQ (no durable waits), Inngest Cloud (execution caps), Composio (lock-in and pricing), E2B-only (finite credit), hosted-only (cost and data custody).
 
@@ -639,6 +652,7 @@ one-for-all/
 │   │       ├── components/ui/    shadcn/ui primitives
 │   │       └── lib/              client instance, WS hook, formatters
 │   ├── site/                     public landing page and docs: static Vite app on Vercel (ADR-0046)
+│   ├── learn/                    the codebase explained: guided path, features, code explorer from a build-time index (ADR-0051)
 │   └── mobile/                   Expo app (iOS/Android)
 │       ├── app/                  Expo Router screens
 │       └── src/
@@ -658,6 +672,8 @@ one-for-all/
 │   ├── memory/                   stores, recall, extraction, consolidation
 │   ├── sandbox/                  docker + e2b adapters, CDP browser, page snapshots, screen and desktop streams
 │   ├── channels/                 web, telegram, slack, email adapters
+│   ├── blobs/                    BlobStore adapters: S3 (Garage and others), in-memory, Garage setup
+│   ├── video/                    the video engine (ADR-0049): imports nothing internal; CLI and MCP server too
 │   ├── vault/                    encryption, secret refs, redaction
 │   ├── events/                   event bus adapters + typed event catalog
 │   ├── telemetry/                OpenTelemetry setup and span helpers
@@ -695,7 +711,7 @@ one-for-all/
 |---|---|
 | R1 | Apps depend on packages. Packages never import from apps; apps never import from each other. |
 | R2 | `core` imports nothing internal. Every other package may import `core`. |
-| R3 | Web, mobile and the public site import only browser-safe packages: `core`, `contracts`, `client`. Server imports are a lint error. |
+| R3 | Web, mobile, the public site and `apps/learn` import only browser-safe packages: `core`, `contracts`, `client`. Server imports are a lint error. (`apps/learn` reads the rest of the repository as text at build time, never as imports.) |
 | R4 | Adapters implement a `core` interface and are chosen only in a composition root (`container.ts`). |
 | R5 | Each package exposes one public `index.ts` through its `exports` field. Deep imports are lint errors. |
 | R6 | Unit tests sit next to the code as `*.test.ts`. Cross-package agent behavior is tested in `evals/`. |
@@ -717,6 +733,7 @@ Each milestone is a thin vertical slice through every layer and ends with someth
 | **M5 The team** ✅ | Delegation and fork-join, agent messages and group threads, interrupts, routines and read-only checks, tasks and reminders for later, skills, episodes and nightly memory consolidation, agent files, the team screens, multi-agent evals. |
 | **Desktop** ✅ | A light desktop per agent watched over VNC, the agent's work shown on it, Python packages and office files, `files.send` and a Files tab, desktop apps through the accessibility tree with a screenshot fallback. |
 | **Teams and continuity** | A chat record per agent so work continues across runs; stop replies and a budget warning; capability cards in the roster; a coordinator role that delegates first; handoffs that pass results by name and show in the chat. Done (11 tasks). |
+| **Shell** ✅ | A conversation-first web app (ADR-0052): one list of conversations with previews and needs-you, the other pages behind a Workspace menu, a quiet chat header, the phone as list then chat. |
 | **M6 Everywhere** | Expo app with pairing and push, Telegram and Slack channels. |
 | **M7 Hardening** | Eval suites and red-team set in CI, backups, E2B adapter, cloud-mode adapters. |
 

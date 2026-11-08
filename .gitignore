@@ -126,3 +126,6 @@ desktop.ini
 
 # Security audit reports with working bypass details (local only)
 docs/security-audit/
+
+# apps/learn: the code index, made at build time (ADR-0051)
+apps/learn/src/generated/

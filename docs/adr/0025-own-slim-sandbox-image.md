@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-10-04
 - **Area:** Computer
-- **Related:** Supersedes the image choice in ADR-0009 (the `SandboxProvider` interface stands); amended by ADR-0040 (a light desktop on each agent's display) and ADR-0042 (pip, venv and office libraries); ADR-0010, ADR-0012, ADR-0013, ADR-0017, ARCHITECTURE.md §4, §10.5, §14.1
+- **Related:** Supersedes the image choice in ADR-0009 (the `SandboxProvider` interface stands); amended by ADR-0040 (a light desktop on each agent's display) ADR-0042 (pip, venv and office libraries) and ADR-0049 (ffmpeg and the video engine's Python); ADR-0010, ADR-0012, ADR-0013, ADR-0017, ARCHITECTURE.md §4, §10.5, §14.1
 
 ## Context
 
@@ -19,6 +19,7 @@ Build our own image, `infra/docker/sandbox/`: Debian slim with Debian's Chromium
 - **Minimal root.** Only the service runs as root, and Compose leaves it just CHOWN, SETUID, SETGID and KILL. Agent code never runs as root. The root file system is read-only, with no Docker socket and no host mounts. CPU, memory and threads are limited.
 - **One exit.** The sandbox sits on an internal Docker network with no route out. Its only exit is an egress proxy (`egress.mjs`, same image, unprivileged) with a domain allowlist (`SANDBOX_EGRESS_ALLOW`, `*` for any public site). The proxy refuses private, loopback, link-local and CGNAT addresses whatever the list says, including an IPv4 address written inside IPv6 (`[::ffff:127.0.0.1]`, which the URL parser turns into `[::ffff:7f00:1]`, or NAT64 `64:ff9b::/96`). The app reaches the service through a TCP forward on the egress container, so it never joins the sandbox network. (Amended 2026-10-19 after the security audit, which found the hex spelling got through; `web.read_url`'s `safeFetch` had the same gap.)
 - **Only the app talks to the service.** Every route but `/health` needs the token in the `Authorization` header; only the `/cdp` WebSocket, which can't set a header, may carry it as `?token=`. A request with an `Origin` header comes from a web page, never from the app, and is refused, so a page in a developer's browser can't drive the dev sandbox on `127.0.0.1:7070` (ADR-0017). (Amended 2026-10-19 after the security audit.)
+- **Video** (amended 2026-10-19 by ADR-0049): ffmpeg, and a separate venv at `/opt/ofa-video` with librosa and faster-whisper and its base model, for the video engine. The service passes `OFA_VIDEO_PYTHON` and `OFA_VIDEO_MODELS` to agent processes, and gives numba its cache in each agent's home, never a shared folder another agent could fill. Measured on x64: the image grows from 1.9 GB to 3.5 GB (about 760 MB of Python packages, 140 MB of model, the rest ffmpeg's libraries); disk, not memory.
 - **Browsers on demand.** Each agent's Chromium starts when first needed and closes after 10 idle minutes. At most three run at once; the least recently used closes first. Its profile, and so its logins, stays.
 - **The browser is read through the accessibility tree**, not screenshots: each actionable element carries its backend DOM node ID, which `click` and `type` take. Nothing is kept between tool calls.
 
